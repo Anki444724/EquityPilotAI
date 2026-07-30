@@ -5,14 +5,16 @@ import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3, Briefcase, Building2, Eye, FileSearch, FileText,
-  LayoutDashboard, Moon, Search, Settings, ShieldCheck, Sparkles, Sun,
-  TrendingUp,
+  LayoutDashboard, LoaderCircle, Moon, Search, Settings, ShieldCheck,
+  Sparkles, Sun, TrendingUp,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { CommandPalette } from "./command-palette";
 import { useTheme } from "./theme-provider";
+import { useAuth } from "./auth-provider";
+import { SignIn } from "./sign-in";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "d" },
@@ -35,7 +37,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, toggle } = useTheme();
-  const { data: user } = useQuery({ queryKey: ["me"], queryFn: api.me });
+  const { user: sessionUser, initialising } = useAuth();
+  // Only ask the API who we are once a session exists; otherwise every
+  // authenticated page fires a guaranteed 401 on mount.
+  const { data: user } = useQuery({
+    queryKey: ["me"], queryFn: api.me, enabled: Boolean(sessionUser),
+  });
 
   // g+<key> navigation shortcuts
   useEffect(() => {
@@ -54,6 +61,17 @@ export function AppShell({ children }: { children: ReactNode }) {
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); clearTimeout(timer); };
   }, [router]);
+
+  // Nothing behind the shell is reachable without a session, so gate here
+  // rather than in each of the eleven pages.
+  if (initialising) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[var(--bg)]">
+        <LoaderCircle size={20} className="animate-spin text-[var(--text-muted)]" />
+      </div>
+    );
+  }
+  if (!sessionUser) return <SignIn />;
 
   return (
     <div className="flex min-h-screen">

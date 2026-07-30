@@ -20,10 +20,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Every read in the application goes through here.
+ *
+ * This used to send no credentials at all, which was invisible while the
+ * backend ran with AUTH_DEV_MODE=true and treated every caller as a super
+ * admin. Against a production backend that enforces authentication, each of
+ * these calls returned 401 and the UI reported it as "cannot reach the API" —
+ * a connectivity message for what was really an authentication failure.
+ *
+ * Credentials are attached in one place so no caller can forget them.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...(init?.headers ?? {}),
+    },
+    credentials: "include",
     cache: "no-store",
   });
   if (!res.ok) {
@@ -34,6 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch { /* non-JSON error body */ }
     throw new ApiError(res.status, detail);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 

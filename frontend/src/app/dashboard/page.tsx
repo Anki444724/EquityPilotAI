@@ -2,7 +2,7 @@
 
 import { Badge, Card, CardBody, CardHeader, Skeleton, Stat } from "@/components/ui";
 import { AppShell } from "@/components/layout/app-shell";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { marketCap, percent, plainNumber, rupees } from "@/lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Database } from "lucide-react";
@@ -27,7 +27,11 @@ export default function DashboardPage() {
         <Card className="border-loss/40">
           <CardBody className="flex items-center gap-2 text-sm text-loss">
             <AlertCircle size={16} />
-            Cannot reach the API. Start the backend on port 8000.
+            {error instanceof ApiError
+              ? error.status === 401 || error.status === 403
+                ? "Your session has expired. Sign in again to continue."
+                : `The API returned HTTP ${error.status}: ${error.message}`
+              : "Cannot reach the API. Check your connection and that the backend is running."}
           </CardBody>
         </Card>
       )}
