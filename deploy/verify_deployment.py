@@ -22,6 +22,18 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Return the redirect itself rather than chasing it.
+
+    Needed to tell "plain http redirects to https" apart from "plain http
+    serves the application", which are indistinguishable once the redirect
+    has been followed.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
 TIMEOUT = 45
 
 
@@ -135,11 +147,28 @@ def main() -> int:
             report.add(Check("TLS certificate valid", "https", False, str(exc)[:60]))
 
         # http must not serve the app in the clear.
-        code, _, headers, ms = request(api.replace("https://", "http://") + "/health")
-        redirected = code in (301, 302, 307, 308) or code == 0 or code == 200
-        report.add(Check("plain http does not serve content", "https",
-                         code != 200 or "https" in str(headers.get("Location", "")),
-                         f"HTTP {code}", ms, required=False))
+        #
+        # `request()` follows redirects, so by the time it returns, a 301 to
+        # https has already been chased and the caller sees the final 200 with
+        # no Location header — which looks identical to plain http serving the
+        # application. The distinction is the whole point of the check, so the
+        # redirect has to be observed without following it.
+        plain = api.replace("https://", "http://") + "/health"
+        started = time.perf_counter()
+        try:
+            opener = urllib.request.build_opener(_NoRedirect)
+            with opener.open(plain, timeout=TIMEOUT) as r:
+                code, location = r.status, r.headers.get("Location", "")
+        except urllib.error.HTTPError as e:
+            code, location = e.code, e.headers.get("Location", "")
+        except Exception:  # noqa: BLE001
+            code, location = 0, ""
+        ms = (time.perf_counter() - started) * 1000
+        secure = (code in (301, 302, 307, 308)
+                  and location.lower().startswith("https://")) or code == 0
+        report.add(Check("plain http redirects to https", "https", secure,
+                         f"HTTP {code}" + (f" → {location[:48]}" if location else ""),
+                         ms, required=False))
 
     # ---------------------------------------------------------- backend
     print("\n\033[1mBackend\033[0m")

@@ -1,7 +1,8 @@
 # Live Deployment — Railway
 
 **Status:** live and verified
-**Live URL:** <https://backend-production-18956.up.railway.app>
+**Frontend (start here):** <https://frontend-production-1a313.up.railway.app>
+**Backend API:** <https://backend-production-18956.up.railway.app>
 **Repository:** <https://github.com/Anki444724/EquityPilotAI>
 **Deployed:** 31 July 2026
 **Platform version:** 1.0.0
@@ -15,13 +16,23 @@
 | `backend` | FastAPI (Docker, `/backend`) | GitHub `Anki444724/EquityPilotAI` @ `main` | ✅ live |
 | `postgres` | PostgreSQL 16.14 | `pgvector/pgvector:pg16` | ✅ live, 10 GB volume |
 | `redis` | Redis 7 | `redis:7-alpine` | ✅ live |
-| `frontend` | Next.js 16 | GitHub, `/frontend` | ⛔ not deployed — free-plan service cap |
+| `frontend` | Next.js 16 (Docker, `/frontend`) | GitHub `Anki444724/EquityPilotAI` @ `main` | ✅ live |
 
-All three running services sit in the Railway project **`lucid-enthusiasm`**
-(personal workspace). The free plan permits five services per workspace and two
-of those were already consumed by a pre-existing `QuantBacktestPro`
-deployment, so a fourth service for the frontend could not be provisioned.
-Nothing belonging to the existing project was modified or deleted.
+All four services sit in the Railway project **`lucid-enthusiasm`** (personal
+workspace).
+
+The free plan permits five services per workspace. Two were consumed by
+`QuantBacktestPro`. With the user's explicit authorisation, the **duplicate**
+copy in `lucid-enthusiasm` was deleted to free a slot — verified beforehand as
+safe on six criteria: it had never held a public domain in any of its five
+deployments, had no volume, no TCP proxy and no custom variables, and is
+rebuildable from `Anki444724/QuantBacktestPro`. Its configuration was saved to
+`quantbacktestpro_duplicate_backup.json` first.
+
+**The user's active deployment at `quantbacktestpro-production.up.railway.app`
+(project `proud-joy`) was not touched, and was re-confirmed returning HTTP 200
+immediately after the deletion.** Only a *service* was removed; no project was
+deleted.
 
 ---
 
@@ -110,6 +121,23 @@ Plus platform seed data: 4 plans, 3 tenants, 9 users, 19,677 price rows.
 | **DEP-002** | `Invalid value for '--port': '$PORT' is not a valid integer` | Railway runs `startCommand` **without a shell**, so `$PORT` was passed literally | Wrapped in `sh -c '…'` with `${PORT:-8000}` |
 | **DEP-003** | `/health/ready` returned 503 on a correctly-configured service | A missing SMTP relay was graded a **critical** readiness failure, so the deploy was rolled back over an undeliverable e-mail | Split readiness into blocking vs degraded (below) |
 | **DEP-004** | Edge returned `502 Application failed to respond` while the container was healthy | Service domain targeted port 8000; uvicorn bound Railway's injected `PORT=8080` | Pinned `PORT=8000` to match the domain |
+| **DEP-005** | Frontend logged `✓ Ready` then `1/1 replicas never became healthy` | Next's standalone server reads `process.env.HOSTNAME \|\| '0.0.0.0'`, and Docker sets `HOSTNAME` to the container ID — so it bound to that name instead of all interfaces | `ENV HOSTNAME=0.0.0.0` in the runtime stage |
+| **DEP-006** | Frontend would have shipped calling `localhost:8000` | `NEXT_PUBLIC_*` is inlined at *build* time; with no `/frontend/railway.toml`, Railway used Railpack and never passed the Docker ARG | Added `frontend/railway.toml` with `[build.args]` |
+
+### DEP-005 in detail
+
+The container logged every sign of success — `▲ Next.js 16.2.12`, `✓ Ready in
+0ms` — and still failed eleven consecutive health checks. The tell was the
+bind address: `http://6a5c62968e57:3000`, the container ID rather than
+`0.0.0.0`.
+
+Verified locally rather than assumed, by running the built standalone server
+twice with different `HOSTNAME` values:
+
+| `HOSTNAME` | Reachable on `127.0.0.1:3111` |
+|---|---|
+| `6a5c62968e57` (container-ID style) | **unreachable** |
+| `0.0.0.0` | **HTTP 200** |
 
 ### DEP-003 in detail
 
@@ -140,13 +168,13 @@ Two regression tests lock this in
 
 ## 6. Verification results
 
-### Perimeter — `deploy/verify_deployment.py` → **31/33**
+### Perimeter — `deploy/verify_deployment.py` → **33/33**
 
 TLS valid, HSTS, CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options:
 nosniff`, 151 OpenAPI paths, every guarded route rejecting anonymous callers,
 no API key published in any endpoint.
 
-### Modules — `deploy/verify_live_modules.py` → **18/19**
+### Modules — `deploy/verify_live_modules.py` → **19/19**
 
 An authenticated harness, because a `401` proves the guard and not the module.
 
@@ -163,17 +191,43 @@ An authenticated harness, because a `401` proves the guard and not the module.
 | 9 · Reports | 17 sections, 1,982 words, 7 charts, 11 tables, **100 % citation coverage (18/18)**; **51-page PDF** and valid `.docx` downloaded |
 | 10 · Tenancy | Tenant admin reachable; operator console correctly refused |
 
-The single warning is that the seeded demo portfolio belongs to another
-tenant, so the demo user starts with an empty list — correct tenant isolation,
-not a fault. Module 8 was then proven by creating a portfolio and booking a
-real transaction.
+### Frontend, verified in a real browser
+
+Headless Chromium against the live site:
+
+- All 9 routes return HTTP 200 (`/`, `/dashboard`, `/companies`, `/portfolio`,
+  `/reports`, `/documents`, `/watchlist`, `/admin`, `/platform`)
+- The shipped client chunk contains the production API host and **zero**
+  `localhost:8000` references
+- Anonymous page load produces `401`s from the API and **no CORS errors** —
+  the cross-origin wiring is correct
+- Logging in from browser JavaScript returned `200` with a token, and an
+  authenticated `fetch` returned **136 companies**: RELIANCE, BHARTIARTL,
+  HDFCBANK, ICICIBANK, SBIN
+- CORS allows the frontend origin with credentials and **refuses**
+  `https://evil.example.com`
+- All four security headers present on the frontend origin
+
+### Three bugs in the verification tooling, not the product
+
+Reported rather than quietly corrected:
+
+1. The module harness read `items` where the API returns `results`, and used
+   `/api/v1/analysis/...` where the routes are `/api/v1/company/{ticker}/...`.
+   It reported ten failures against a working platform.
+2. It expected valuation `methodologies` as a list; the API returns one key
+   per methodology.
+3. `verify_deployment.py` checked "plain http does not serve content" *after*
+   urllib had already followed the 301, so it saw the final 200 and no
+   `Location`. Fixed with a non-following redirect handler.
+
+A `401` from a guarded route is a pass in the perimeter script — it proves the
+guard, not the module. That is exactly why the authenticated harness exists.
 
 ---
 
 ## 7. Known limitations
 
-1. **Frontend is not deployed.** The free plan's five-service workspace cap was
-   reached. The API, including Swagger UI at `/docs`, is fully live.
 2. **Gemini's free-tier quota is exhausted.** The key is valid — a direct
    `generateContent` call returns `429 RESOURCE_EXHAUSTED`. The analyst serves
    deterministic, fully-cited offline output and `/api/v1/ai/health` reports
