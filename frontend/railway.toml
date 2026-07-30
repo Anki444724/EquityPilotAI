@@ -1,0 +1,27 @@
+# Railway service definition for the Next.js frontend.
+#
+# Without this file Railway falls back to Railpack auto-detection, which
+# ignores the multi-stage Dockerfile — and with it the standalone output and
+# the NEXT_PUBLIC_API_URL build argument.
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+# NEXT_PUBLIC_* values are inlined into the client bundle at *build* time, not
+# read at run time. Setting the API URL as a runtime variable alone would
+# leave the browser calling http://localhost:8000 — the Dockerfile's ARG
+# default — and every request would fail once the page reached a real user.
+[build.args]
+NEXT_PUBLIC_API_URL = "https://backend-production-18956.up.railway.app"
+
+[deploy]
+# Next's standalone server has no dedicated health endpoint; the landing page
+# is the honest check that the server renders.
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# `server.js` reads PORT from the environment itself, so unlike the API this
+# needs no shell wrapper to expand it.
+startCommand = "node server.js"
