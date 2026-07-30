@@ -1,0 +1,211 @@
+"""The AI Research Analyst — orchestration.
+
+Ties the layer together: ground the question in platform data, assemble a
+versioned prompt, route it to a provider, then verify what comes back.
+
+The post-generation verification is the part that distinguishes this from a
+chatbot wrapper. A response is not returned raw; it is audited against the
+evidence that was supplied, classified into fact / model output /
+interpretation / opinion, and annotated with its own support level. A confident
+answer that cites nothing is surfaced as exactly that.
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from app.domain.ai.types import (
+    Citation, ClaimType, CompletionResponse, NoProviderConfigured, Role,
+)
+from app.services.ai.citation_engine import CitationAudit, annotate, audit
+from app.services.ai.context_builder import ContextBuilder, GroundedContext
+from app.services.ai.guardrails import GuardrailReport, check, enforce
+from app.services.ai.memory import ConversationMemory
+from app.services.ai.prompt_builder import BuiltPrompt, PromptBuilder
+from app.services.ai.prompt_library import (
+    BUILTIN_PROMPTS, Capability, OutputStyle, PromptTemplate, get_prompt,
+)
+from app.services.ai.providers.router import ProviderRouter
+
+
+@dataclass(slots=True)
+class AnalystResult:
+    """A completed analysis, with everything needed to judge its reliability."""
+
+    capability: str
+    content: str
+    #: Content with citation keys replaced by human labels.
+    display_content: str
+    provider: str
+    model: str
+    prompt_key: str
+    prompt_version: int
+
+    citations: list[Citation] = field(default_factory=list)
+    citation_audit: CitationAudit | None = None
+    guardrails: GuardrailReport | None = None
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    latency_ms: float = 0.0
+    cached: bool = False
+    fell_back_from: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def is_supported(self) -> bool:
+        return bool(self.citation_audit and self.citation_audit.is_supported)
+
+
+class ResearchAnalyst:
+    """Runs grounded analyses and conversation."""
+
+    def __init__(
+        self,
+        builder: ContextBuilder,
+        router: ProviderRouter | None = None,
+        prompt_builder: PromptBuilder | None = None,
+    ) -> None:
+        self.builder = builder
+        self.router = router or ProviderRouter()
+        self.prompts = prompt_builder or PromptBuilder()
+        self._context: GroundedContext | None = None
+
+    def context(self, *, refresh: bool = False) -> GroundedContext:
+        """Ground once per analyst instance; every capability reuses it."""
+        if self._context is None or refresh:
+            self._context = self.builder.build()
+        return self._context
+
+    # ------------------------------------------------------------- analysis
+    async def run(
+        self,
+        capability: str,
+        *,
+        question: str = "",
+        memory: ConversationMemory | None = None,
+        style: OutputStyle | None = None,
+        provider: str | None = None,
+        template: PromptTemplate | None = None,
+    ) -> AnalystResult:
+        """Produce one grounded analysis."""
+        prompt_template = template or get_prompt(capability)
+        context = self.context()
+
+        built = self.prompts.build(
+            prompt_template, context, question=question, memory=memory, style=style,
+            include_history=capability == Capability.CHAT.value,
+        )
+
+        started = time.perf_counter()
+        response = await self.router.complete(built.request, preferred=provider)
+        elapsed = (time.perf_counter() - started) * 1000
+
+        return self._finalise(
+            capability, built, response, context, elapsed, memory, question
+        )
+
+    def _finalise(
+        self,
+        capability: str,
+        built: BuiltPrompt,
+        response: CompletionResponse,
+        context: GroundedContext,
+        elapsed_ms: float,
+        memory: ConversationMemory | None,
+        question: str,
+    ) -> AnalystResult:
+        """Verify, classify and record."""
+        citation_audit = audit(response.content, built.citations)
+        guardrails = check(response.content, citation_audit)
+        content = enforce(response.content, guardrails)
+
+        warnings: list[str] = list(guardrails.violations)
+        if not citation_audit.is_supported:
+            warnings.append(citation_audit.summary)
+        if citation_audit.uncited_numbers:
+            warnings.append(
+                f"{len(citation_audit.uncited_numbers)} figure(s) in the answer do "
+                "not match any platform evidence."
+            )
+        if context.unavailable:
+            warnings.append(
+                f"{len(context.unavailable)} data source(s) were unavailable when "
+                "this was generated."
+            )
+
+        if memory is not None:
+            if question:
+                memory.add(Role.USER, question)
+            memory.add(
+                Role.ASSISTANT, response.content,
+                citations=[c.key for c in citation_audit.resolved],
+            )
+
+        return AnalystResult(
+            capability=capability,
+            content=content,
+            display_content=annotate(content, built.citations),
+            provider=response.provider, model=response.model,
+            prompt_key=built.prompt_key, prompt_version=built.prompt_version,
+            citations=citation_audit.resolved,
+            citation_audit=citation_audit, guardrails=guardrails,
+            prompt_tokens=response.usage.prompt_tokens or built.approx_prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+            cost_usd=response.cost_usd, latency_ms=elapsed_ms,
+            cached=response.cached, fell_back_from=response.fell_back_from,
+            warnings=warnings,
+        )
+
+    # ------------------------------------------------------------------ chat
+    async def chat(
+        self,
+        question: str,
+        memory: ConversationMemory,
+        *,
+        provider: str | None = None,
+    ) -> AnalystResult:
+        return await self.run(
+            Capability.CHAT.value, question=question, memory=memory, provider=provider
+        )
+
+    async def stream_chat(self, question: str, memory: ConversationMemory):
+        """Stream a chat answer token by token."""
+        context = self.context()
+        built = self.prompts.build(
+            get_prompt(Capability.CHAT.value), context,
+            question=question, memory=memory, include_history=True,
+        )
+        collected: list[str] = []
+        async for token in self.router.stream(built.request):
+            collected.append(token)
+            yield token
+
+        answer = "".join(collected)
+        memory.add(Role.USER, question)
+        memory.add(Role.ASSISTANT, answer)
+
+    # ----------------------------------------------------------------- batch
+    async def run_many(
+        self, capabilities: list[str], *, provider: str | None = None
+    ) -> list[AnalystResult]:
+        """Run several capabilities against one grounding pass."""
+        results: list[AnalystResult] = []
+        for capability in capabilities:
+            try:
+                results.append(await self.run(capability, provider=provider))
+            except NoProviderConfigured:
+                raise
+            except Exception as exc:  # a single failure must not sink the report
+                results.append(AnalystResult(
+                    capability=capability, content="", display_content="",
+                    provider="none", model="none",
+                    prompt_key=capability, prompt_version=0,
+                    warnings=[f"Generation failed: {exc}"],
+                ))
+        return results

@@ -1,0 +1,46 @@
+# --- dependencies & build ---------------------------------------------
+node_modules/
+.next/
+out/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# --- local data --------------------------------------------------------
+*.db
+*.db-wal
+*.db-shm
+backups/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- SECRETS -----------------------------------------------------------
+# Anything that can hold a credential. Broad on purpose: it is far cheaper
+# to ignore a file that turns out to be harmless than to rotate a key that
+# reached a public remote.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+service-account*.json
+.railway/
+
+# --- editor / OS -------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp

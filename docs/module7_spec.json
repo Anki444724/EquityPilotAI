@@ -1,0 +1,639 @@
+{
+  "fields": [
+    {
+      "category": "FINANCIAL",
+      "field": "Revenue",
+      "target_sheet": "06 Historical IS",
+      "unit": "\u20b9 cr",
+      "row": 9
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "EBITDA",
+      "target_sheet": "06 Historical IS",
+      "unit": "\u20b9 cr",
+      "row": 10
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "PAT",
+      "target_sheet": "06 Historical IS",
+      "unit": "\u20b9 cr",
+      "row": 11
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "EPS",
+      "target_sheet": "06 Historical IS",
+      "unit": "\u20b9",
+      "row": 12
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "Gross debt",
+      "target_sheet": "07 Historical BS",
+      "unit": "\u20b9 cr",
+      "row": 13
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "Cash & equivalents",
+      "target_sheet": "07 Historical BS",
+      "unit": "\u20b9 cr",
+      "row": 14
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "Net worth",
+      "target_sheet": "07 Historical BS",
+      "unit": "\u20b9 cr",
+      "row": 15
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "Operating cash flow",
+      "target_sheet": "08 Historical CF",
+      "unit": "\u20b9 cr",
+      "row": 16
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "Capex",
+      "target_sheet": "08 Historical CF",
+      "unit": "\u20b9 cr",
+      "row": 17
+    },
+    {
+      "category": "FINANCIAL",
+      "field": "Free cash flow",
+      "target_sheet": "08 Historical CF",
+      "unit": "\u20b9 cr",
+      "row": 18
+    },
+    {
+      "category": "GUIDANCE",
+      "field": "Revenue growth guidance",
+      "target_sheet": "16 Revenue Forecast",
+      "unit": "%",
+      "row": 19
+    },
+    {
+      "category": "GUIDANCE",
+      "field": "EBITDA margin guidance",
+      "target_sheet": "17 EBITDA Forecast",
+      "unit": "%",
+      "row": 20
+    },
+    {
+      "category": "GUIDANCE",
+      "field": "Capex guidance",
+      "target_sheet": "12 Capex Analysis",
+      "unit": "\u20b9 cr",
+      "row": 21
+    },
+    {
+      "category": "GUIDANCE",
+      "field": "Management outlook commentary",
+      "target_sheet": "31 IC Report",
+      "unit": "text",
+      "row": 22
+    },
+    {
+      "category": "CAPEX",
+      "field": "Announced capex programme",
+      "target_sheet": "12 Capex Analysis",
+      "unit": "\u20b9 cr",
+      "row": 23
+    },
+    {
+      "category": "CAPEX",
+      "field": "Capex spent to date",
+      "target_sheet": "12 Capex Analysis",
+      "unit": "\u20b9 cr",
+      "row": 24
+    },
+    {
+      "category": "CAPEX",
+      "field": "Commissioning timeline",
+      "target_sheet": "12 Capex Analysis",
+      "unit": "text",
+      "row": 25
+    },
+    {
+      "category": "CAPEX",
+      "field": "Expected asset turn",
+      "target_sheet": "12 Capex Analysis",
+      "unit": "x",
+      "row": 26
+    },
+    {
+      "category": "DEBT",
+      "field": "Total borrowings",
+      "target_sheet": "13 Debt Analysis",
+      "unit": "\u20b9 cr",
+      "row": 27
+    },
+    {
+      "category": "DEBT",
+      "field": "Blended cost of debt",
+      "target_sheet": "13 Debt Analysis",
+      "unit": "%",
+      "row": 28
+    },
+    {
+      "category": "DEBT",
+      "field": "Average maturity",
+      "target_sheet": "13 Debt Analysis",
+      "unit": "years",
+      "row": 29
+    },
+    {
+      "category": "DEBT",
+      "field": "Credit rating",
+      "target_sheet": "13 Debt Analysis",
+      "unit": "text",
+      "row": 30
+    },
+    {
+      "category": "DEBT",
+      "field": "Covenant terms",
+      "target_sheet": "13 Debt Analysis",
+      "unit": "text",
+      "row": 31
+    },
+    {
+      "category": "ORDER BOOK",
+      "field": "Order book / backlog",
+      "target_sheet": "03 Company Info",
+      "unit": "\u20b9 cr",
+      "row": 32
+    },
+    {
+      "category": "ORDER BOOK",
+      "field": "Order inflow during year",
+      "target_sheet": "03 Company Info",
+      "unit": "\u20b9 cr",
+      "row": 33
+    },
+    {
+      "category": "ORDER BOOK",
+      "field": "Book-to-bill ratio",
+      "target_sheet": "03 Company Info",
+      "unit": "x",
+      "row": 34
+    },
+    {
+      "category": "ORDER BOOK",
+      "field": "Execution period",
+      "target_sheet": "03 Company Info",
+      "unit": "months",
+      "row": 35
+    },
+    {
+      "category": "CAPACITY",
+      "field": "Installed capacity",
+      "target_sheet": "03 Company Info",
+      "unit": "units",
+      "row": 36
+    },
+    {
+      "category": "CAPACITY",
+      "field": "Capacity utilisation",
+      "target_sheet": "03 Company Info",
+      "unit": "%",
+      "row": 37
+    },
+    {
+      "category": "CAPACITY",
+      "field": "Planned capacity addition",
+      "target_sheet": "03 Company Info",
+      "unit": "units",
+      "row": 38
+    },
+    {
+      "category": "CAPACITY",
+      "field": "Number of plants",
+      "target_sheet": "03 Company Info",
+      "unit": "count",
+      "row": 39
+    },
+    {
+      "category": "CUSTOMERS",
+      "field": "Top-5 customer concentration",
+      "target_sheet": "03 Company Info",
+      "unit": "%",
+      "row": 40
+    },
+    {
+      "category": "CUSTOMERS",
+      "field": "Key customer names",
+      "target_sheet": "03 Company Info",
+      "unit": "text",
+      "row": 41
+    },
+    {
+      "category": "CUSTOMERS",
+      "field": "Customer contract tenure",
+      "target_sheet": "03 Company Info",
+      "unit": "text",
+      "row": 42
+    },
+    {
+      "category": "SUBSIDIARIES",
+      "field": "Number of subsidiaries",
+      "target_sheet": "03 Company Info",
+      "unit": "count",
+      "row": 43
+    },
+    {
+      "category": "SUBSIDIARIES",
+      "field": "Loss-making subsidiaries",
+      "target_sheet": "03 Company Info",
+      "unit": "count",
+      "row": 44
+    },
+    {
+      "category": "SUBSIDIARIES",
+      "field": "Subsidiary revenue contribution",
+      "target_sheet": "03 Company Info",
+      "unit": "%",
+      "row": 45
+    },
+    {
+      "category": "BUSINESS",
+      "field": "Business description",
+      "target_sheet": "03 Company Info",
+      "unit": "text",
+      "row": 46
+    },
+    {
+      "category": "BUSINESS",
+      "field": "Segment revenue split",
+      "target_sheet": "03 Company Info",
+      "unit": "%",
+      "row": 47
+    },
+    {
+      "category": "BUSINESS",
+      "field": "Geographic revenue split",
+      "target_sheet": "03 Company Info",
+      "unit": "%",
+      "row": 48
+    },
+    {
+      "category": "BUSINESS",
+      "field": "Product / brand portfolio",
+      "target_sheet": "03 Company Info",
+      "unit": "text",
+      "row": 49
+    },
+    {
+      "category": "BUSINESS",
+      "field": "Market share",
+      "target_sheet": "04 Industry Analysis",
+      "unit": "%",
+      "row": 50
+    },
+    {
+      "category": "MD&A",
+      "field": "Management discussion summary",
+      "target_sheet": "31 IC Report",
+      "unit": "text",
+      "row": 51
+    },
+    {
+      "category": "MD&A",
+      "field": "Strategy priorities",
+      "target_sheet": "31 IC Report",
+      "unit": "text",
+      "row": 52
+    },
+    {
+      "category": "MD&A",
+      "field": "Operational highlights",
+      "target_sheet": "31 IC Report",
+      "unit": "text",
+      "row": 53
+    },
+    {
+      "category": "RISKS",
+      "field": "Principal risk 1",
+      "target_sheet": "29 Risk Dashboard",
+      "unit": "text",
+      "row": 54
+    },
+    {
+      "category": "RISKS",
+      "field": "Principal risk 2",
+      "target_sheet": "29 Risk Dashboard",
+      "unit": "text",
+      "row": 55
+    },
+    {
+      "category": "RISKS",
+      "field": "Principal risk 3",
+      "target_sheet": "29 Risk Dashboard",
+      "unit": "text",
+      "row": 56
+    },
+    {
+      "category": "RISKS",
+      "field": "Litigation / contingent liability",
+      "target_sheet": "29 Risk Dashboard",
+      "unit": "\u20b9 cr",
+      "row": 57
+    },
+    {
+      "category": "RISKS",
+      "field": "Auditor qualification",
+      "target_sheet": "29 Risk Dashboard",
+      "unit": "yes/no",
+      "row": 58
+    },
+    {
+      "category": "RISKS",
+      "field": "Related-party transactions",
+      "target_sheet": "29 Risk Dashboard",
+      "unit": "% of revenue",
+      "row": 59
+    },
+    {
+      "category": "OPPORTUNITIES",
+      "field": "Growth opportunity 1",
+      "target_sheet": "04 Industry Analysis",
+      "unit": "text",
+      "row": 60
+    },
+    {
+      "category": "OPPORTUNITIES",
+      "field": "Growth opportunity 2",
+      "target_sheet": "04 Industry Analysis",
+      "unit": "text",
+      "row": 61
+    },
+    {
+      "category": "OPPORTUNITIES",
+      "field": "New product / market entry",
+      "target_sheet": "04 Industry Analysis",
+      "unit": "text",
+      "row": 62
+    },
+    {
+      "category": "OPPORTUNITIES",
+      "field": "Industry tailwind",
+      "target_sheet": "04 Industry Analysis",
+      "unit": "text",
+      "row": 63
+    },
+    {
+      "category": "ESG",
+      "field": "ESG / BRSR rating",
+      "target_sheet": "05 Management Analysis",
+      "unit": "score",
+      "row": 64
+    },
+    {
+      "category": "ESG",
+      "field": "Scope 1+2 emissions",
+      "target_sheet": "05 Management Analysis",
+      "unit": "tCO2e",
+      "row": 65
+    },
+    {
+      "category": "ESG",
+      "field": "Renewable energy share",
+      "target_sheet": "05 Management Analysis",
+      "unit": "%",
+      "row": 66
+    },
+    {
+      "category": "ESG",
+      "field": "Water / waste intensity",
+      "target_sheet": "05 Management Analysis",
+      "unit": "index",
+      "row": 67
+    },
+    {
+      "category": "ESG",
+      "field": "CSR spend",
+      "target_sheet": "05 Management Analysis",
+      "unit": "\u20b9 cr",
+      "row": 68
+    },
+    {
+      "category": "GOVERNANCE",
+      "field": "Board size",
+      "target_sheet": "05 Management Analysis",
+      "unit": "count",
+      "row": 69
+    },
+    {
+      "category": "GOVERNANCE",
+      "field": "Independent director share",
+      "target_sheet": "05 Management Analysis",
+      "unit": "%",
+      "row": 70
+    },
+    {
+      "category": "GOVERNANCE",
+      "field": "Promoter pledge",
+      "target_sheet": "14 Shareholding",
+      "unit": "%",
+      "row": 71
+    },
+    {
+      "category": "GOVERNANCE",
+      "field": "Auditor name & tenure",
+      "target_sheet": "05 Management Analysis",
+      "unit": "text",
+      "row": 72
+    },
+    {
+      "category": "GOVERNANCE",
+      "field": "KMP remuneration",
+      "target_sheet": "05 Management Analysis",
+      "unit": "\u20b9 cr",
+      "row": 73
+    },
+    {
+      "category": "GOVERNANCE",
+      "field": "Chairman-CEO separation",
+      "target_sheet": "05 Management Analysis",
+      "unit": "yes/no",
+      "row": 74
+    },
+    {
+      "category": "MOAT",
+      "field": "Stated competitive advantage",
+      "target_sheet": "28 Economic Moat",
+      "unit": "text",
+      "row": 75
+    },
+    {
+      "category": "MOAT",
+      "field": "Brand / IP assets",
+      "target_sheet": "28 Economic Moat",
+      "unit": "text",
+      "row": 76
+    },
+    {
+      "category": "MOAT",
+      "field": "Switching cost evidence",
+      "target_sheet": "28 Economic Moat",
+      "unit": "text",
+      "row": 77
+    },
+    {
+      "category": "METRICS",
+      "field": "Employee headcount",
+      "target_sheet": "03 Company Info",
+      "unit": "count",
+      "row": 78
+    },
+    {
+      "category": "METRICS",
+      "field": "Revenue per employee",
+      "target_sheet": "03 Company Info",
+      "unit": "\u20b9 lakh",
+      "row": 79
+    },
+    {
+      "category": "METRICS",
+      "field": "R&D spend",
+      "target_sheet": "03 Company Info",
+      "unit": "\u20b9 cr",
+      "row": 80
+    },
+    {
+      "category": "METRICS",
+      "field": "Advertising / brand spend",
+      "target_sheet": "03 Company Info",
+      "unit": "\u20b9 cr",
+      "row": 81
+    }
+  ],
+  "field_count": 73,
+  "categories": [
+    "FINANCIAL",
+    "GUIDANCE",
+    "CAPEX",
+    "DEBT",
+    "ORDER BOOK",
+    "CAPACITY",
+    "CUSTOMERS",
+    "SUBSIDIARIES",
+    "BUSINESS",
+    "MD&A",
+    "RISKS",
+    "OPPORTUNITIES",
+    "ESG",
+    "GOVERNANCE",
+    "MOAT",
+    "METRICS"
+  ],
+  "category_count": 16,
+  "document_types": [
+    "Annual Report PDF",
+    "Investor Presentation PDF",
+    "Conference Call Transcript",
+    "Credit Rating Report",
+    "Exchange Filing",
+    "Research Notes",
+    "Text Notes",
+    "Markdown Notes",
+    "DOCX",
+    "CSV",
+    "Excel",
+    "Other"
+  ],
+  "autopopulate_targets": [
+    {
+      "sheet": "06 Historical IS",
+      "source": "0A/0C import + AI-2"
+    },
+    {
+      "sheet": "07 Historical BS",
+      "source": "0A/0C import + AI-2"
+    },
+    {
+      "sheet": "08 Historical CF",
+      "source": "0A/0C import + AI-2"
+    },
+    {
+      "sheet": "09 Quarterly",
+      "source": "0A quarterly block"
+    },
+    {
+      "sheet": "10 Ratio Analysis",
+      "source": "auto from 06/07/08"
+    },
+    {
+      "sheet": "16 Revenue Forecast",
+      "source": "auto from history + drivers"
+    },
+    {
+      "sheet": "21 FCFF",
+      "source": "auto from forecast"
+    },
+    {
+      "sheet": "22 FCFE",
+      "source": "auto from forecast"
+    },
+    {
+      "sheet": "23 WACC Calculator",
+      "source": "auto from beta + debt"
+    },
+    {
+      "sheet": "24 DCF Valuation",
+      "source": "auto from FCFF + WACC"
+    },
+    {
+      "sheet": "25 Relative Valuation",
+      "source": "auto from peers + sector"
+    },
+    {
+      "sheet": "28 Economic Moat",
+      "source": "auto ROIC test + AI-2"
+    },
+    {
+      "sheet": "29 Risk Dashboard",
+      "source": "auto 36 forensic tests"
+    },
+    {
+      "sheet": "30 Institutional Scorecard",
+      "source": "auto 11 pillars"
+    },
+    {
+      "sheet": "31 IC Report",
+      "source": "auto from all sheets"
+    },
+    {
+      "sheet": "02 Dashboard",
+      "source": "auto from all sheets"
+    }
+  ],
+  "store_columns": [
+    "Category",
+    "Extracted field",
+    "Target sheet",
+    "Value",
+    "Text / detail",
+    "Unit",
+    "Period",
+    "Source document",
+    "Confidence",
+    "Page"
+  ],
+  "register_columns": [
+    "#",
+    "Document type",
+    "File name",
+    "Path / URL",
+    "Period covered",
+    "Pages",
+    "Status",
+    "Fields extracted",
+    "Confidence",
+    "Processed on"
+  ]
+}

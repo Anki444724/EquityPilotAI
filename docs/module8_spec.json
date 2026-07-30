@@ -1,0 +1,385 @@
+{
+  "alert_rules": [
+    {
+      "row": 9,
+      "name": "Price below buy zone",
+      "condition": "CMP <= intrinsic \u00d7 (1 \u2212 MoS)",
+      "threshold": "=DCF_IntrinsicValue*(1-MarginOfSafety)",
+      "source": "=CMP",
+      "action": "Accumulate",
+      "priority": "High",
+      "operator": "lte"
+    },
+    {
+      "row": 10,
+      "name": "Price above target",
+      "condition": "CMP >= blended target",
+      "threshold": "=TargetPrice",
+      "source": "=CMP",
+      "action": "Review / trim",
+      "priority": "High",
+      "operator": "gte"
+    },
+    {
+      "row": 11,
+      "name": "Upside collapsed",
+      "condition": "Upside < 5%",
+      "threshold": 0.05,
+      "source": "=Upside",
+      "action": "Re-underwrite",
+      "priority": "Medium",
+      "operator": "lt"
+    },
+    {
+      "row": 12,
+      "name": "Score downgraded",
+      "condition": "Score < 55",
+      "threshold": 55,
+      "source": "=OverallScoreCalc",
+      "action": "Reduce position",
+      "priority": "High",
+      "operator": "lt"
+    },
+    {
+      "row": 13,
+      "name": "Rating below A",
+      "condition": "Rating is BBB or lower",
+      "threshold": "BBB",
+      "source": "=InstRating",
+      "action": "Review thesis",
+      "priority": "Medium",
+      "operator": "custom"
+    },
+    {
+      "row": 14,
+      "name": "Risk score deteriorated",
+      "condition": "Risk score < 75%",
+      "threshold": 0.75,
+      "source": "=RiskScore",
+      "action": "Investigate flags",
+      "priority": "High",
+      "operator": "lt"
+    },
+    {
+      "row": 15,
+      "name": "Red flags failed",
+      "condition": "Severity points > 10",
+      "threshold": 10,
+      "source": "=RedFlagsFailed",
+      "action": "Read sheet 29",
+      "priority": "High",
+      "operator": "gt"
+    },
+    {
+      "row": 16,
+      "name": "Leverage stretched",
+      "condition": "Net debt / EBITDA > 3.0x",
+      "threshold": 3,
+      "source": "=IFERROR(NetDebt/'06 Historical IS'!L22,0)",
+      "action": "Credit review",
+      "priority": "High",
+      "operator": "gt"
+    },
+    {
+      "row": 17,
+      "name": "Interest cover thin",
+      "condition": "EBIT / interest < 3.0x",
+      "threshold": 3,
+      "source": "=IFERROR('06 Historical IS'!L25/'06 Historical IS'!L27,0)",
+      "action": "Credit review",
+      "priority": "High",
+      "operator": "lt"
+    },
+    {
+      "row": 18,
+      "name": "Promoter pledge",
+      "condition": "Pledge > 0%",
+      "threshold": 0,
+      "source": "='14 Shareholding'!N23",
+      "action": "Governance review",
+      "priority": "High",
+      "operator": "gt"
+    },
+    {
+      "row": 19,
+      "name": "Cash conversion weak",
+      "condition": "CFO / PAT < 0.8x",
+      "threshold": 0.8,
+      "source": "='08 Historical CF'!L45",
+      "action": "Forensic review",
+      "priority": "Medium",
+      "operator": "lt"
+    },
+    {
+      "row": 20,
+      "name": "Terminal value heavy",
+      "condition": "TV > 75% of EV",
+      "threshold": 0.75,
+      "source": "=DCF_TVpct",
+      "action": "Stress the DCF",
+      "priority": "Medium",
+      "operator": "gt"
+    },
+    {
+      "row": 21,
+      "name": "Model integrity",
+      "condition": "All internal checks pass",
+      "threshold": "OK",
+      "source": "=ModelIntegrity",
+      "action": "Fix before use",
+      "priority": "Critical",
+      "operator": "custom"
+    },
+    {
+      "row": 22,
+      "name": "Position oversized",
+      "condition": "Weight > max position size",
+      "threshold": "=MaxPositionSize",
+      "source": "=IFERROR(MAX(PF_Weight),0)",
+      "action": "Rebalance",
+      "priority": "Medium",
+      "operator": "gt"
+    }
+  ],
+  "ai_alerts": [
+    {
+      "row": 38,
+      "name": "AI recommends Sell / Reduce",
+      "action": null
+    },
+    {
+      "row": 39,
+      "name": "AI flags material risk",
+      "action": null
+    },
+    {
+      "row": 40,
+      "name": "AI confidence is low",
+      "action": null
+    },
+    {
+      "row": 41,
+      "name": "Portfolio risk score below 70%",
+      "action": null
+    },
+    {
+      "row": 42,
+      "name": "Diversification score below 45",
+      "action": null
+    }
+  ],
+  "rating_position_sizes": [
+    {
+      "rating": "AAA",
+      "band": "85 \u2013 100",
+      "stance": "Core holding \u2014 accumulate",
+      "max_position": 0.08
+    },
+    {
+      "rating": "AA",
+      "band": "75 \u2013 84.9",
+      "stance": "Overweight",
+      "max_position": 0.06
+    },
+    {
+      "rating": "A",
+      "band": "65 \u2013 74.9",
+      "stance": "Market weight \u2014 buy on dips",
+      "max_position": 0.04
+    },
+    {
+      "rating": "BBB",
+      "band": "55 \u2013 64.9",
+      "stance": "Small position / watchlist",
+      "max_position": 0.025
+    },
+    {
+      "rating": "BB",
+      "band": "45 \u2013 54.9",
+      "stance": "Avoid unless a catalyst emerges",
+      "max_position": 0.01
+    },
+    {
+      "rating": "B",
+      "band": "35 \u2013 44.9",
+      "stance": "Avoid",
+      "max_position": 0
+    },
+    {
+      "rating": "C",
+      "band": "Below 35",
+      "stance": "Do not invest",
+      "max_position": 0
+    }
+  ],
+  "sector_buckets": [
+    "IT Services",
+    "Banking - Private",
+    "FMCG",
+    "Pharmaceuticals",
+    "Automobile & Ancillaries",
+    "Capital Goods & Engineering",
+    "Chemicals & Specialty",
+    "Consumer Durables",
+    "Metals & Mining",
+    "Oil, Gas & Refining",
+    "NBFC & Financial Services",
+    "Power & Utilities",
+    "Cement",
+    "Others"
+  ],
+  "diversification_checks": [
+    {
+      "row": 34,
+      "label": "Largest position within policy limit",
+      "formula": "=IF(IFERROR(MAX(PF_Weight),0)<=MaxPositionSize,\"\u2713 within limit\",\"\u26a0 oversized position\")"
+    },
+    {
+      "row": 35,
+      "label": "Top-5 concentration below 50%",
+      "formula": "=IF(IFERROR(SUMPRODUCT(LARGE(PF_Weight,{1;2;3;4;5})),0)<=0.5,\"\u2713 diversified\",\"\u26a0 concentrated\")"
+    },
+    {
+      "row": 36,
+      "label": "At least 8 effective positions",
+      "formula": "=IF(IFERROR(1/SUMPRODUCT(PF_Weight,PF_Weight),0)>=8,\"\u2713 adequate breadth\",\"\u26a0 too few effective positions\")"
+    },
+    {
+      "row": 37,
+      "label": "No sector above 35%",
+      "formula": "=IF(IFERROR(MAX(E9:E22),0)<=0.35,\"\u2713 sector limits respected\",\"\u26a0 sector overweight\")"
+    },
+    {
+      "row": 38,
+      "label": "Target weights sum to 100%",
+      "formula": "=IF(ABS(SUM(F9:F22)-1)<0.01,\"\u2713 targets set\",\"\u25c6 set sector targets to enable rebalancing\")"
+    }
+  ],
+  "portfolio_metrics": [
+    {
+      "label": "Portfolio market value (\u20b9)",
+      "formula": "=PF_Value"
+    },
+    {
+      "label": "Top-5 concentration",
+      "formula": "=IFERROR(SUMPRODUCT(LARGE(PF_Weight,{1;2;3;4;5})),0)"
+    },
+    {
+      "label": "Total cost (\u20b9)",
+      "formula": "=PF_Cost"
+    },
+    {
+      "label": "Sectors represented",
+      "formula": "=COUNTIF(D9:D22,\">0\")"
+    },
+    {
+      "label": "Unrealised gain / (loss) (\u20b9)",
+      "formula": "=PF_PnL"
+    },
+    {
+      "label": "Largest sector weight",
+      "formula": "=IFERROR(MAX(E9:E22),0)"
+    },
+    {
+      "label": "Total return",
+      "formula": "=IFERROR(PF_PnL/PF_Cost,0)"
+    },
+    {
+      "label": "Effective positions (1/HHI)",
+      "formula": "=IFERROR(1/SUMPRODUCT(PF_Weight,PF_Weight),0)"
+    },
+    {
+      "label": "Number of positions",
+      "formula": "=COUNTIF(PF_Names,\"?*\")"
+    },
+    {
+      "label": "Expected CAGR (3y, held names)",
+      "formula": "=IFERROR((TargetPrice/CMP)^(1/3)-1,0)"
+    },
+    {
+      "label": "Largest position weight",
+      "formula": "=IFERROR(MAX(PF_Weight),0)"
+    },
+    {
+      "label": "Cash weight",
+      "formula": "=IFERROR('36 Portfolio'!M8/(PF_Value+'36 Portfolio'!M8),0)"
+    },
+    {
+      "label": "Portfolio risk score (AI-weighted)",
+      "formula": "=IFERROR(SUMPRODUCT(PF_Weight,IF(ISNUMBER('36 Portfolio'!$S$12:$S$36),'36 Portfolio'!$S$12:$S$36,0)),RiskScore)",
+      "ai_linked": true
+    },
+    {
+      "label": "Sector concentration (HHI)",
+      "formula": "=IFERROR(SUMPRODUCT($E$12:$E$25,$E$12:$E$25),0)",
+      "ai_linked": true
+    },
+    {
+      "label": "Portfolio expected CAGR (weighted)",
+      "formula": "=IFERROR(SUMPRODUCT(PF_Weight,IF(ISNUMBER('36 Portfolio'!$T$12:$T$36),'36 Portfolio'!$T$12:$T$36,0)),0)",
+      "ai_linked": true
+    },
+    {
+      "label": "Largest sector weight",
+      "formula": "=IFERROR(MAX($E$12:$E$25),0)",
+      "ai_linked": true
+    },
+    {
+      "label": "Portfolio quality score (weighted)",
+      "formula": "=IFERROR(SUMPRODUCT(PF_Weight,IF(ISNUMBER('36 Portfolio'!$Q$12:$Q$36),'36 Portfolio'!$Q$12:$Q$36,0)),OverallScoreCalc)",
+      "ai_linked": true
+    },
+    {
+      "label": "Names needed for full diversification",
+      "formula": "=MAX(0,15-COUNTIF(PF_Names,\"?*\"))",
+      "ai_linked": true
+    },
+    {
+      "label": "Diversification score (0-100)",
+      "formula": "=IFERROR(MIN(100,ROUND(100*(1-SUMPRODUCT(PF_Weight,PF_Weight))*(MIN(1,COUNTIF(PF_Names,\"?*\")/15)),0)),0)",
+      "ai_linked": true
+    },
+    {
+      "label": "Rebalancing trades required",
+      "formula": "=COUNTIF($H$12:$H$25,\"INCREASE\")+COUNTIF($H$12:$H$25,\"REDUCE\")",
+      "ai_linked": true
+    }
+  ],
+  "holding_columns": [
+    "Company",
+    "Ticker",
+    "Sector",
+    "Qty",
+    "Avg cost (\u20b9)",
+    "Invested (\u20b9)",
+    "Current price (\u20b9)",
+    "Market value (\u20b9)",
+    "Gain/Loss (\u20b9)",
+    "Return %",
+    "Weight",
+    "Target wt",
+    "Action",
+    "AI score",
+    "AI rating",
+    "Risk score",
+    "Exp. CAGR",
+    "AI view"
+  ],
+  "watchlist_columns": [
+    "Company",
+    "Ticker",
+    "Sector",
+    "CMP (\u20b9)",
+    "Target (\u20b9)",
+    "Upside",
+    "Buy below (\u20b9)",
+    "Score",
+    "Rating",
+    "Status",
+    "Note",
+    "AI view"
+  ],
+  "default_cash": 500000,
+  "benchmark": "NIFTY 50",
+  "margin_of_safety": 0.2
+}

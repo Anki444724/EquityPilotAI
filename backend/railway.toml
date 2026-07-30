@@ -1,0 +1,19 @@
+# Railway service definition for the API.
+#
+# The health check points at /health/ready rather than /health/live: Railway
+# uses it to decide when a new deployment may receive traffic, and a container
+# whose database is unreachable should not.
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health/ready"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Railway injects $PORT. `--proxy-headers` is required because TLS terminates
+# at Railway's edge; without it every client IP is recorded as the proxy's and
+# the rate limiter throttles the whole internet as one caller.
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"

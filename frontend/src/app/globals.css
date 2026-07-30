@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Institutional design system — navy / white / grey
+   Terminal density (Bloomberg, FactSet), not consumer SaaS.
+   ============================================================ */
+@theme {
+  --color-navy-950: #060f1f;
+  --color-navy-900: #0b1f3a;
+  --color-navy-800: #12305c;
+  --color-navy-700: #1a4176;
+  --color-navy-600: #21528f;
+
+  --color-accent-500: #1f6feb;
+  --color-accent-400: #4b8ef5;
+  --color-accent-600: #1858c4;
+
+  --color-gain: #0b7a3b;
+  --color-gain-soft: #d3f0de;
+  --color-loss: #b3261e;
+  --color-loss-soft: #fadad7;
+  --color-warn: #b45309;
+
+  --color-ink-900: #0f172a;
+  --color-ink-700: #334155;
+  --color-ink-500: #64748b;
+  --color-ink-300: #cbd5e1;
+  --color-ink-100: #f1f5f9;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+:root {
+  --bg: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f7f9fc;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --header: #0b1f3a;
+}
+
+.dark {
+  --bg: #060f1f;
+  --bg-elevated: #0d1b30;
+  --bg-subtle: #0b1728;
+  --border: #1e304c;
+  --border-strong: #2b4468;
+  --text: #e8eef7;
+  --text-muted: #8fa3bf;
+  --header: #060f1f;
+}
+
+* { border-color: var(--border); }
+
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-feature-settings: "tnum" 1, "cv02" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numerics must align in columns — always tabular. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+  letter-spacing: -0.01em;
+}
+
+/* Excel-like data grid */
+.grid-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.grid-table thead th {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 0.6875rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 0.5rem 0.75rem; text-align: right; white-space: nowrap;
+}
+.grid-table thead th:first-child { text-align: left; }
+.grid-table tbody td {
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: right; white-space: nowrap; height: 32px;
+}
+.grid-table tbody td:first-child { text-align: left; }
+.grid-table tbody tr:hover { background: var(--bg-subtle); }
+.grid-table tbody tr.is-subtotal {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--color-accent-500) 5%, transparent);
+}
+.grid-table .sticky-col {
+  position: sticky; left: 0;
+  background: var(--bg); z-index: 5;
+}
+.grid-table tbody tr:hover .sticky-col { background: var(--bg-subtle); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg-subtle); }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong); border-radius: 5px;
+  border: 2px solid var(--bg-subtle);
+}
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px);} to {opacity:1;transform:none;} }
+.animate-fade-up { animation: fade-up .28s ease-out both; }

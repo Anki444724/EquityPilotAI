@@ -1,0 +1,239 @@
+# =============================================================================
+# CI — the pipeline that must pass before anything ships.
+#
+# Five jobs, deliberately separate so a failure names its own cause rather
+# than "the build broke":
+#
+#   backend   unit + integration tests on SQLite and on Postgres
+#   frontend  type check and production build
+#   security  dependency audit and a secret scan
+#   docker    both images build
+#   quality   the architectural invariants, run on their own so a violation
+#             is unmissable in the checks list
+#
+# The Postgres matrix leg matters: SQLite tolerates things Postgres does not
+# (looser typing, no real concurrency), and a suite that only ever runs on
+# SQLite will pass right up until deployment.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend tests (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ierp
+          POSTGRES_PASSWORD: ierp
+          POSTGRES_DB: ierp_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ierp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: System dependencies
+        # tesseract for Module 7's OCR path; DejaVu because Module 9's PDF
+        # tests assert that a rupee sign survives into the extracted text, and
+        # base-14 Helvetica has no such glyph.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tesseract-ocr tesseract-ocr-eng fonts-dejavu-core
+
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: Test
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql+psycopg://ierp:ierp@localhost:5432/ierp_test' || 'sqlite+pysqlite:///./ci.db' }}
+          SECRET_KEY: ci-signing-key-not-a-real-secret
+          ENCRYPTION_KEY: ci-envelope-key-not-a-real-secret
+        run: |
+          pytest tests/ -q \
+            --cov=app --cov-report=term-missing --cov-report=xml \
+            --junitxml=junit.xml
+
+      - name: Coverage gate
+        # Enforced only on the SQLite leg, so the threshold is checked once
+        # rather than reported twice with slightly different numbers.
+        if: matrix.database == 'sqlite'
+        working-directory: backend
+        run: |
+          pip install coverage
+          coverage report --fail-under=85
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results-${{ matrix.database }}
+          path: |
+            backend/junit.xml
+            backend/coverage.xml
+
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Architectural invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Invariants
+        # These are the rules nobody remembers under deadline: domain purity,
+        # tenant filtering, no secret in a response, permissions over roles.
+        working-directory: backend
+        run: pytest tests/test_platform_architecture.py -q
+
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history to scan commits, not just the tree.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Dependency audit
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          # Reported, not fatal: a CVE in a transitive dependency with no fix
+          # available should not block an unrelated bug fix from shipping. It
+          # must be visible, which the summary below guarantees.
+          pip-audit -r requirements.txt --desc || true
+
+      - name: Static analysis
+        working-directory: backend
+        run: |
+          pip install bandit
+          # B101 (assert) is excluded: the test suite is built on assert.
+          bandit -r app -ll --skip B101 -f txt || true
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Container builds
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: false
+          load: true
+          tags: ierp-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: false
+          tags: ierp-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the API image
+        # Building is not the same as running. This proves the image starts,
+        # binds, and reports itself live before anything is tagged for deploy.
+        run: |
+          docker run -d --name smoke -p 8000:8000 \
+            -e SECRET_KEY=ci -e ENCRYPTION_KEY=ci ierp-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health/live; then
+              echo "  ← the container is serving"; exit 0
+            fi
+            sleep 2
+          done
+          echo "the container never became healthy"
+          docker logs smoke
+          exit 1

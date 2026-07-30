@@ -1,0 +1,51 @@
+fastapi==0.141.1
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg[binary]==3.2.3
+redis==5.2.1
+httpx==0.28.1
+# PyJWT replaces python-jose. python-jose has an unfixed DoS advisory
+# (PYSEC-2025-185) and pulls in `ecdsa`, whose Minerva timing vulnerability the
+# maintainers have declared out of scope. The platform signs HS256 only, so
+# nothing either library offers beyond that was in use.
+PyJWT==2.13.0
+# Pinned explicitly: several advisories against 0.41.x, all fixed by 1.3.1.
+starlette==1.3.1
+python-multipart==0.0.31
+structlog==24.4.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
+# --- Module 7: document intelligence -------------------------------
+# PyMuPDF does layout, text and rasterisation; pdfplumber recovers tables
+# (applied selectively — see docs/MODULE_7.md §14). Tesseract is invoked via
+# pytesseract and must also be present as a system binary:
+#   apt-get install -y tesseract-ocr
+pymupdf==1.28.0
+pdfplumber==0.11.10
+pytesseract==0.3.13
+Pillow==12.3.0
+python-docx==1.1.2
+beautifulsoup4==4.15.0
+lxml==6.1.1
+openpyxl==3.1.5
+
+# --- Module 9: report generator ------------------------------------
+# ReportLab typesets the PDF directly (page numbers, TOC, bookmarks);
+# matplotlib renders charts headlessly via the Agg backend. python-docx and
+# openpyxl are already present for Module 7 and are reused for the Word and
+# Excel exports.
+reportlab==5.0.0
+matplotlib==3.10.9
+
+# --- Module 10: commercial SaaS platform layer ----------------------
+# argon2-cffi hashes passwords (memory-hard; the current OWASP first
+# recommendation). email-validator backs Pydantic's EmailStr. cryptography
+# provides AES-256-GCM for envelope-encrypted tenant secrets. PyJWT is
+# already present for JWTs and structlog for structured logging.
+argon2-cffi==25.1.0
+email-validator==2.2.0
+cryptography==49.0.0

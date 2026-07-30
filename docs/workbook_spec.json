@@ -1,0 +1,779 @@
+{
+ "source": "Institutional_Equity_Research_Platform_v7.xlsx",
+ "canonical_line_items": [
+  {
+   "index": 1,
+   "row": 15,
+   "key": "revenue",
+   "label": "Revenue from operations",
+   "statement": "PL"
+  },
+  {
+   "index": 2,
+   "row": 16,
+   "key": "other_operating_income",
+   "label": "Other operating income",
+   "statement": "PL"
+  },
+  {
+   "index": 3,
+   "row": 17,
+   "key": "raw_materials",
+   "label": "Cost of raw materials consumed",
+   "statement": "PL"
+  },
+  {
+   "index": 4,
+   "row": 18,
+   "key": "purchase_stock_in_trade",
+   "label": "Purchase of stock-in-trade",
+   "statement": "PL"
+  },
+  {
+   "index": 5,
+   "row": 19,
+   "key": "change_inventories",
+   "label": "Changes in inventories",
+   "statement": "PL"
+  },
+  {
+   "index": 6,
+   "row": 20,
+   "key": "employee_benefit",
+   "label": "Employee benefit expense",
+   "statement": "PL"
+  },
+  {
+   "index": 7,
+   "row": 21,
+   "key": "other_expenses",
+   "label": "Other expenses",
+   "statement": "PL"
+  },
+  {
+   "index": 8,
+   "row": 22,
+   "key": "depreciation",
+   "label": "Depreciation & amortisation",
+   "statement": "PL"
+  },
+  {
+   "index": 9,
+   "row": 23,
+   "key": "other_income",
+   "label": "Other income (non-operating)",
+   "statement": "PL"
+  },
+  {
+   "index": 10,
+   "row": 24,
+   "key": "finance_costs",
+   "label": "Finance costs",
+   "statement": "PL"
+  },
+  {
+   "index": 11,
+   "row": 25,
+   "key": "exceptional_items",
+   "label": "Exceptional items",
+   "statement": "PL"
+  },
+  {
+   "index": 12,
+   "row": 26,
+   "key": "tax_expense",
+   "label": "Total tax expense",
+   "statement": "PL"
+  },
+  {
+   "index": 13,
+   "row": 27,
+   "key": "minority_interest",
+   "label": "Minority interest",
+   "statement": "PL"
+  },
+  {
+   "index": 14,
+   "row": 28,
+   "key": "oci",
+   "label": "Other comprehensive income",
+   "statement": "PL"
+  },
+  {
+   "index": 15,
+   "row": 29,
+   "key": "dividend_paid",
+   "label": "Total dividend paid",
+   "statement": "PL"
+  },
+  {
+   "index": 16,
+   "row": 30,
+   "key": "weighted_shares",
+   "label": "Weighted avg shares (crore)",
+   "statement": "PL"
+  },
+  {
+   "index": 17,
+   "row": 33,
+   "key": "cash_and_bank",
+   "label": "Cash & bank balances",
+   "statement": "BS"
+  },
+  {
+   "index": 18,
+   "row": 34,
+   "key": "current_investments",
+   "label": "Current investments",
+   "statement": "BS"
+  },
+  {
+   "index": 19,
+   "row": 35,
+   "key": "trade_receivables",
+   "label": "Trade receivables",
+   "statement": "BS"
+  },
+  {
+   "index": 20,
+   "row": 36,
+   "key": "inventories",
+   "label": "Inventories",
+   "statement": "BS"
+  },
+  {
+   "index": 21,
+   "row": 37,
+   "key": "other_current_assets",
+   "label": "Other current assets",
+   "statement": "BS"
+  },
+  {
+   "index": 22,
+   "row": 38,
+   "key": "net_block_ppe",
+   "label": "Net block \u2014 PP&E",
+   "statement": "BS"
+  },
+  {
+   "index": 23,
+   "row": 39,
+   "key": "cwip",
+   "label": "Capital work-in-progress",
+   "statement": "BS"
+  },
+  {
+   "index": 24,
+   "row": 40,
+   "key": "goodwill",
+   "label": "Goodwill",
+   "statement": "BS"
+  },
+  {
+   "index": 25,
+   "row": 41,
+   "key": "other_intangibles",
+   "label": "Other intangible assets",
+   "statement": "BS"
+  },
+  {
+   "index": 26,
+   "row": 42,
+   "key": "lt_investments_associates",
+   "label": "Long-term investments & associates",
+   "statement": "BS"
+  },
+  {
+   "index": 27,
+   "row": 43,
+   "key": "other_nca",
+   "label": "Other non-current assets",
+   "statement": "BS"
+  },
+  {
+   "index": 28,
+   "row": 44,
+   "key": "deferred_tax_asset",
+   "label": "Deferred tax asset",
+   "statement": "BS"
+  },
+  {
+   "index": 29,
+   "row": 45,
+   "key": "trade_payables",
+   "label": "Trade payables",
+   "statement": "BS"
+  },
+  {
+   "index": 30,
+   "row": 46,
+   "key": "short_term_borrowings",
+   "label": "Short-term borrowings",
+   "statement": "BS"
+  },
+  {
+   "index": 31,
+   "row": 47,
+   "key": "current_maturities_ltd",
+   "label": "Current maturities of LT debt",
+   "statement": "BS"
+  },
+  {
+   "index": 32,
+   "row": 48,
+   "key": "other_current_liabilities",
+   "label": "Other current liabilities",
+   "statement": "BS"
+  },
+  {
+   "index": 33,
+   "row": 49,
+   "key": "short_term_provisions",
+   "label": "Short-term provisions",
+   "statement": "BS"
+  },
+  {
+   "index": 34,
+   "row": 50,
+   "key": "long_term_borrowings",
+   "label": "Long-term borrowings",
+   "statement": "BS"
+  },
+  {
+   "index": 35,
+   "row": 51,
+   "key": "deferred_tax_liability",
+   "label": "Deferred tax liability",
+   "statement": "BS"
+  },
+  {
+   "index": 36,
+   "row": 52,
+   "key": "other_ncl",
+   "label": "Other non-current liabilities",
+   "statement": "BS"
+  },
+  {
+   "index": 37,
+   "row": 53,
+   "key": "equity_share_capital",
+   "label": "Equity share capital",
+   "statement": "BS"
+  },
+  {
+   "index": 38,
+   "row": 54,
+   "key": "reserves_surplus",
+   "label": "Reserves & surplus",
+   "statement": "BS"
+  },
+  {
+   "index": 39,
+   "row": 55,
+   "key": "minority_interest_bs",
+   "label": "Minority interest (BS)",
+   "statement": "BS"
+  },
+  {
+   "index": 40,
+   "row": 58,
+   "key": "other_noncash_adj",
+   "label": "Other non-cash adjustments",
+   "statement": "CF"
+  },
+  {
+   "index": 41,
+   "row": 59,
+   "key": "chg_inventories_cf",
+   "label": "(Increase)/decrease in inventories",
+   "statement": "CF"
+  },
+  {
+   "index": 42,
+   "row": 60,
+   "key": "chg_receivables_cf",
+   "label": "(Increase)/decrease in receivables",
+   "statement": "CF"
+  },
+  {
+   "index": 43,
+   "row": 61,
+   "key": "chg_payables_cf",
+   "label": "Increase/(decrease) in payables",
+   "statement": "CF"
+  },
+  {
+   "index": 44,
+   "row": 62,
+   "key": "other_wc_movement",
+   "label": "Other working-capital movement",
+   "statement": "CF"
+  },
+  {
+   "index": 45,
+   "row": 63,
+   "key": "direct_taxes_paid",
+   "label": "Direct taxes paid",
+   "statement": "CF"
+  },
+  {
+   "index": 46,
+   "row": 64,
+   "key": "capex",
+   "label": "Purchase of PP&E (capex)",
+   "statement": "CF"
+  },
+  {
+   "index": 47,
+   "row": 65,
+   "key": "sale_fixed_assets",
+   "label": "Proceeds from sale of fixed assets",
+   "statement": "CF"
+  },
+  {
+   "index": 48,
+   "row": 66,
+   "key": "purchase_sale_investments",
+   "label": "(Purchase)/sale of investments",
+   "statement": "CF"
+  },
+  {
+   "index": 49,
+   "row": 67,
+   "key": "other_investing",
+   "label": "Other investing flows",
+   "statement": "CF"
+  },
+  {
+   "index": 50,
+   "row": 68,
+   "key": "equity_issued_buyback",
+   "label": "Equity issued / (buyback)",
+   "statement": "CF"
+  },
+  {
+   "index": 51,
+   "row": 69,
+   "key": "proceeds_borrowings",
+   "label": "Proceeds from borrowings",
+   "statement": "CF"
+  },
+  {
+   "index": 52,
+   "row": 70,
+   "key": "repayment_borrowings",
+   "label": "Repayment of borrowings",
+   "statement": "CF"
+  },
+  {
+   "index": 53,
+   "row": 71,
+   "key": "other_financing",
+   "label": "Other financing flows",
+   "statement": "CF"
+  },
+  {
+   "index": 54,
+   "row": 72,
+   "key": "opening_cash",
+   "label": "Opening cash balance",
+   "statement": "CF"
+  }
+ ],
+ "store": {
+  "slots": 12,
+  "years": 10,
+  "items": 54,
+  "range": "'0A Data Import'!$AB$241:$FC$294",
+  "block": 11
+ },
+ "precedence": [
+  "manual_override",
+  "company_store",
+  "legacy_alias_match",
+  "sample_default"
+ ],
+ "scorecard_pillars": [
+  {
+   "n": 1,
+   "key": "business_quality",
+   "name": "Business Quality",
+   "max": 10
+  },
+  {
+   "n": 2,
+   "key": "industry_attractiveness",
+   "name": "Industry Attractiveness",
+   "max": 8
+  },
+  {
+   "n": 3,
+   "key": "management_quality",
+   "name": "Management Quality",
+   "max": 9
+  },
+  {
+   "n": 4,
+   "key": "corporate_governance",
+   "name": "Corporate Governance",
+   "max": 9
+  },
+  {
+   "n": 5,
+   "key": "financial_performance",
+   "name": "Financial Performance",
+   "max": 12
+  },
+  {
+   "n": 6,
+   "key": "balance_sheet_strength",
+   "name": "Balance-Sheet Strength",
+   "max": 10
+  },
+  {
+   "n": 7,
+   "key": "cash_flow_quality",
+   "name": "Cash-Flow Quality",
+   "max": 10
+  },
+  {
+   "n": 8,
+   "key": "economic_moat",
+   "name": "Economic Moat",
+   "max": 10
+  },
+  {
+   "n": 9,
+   "key": "growth_outlook",
+   "name": "Growth Outlook",
+   "max": 8
+  },
+  {
+   "n": 10,
+   "key": "valuation_attractiveness",
+   "name": "Valuation Attractiveness",
+   "max": 9
+  },
+  {
+   "n": 11,
+   "key": "risk_profile",
+   "name": "Risk Profile",
+   "max": 5
+  }
+ ],
+ "rating_bands": [
+  [
+   "AAA",
+   85,
+   100
+  ],
+  [
+   "AA",
+   75,
+   84.9
+  ],
+  [
+   "A",
+   65,
+   74.9
+  ],
+  [
+   "BBB",
+   55,
+   64.9
+  ],
+  [
+   "BB",
+   45,
+   54.9
+  ],
+  [
+   "B",
+   35,
+   44.9
+  ],
+  [
+   "C",
+   0,
+   34.9
+  ]
+ ],
+ "reco_signals": [
+  {
+   "key": "target_upside",
+   "weight": 0.35,
+   "bands": [
+    [
+     0.35,
+     5
+    ],
+    [
+     0.2,
+     4
+    ],
+    [
+     0.08,
+     3
+    ],
+    [
+     -0.08,
+     2
+    ],
+    [
+     -0.2,
+     1
+    ]
+   ],
+   "floor": 0
+  },
+  {
+   "key": "dcf_upside",
+   "weight": 0.2,
+   "bands": [
+    [
+     0.35,
+     5
+    ],
+    [
+     0.2,
+     4
+    ],
+    [
+     0.08,
+     3
+    ],
+    [
+     -0.08,
+     2
+    ],
+    [
+     -0.2,
+     1
+    ]
+   ],
+   "floor": 0
+  },
+  {
+   "key": "overall_score",
+   "weight": 0.2,
+   "bands": [
+    [
+     85,
+     5
+    ],
+    [
+     75,
+     4
+    ],
+    [
+     65,
+     3
+    ],
+    [
+     55,
+     2
+    ],
+    [
+     45,
+     1
+    ]
+   ],
+   "floor": 0,
+   "inclusive": true
+  },
+  {
+   "key": "risk_score",
+   "weight": 0.15,
+   "bands": [
+    [
+     0.95,
+     5
+    ],
+    [
+     0.88,
+     4
+    ],
+    [
+     0.78,
+     3
+    ],
+    [
+     0.65,
+     2
+    ],
+    [
+     0.5,
+     1
+    ]
+   ],
+   "floor": 0,
+   "inclusive": true
+  },
+  {
+   "key": "risk_reward",
+   "weight": 0.1,
+   "bands": [
+    [
+     3,
+     5
+    ],
+    [
+     2,
+     4
+    ],
+    [
+     1.5,
+     3
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     0.7,
+     1
+    ]
+   ],
+   "floor": 0,
+   "inclusive": true
+  }
+ ],
+ "reco_bands": [
+  [
+   4.3,
+   "STRONG BUY"
+  ],
+  [
+   3.5,
+   "BUY"
+  ],
+  [
+   2.8,
+   "ACCUMULATE"
+  ],
+  [
+   2.2,
+   "HOLD"
+  ],
+  [
+   1.5,
+   "REDUCE"
+  ],
+  [
+   0.8,
+   "SELL"
+  ],
+  [
+   -999,
+   "STRONG SELL"
+  ]
+ ],
+ "conviction_bands": [
+  [
+   4,
+   "High"
+  ],
+  [
+   3,
+   "Medium"
+  ],
+  [
+   -999,
+   "Low"
+  ]
+ ],
+ "score_engine_10": [
+  [
+   "business_quality",
+   12
+  ],
+  [
+   "financial_quality",
+   16
+  ],
+  [
+   "management",
+   10
+  ],
+  [
+   "governance",
+   10
+  ],
+  [
+   "moat",
+   10
+  ],
+  [
+   "valuation",
+   12
+  ],
+  [
+   "growth",
+   10
+  ],
+  [
+   "risk",
+   8
+  ],
+  [
+   "esg",
+   6
+  ],
+  [
+   "capital_allocation",
+   6
+  ]
+ ],
+ "esg_weights": [
+  [
+   "env_emissions",
+   0.25
+  ],
+  [
+   "env_water_waste",
+   0.15
+  ],
+  [
+   "social_workforce",
+   0.2
+  ],
+  [
+   "social_community",
+   0.15
+  ],
+  [
+   "gov_esg_oversight",
+   0.15
+  ],
+  [
+   "disclosure_brsr",
+   0.1
+  ]
+ ],
+ "capital_allocation_weights": [
+  [
+   "incremental_roic_vs_wacc",
+   0.3
+  ],
+  [
+   "reinvestment_discipline",
+   0.2
+  ],
+  [
+   "ma_track_record",
+   0.15
+  ],
+  [
+   "shareholder_returns",
+   0.15
+  ],
+  [
+   "balance_sheet_mgmt",
+   0.1
+  ],
+  [
+   "dilution_discipline",
+   0.1
+  ]
+ ]
+}

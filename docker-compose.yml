@@ -1,0 +1,123 @@
+# =============================================================================
+# Local production-shaped stack.
+#
+#   docker compose up --build
+#     api      → http://localhost:8000  (docs at /docs)
+#     web      → http://localhost:3000
+#     postgres, redis
+#
+# The point of this file is to run the deployment topology, not a convenient
+# approximation of it: Postgres rather than SQLite, Redis-backed rate limiting
+# rather than per-process, and the worker as its own process. Bugs that only
+# appear under those conditions — a shared rate limit, a job claimed twice —
+# are exactly the ones a single-process dev server hides.
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ierp
+      POSTGRES_PASSWORD: ierp_local_password
+      POSTGRES_DB: ierp
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      # `pg_isready` rather than a TCP check: the port opens before the
+      # database is able to answer, and dependent containers that start on the
+      # port alone fail their first query.
+      test: ["CMD-SHELL", "pg_isready -U ierp -d ierp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+psycopg://ierp:ierp_local_password@postgres:5432/ierp
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_BACKEND: redis
+      # Local-only values. A real deployment injects these from a secret
+      # store; committing them here would be the exact mistake the AI Settings
+      # sheet warns about.
+      SECRET_KEY: local-development-signing-key-not-for-production-use
+      ENCRYPTION_KEY: local-development-envelope-key-not-for-production
+      NATIVE_AUTH: "true"
+      LOG_FORMAT: json
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      EMAIL_LINK_BASE: http://localhost:3000
+      OAUTH_REDIRECT_BASE: http://localhost:3000
+      # The API serves requests; the worker container runs the jobs.
+      WORKER_ENABLED: "false"
+      SCHEDULER_ENABLED: "false"
+      BACKUP_DIR: /app/backups
+    volumes:
+      - backups:/app/backups
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://ierp:ierp_local_password@postgres:5432/ierp
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: local-development-signing-key-not-for-production-use
+      ENCRYPTION_KEY: local-development-envelope-key-not-for-production
+      LOG_FORMAT: json
+      BACKUP_DIR: /app/backups
+      # Exactly one process in the deployment runs the scheduler; more than
+      # one and every recurring job fires N times.
+      SCHEDULER_ENABLED: "true"
+      WORKER_ENABLED: "true"
+      WORKER_CONCURRENCY: "2"
+    volumes:
+      - backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  backups:

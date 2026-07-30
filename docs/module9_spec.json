@@ -1,0 +1,203 @@
+{
+  "ic_sections": [
+    {
+      "row": 9,
+      "title": "1.  RECOMMENDATION SUMMARY"
+    },
+    {
+      "row": 23,
+      "title": "2.  INVESTMENT THESIS  \u2014  why we should own this business"
+    },
+    {
+      "row": 33,
+      "title": "3.  KEY INVESTMENT ARGUMENTS"
+    },
+    {
+      "row": 40,
+      "title": "4.  CATALYSTS  \u2014  what makes the market re-rate the stock"
+    },
+    {
+      "row": 51,
+      "title": "5.  KEY RISKS TO THE THESIS"
+    },
+    {
+      "row": 60,
+      "title": "6.  VALUATION SUMMARY"
+    },
+    {
+      "row": 70,
+      "title": "7.  KEY FINANCIAL SUMMARY"
+    },
+    {
+      "row": 85,
+      "title": "8.  WHAT WOULD MAKE US CHANGE OUR MIND"
+    },
+    {
+      "row": 91,
+      "title": "9.  MONITORABLES  \u2014  the specific data points we will track each quarter"
+    },
+    {
+      "row": 100,
+      "title": "10.  ANALYST CERTIFICATION & APPROVALS"
+    }
+  ],
+  "ai_narrative_blocks": [
+    "Business Summary",
+    "Industry Analysis",
+    "Revenue Drivers",
+    "Competitive Advantages",
+    "Economic Moat",
+    "SWOT",
+    "Porter's Five Forces",
+    "Management Analysis",
+    "Corporate Governance",
+    "Financial Strength",
+    "Debt Analysis",
+    "Cash Flow Analysis",
+    "Growth Drivers",
+    "ESG Analysis",
+    "Valuation Summary",
+    "Intrinsic Value",
+    "Target Price",
+    "Margin of Safety",
+    "Investment Thesis",
+    "Key Risks",
+    "Key Catalysts",
+    "Confidence Score",
+    "Buy / Hold / Sell"
+  ],
+  "recommendation_fields": [
+    "Recommendation",
+    "Target price (\u20b9) \u2014 12-month",
+    "Current market price (\u20b9)",
+    "Expected total return (price + dividend)",
+    "Investment horizon",
+    "Conviction level",
+    "Suggested initial position size",
+    "Maximum position size",
+    "Stop-loss / thesis-break level (\u20b9)",
+    "Institutional rating",
+    "Risk score",
+    "Risk / reward ratio"
+  ],
+  "valuation_weights": [
+    [
+      "DCF (FCFF, 10-year)",
+      0.35
+    ],
+    [
+      "FCFE discounted",
+      0.15
+    ],
+    [
+      "Relative \u2014 blended multiples",
+      0.3
+    ],
+    [
+      "Scenario expected value",
+      0.2
+    ],
+    [
+      "Bull case",
+      0
+    ],
+    [
+      "Bear case",
+      0
+    ]
+  ],
+  "key_financial_rows": [
+    "Revenue",
+    "EBITDA",
+    "EBITDA margin",
+    "PAT",
+    "EPS (\u20b9)",
+    "EPS growth",
+    "ROE",
+    "ROCE",
+    "Net debt / EBITDA",
+    "Free cash flow",
+    "P/E (x)",
+    "EV/EBITDA (x)"
+  ],
+  "print_sections": [
+    {
+      "row": 9,
+      "title": "1.  INVESTMENT SNAPSHOT"
+    },
+    {
+      "row": 19,
+      "title": "2.  INVESTMENT THESIS"
+    },
+    {
+      "row": 26,
+      "title": "3.  KEY FINANCIALS  (\u20b9 cr unless stated)"
+    },
+    {
+      "row": 39,
+      "title": "4.  SCORECARD BY PILLAR"
+    },
+    {
+      "row": 54,
+      "title": "5.  VALUATION SUMMARY"
+    },
+    {
+      "row": 64,
+      "title": "6.  KEY RISKS  &  CATALYSTS"
+    },
+    {
+      "row": 73,
+      "title": "7.  FORENSIC RED FLAGS  \u2014  automatically failed tests"
+    },
+    {
+      "row": 82,
+      "title": "8.  ANALYST CERTIFICATION"
+    }
+  ],
+  "cover_fields": [
+    "52-week high (\u20b9)",
+    "52-week low (\u20b9)",
+    "Analyst e-mail",
+    "Avg daily traded value (\u20b9 cr)",
+    "BRIDGE ITEMS  (linked from 07 Historical Balance Sheet \u2014 latest reported year)",
+    "Benchmark index",
+    "Blended target price (\u20b9)",
+    "Book value per share (\u20b9)",
+    "COMPANY & COVERAGE DETAILS",
+    "Cash & liquid investments (\u20b9 cr)",
+    "Company name",
+    "Coverage status",
+    "Current market price (CMP, \u20b9)",
+    "Data source",
+    "Enterprise value (\u20b9 cr)",
+    "Exchange",
+    "Face value (\u20b9)",
+    "Free float (%)",
+    "Gross debt (\u20b9 cr)",
+    "ISIN",
+    "Index membership",
+    "Industry / Sub-sector",
+    "Institution / Desk",
+    "Institutional rating",
+    "Intrinsic value / share (\u20b9)",
+    "Investments in associates (\u20b9 cr)",
+    "Last data refresh",
+    "Latest reported PAT (\u20b9 cr)",
+    "Lead analyst",
+    "MARKET DATA & CAPITAL STRUCTURE  (input block \u2014 feeds the entire model)",
+    "Market capitalisation (\u20b9 cr)",
+    "Market-cap category",
+    "Minority interest (\u20b9 cr)",
+    "Model version",
+    "NAVIGATION",
+    "Net debt / (net cash) (\u20b9 cr)",
+    "Overall score (out of 100)",
+    "Recommendation",
+    "Report date",
+    "Sector",
+    "Shares outstanding (crore)",
+    "Ticker / Symbol",
+    "Total shareholders' equity (\u20b9 cr)",
+    "Upside / (downside)"
+  ]
+}
