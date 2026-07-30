@@ -179,10 +179,28 @@ class Settings(BaseSettings):
     def email_configured(self) -> bool:
         return bool(self.SMTP_HOST)
 
-    def production_readiness_problems(self) -> list[str]:
-        """Configuration that must be fixed before this process serves real
-        users. Surfaced by /health/ready and by the production-readiness
-        report, so the answer is computed rather than asserted."""
+    @property
+    def ai_configured(self) -> bool:
+        """Is at least one live LLM provider credentialled?
+
+        The offline provider is always present, so the analyst never errors —
+        but it returns deterministic template prose, which is a materially
+        different product. Reported as degraded, never as blocking.
+        """
+        return any((
+            self.GEMINI_API_KEY, self.OPENROUTER_API_KEY,
+            self.OPENAI_API_KEY, self.ANTHROPIC_API_KEY,
+        ))
+
+    def production_blocking_problems(self) -> list[str]:
+        """Configuration that makes serving traffic actively *unsafe*.
+
+        These are the conditions under which the process must not receive
+        requests at all: it cannot sign a token securely, it is leaking stack
+        traces, it is running the development identity where every caller is a
+        super admin, or it is storing multi-tenant data in a single-writer
+        file. A load balancer should take the instance out of rotation.
+        """
         problems: list[str] = []
         if not self.is_production:
             return problems
@@ -198,9 +216,35 @@ class Settings(BaseSettings):
             problems.append("SQLite is not a production database for a multi-tenant service.")
         if any(o.startswith("http://") for o in self.CORS_ORIGINS):
             problems.append("A plaintext http origin is allowed by CORS.")
+        return problems
+
+    def production_degraded_problems(self) -> list[str]:
+        """Configuration that leaves a *feature* unavailable but the service
+        safe to use.
+
+        Deliberately separated from the blocking set. Without SMTP the sign-up
+        verification and password-reset e-mails cannot be sent, which is a real
+        gap worth reporting loudly — but every other module (financials,
+        valuation, scoring, reports, portfolio) is perfectly serviceable, and
+        refusing all traffic over a missing mail relay takes down the whole
+        platform to protect one flow.
+        """
+        problems: list[str] = []
+        if not self.is_production:
+            return problems
         if not self.email_configured:
             problems.append("No SMTP host — verification and reset emails cannot be delivered.")
+        if not self.ai_configured:
+            problems.append("No AI provider key — the analyst serves offline template output.")
         return problems
+
+    def production_readiness_problems(self) -> list[str]:
+        """Every production concern, blocking and degrading alike.
+
+        Retained as the single list used by the production-readiness report and
+        the admin panel, so operators still see one complete picture.
+        """
+        return self.production_blocking_problems() + self.production_degraded_problems()
 
 
 @lru_cache

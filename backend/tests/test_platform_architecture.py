@@ -488,6 +488,53 @@ class TestConfiguration:
         assert any("DEBUG" in p for p in problems)
         assert any("SQLite" in p for p in problems)
 
+    def test_missing_smtp_does_not_make_the_service_unready(self):
+        """DEP-003 regression.
+
+        A fully-configured production instance with no mail relay must still
+        accept traffic. Conflating the two took the entire platform offline on
+        Railway: /health/ready returned 503 for a service whose database,
+        schema and security configuration were all correct, and the deploy was
+        rolled back over an undeliverable password-reset e-mail.
+        """
+        from app.core.config import Settings
+
+        secure = Settings(
+            ENVIRONMENT="production", DEBUG=False, NATIVE_AUTH=True,
+            SECRET_KEY="x" * 40, ENCRYPTION_KEY="y" * 40,
+            DATABASE_URL="postgresql+psycopg://u:p@h:5432/d",
+            CORS_ORIGINS=["https://app.example.com"],
+            SMTP_HOST=None,
+        )
+        assert secure.production_blocking_problems() == []
+        assert any("SMTP" in p for p in secure.production_degraded_problems())
+        # The aggregate view still reports everything, for the admin panel.
+        assert any("SMTP" in p for p in secure.production_readiness_problems())
+
+    def test_unsafe_configuration_still_blocks(self):
+        """The severity split must not weaken the genuinely unsafe cases."""
+        from app.core.config import Settings
+
+        for kwargs, marker in (
+            ({"SECRET_KEY": None}, "SECRET_KEY"),
+            ({"SECRET_KEY": "x" * 40, "DEBUG": True}, "DEBUG"),
+            ({"SECRET_KEY": "x" * 40, "NATIVE_AUTH": False,
+              "AUTH_DEV_MODE": True}, "Development identity"),
+            ({"SECRET_KEY": "x" * 40,
+              "DATABASE_URL": "sqlite+pysqlite:///./ierp.db"}, "SQLite"),
+            ({"SECRET_KEY": "x" * 40,
+              "CORS_ORIGINS": ["http://localhost:3000"]}, "plaintext http"),
+        ):
+            base = {
+                "ENVIRONMENT": "production", "DEBUG": False,
+                "NATIVE_AUTH": True,
+                "DATABASE_URL": "postgresql+psycopg://u:p@h:5432/d",
+                "CORS_ORIGINS": ["https://app.example.com"],
+                **kwargs,
+            }
+            problems = Settings(**base).production_blocking_problems()
+            assert any(marker in p for p in problems), f"{marker} must block"
+
     def test_secure_cookies_are_forced_in_production(self):
         from app.core.config import Settings
 

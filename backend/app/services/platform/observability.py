@@ -624,6 +624,7 @@ class HealthService:
             self._check_database(),
             self._check_migrations(),
             self._check_configuration(),
+            self._check_configuration_optional(),
             self._check_queue(),
         ]
         critical_failed = any(not c.ok for c in checks if c.critical)
@@ -679,10 +680,26 @@ class HealthService:
             return Check("schema", False, str(exc)[:200])
 
     def _check_configuration(self) -> Check:
-        problems = settings.production_readiness_problems()
+        """Critical: only unsafe configuration keeps traffic away.
+
+        Split deliberately from `_check_configuration_optional`. Anything that
+        makes the service unsafe to expose (unsigned tokens, DEBUG, the
+        development identity, SQLite, a plaintext CORS origin) fails this
+        critical check and returns 503. A missing mail relay does not.
+        """
+        problems = settings.production_blocking_problems()
         return Check(
             "configuration", not problems,
             "; ".join(problems)[:300] if problems else "complete",
+        )
+
+    def _check_configuration_optional(self) -> Check:
+        """Non-critical: features that are unavailable but do not risk harm."""
+        problems = settings.production_degraded_problems()
+        return Check(
+            "optional_configuration", not problems,
+            "; ".join(problems)[:300] if problems else "complete",
+            critical=False,
         )
 
     def _check_queue(self) -> Check:
