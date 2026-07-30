@@ -38,7 +38,15 @@ RUN npm run build
 FROM node:20-slim AS runtime
 
 ENV NODE_ENV=production \
-    NEXT_TELEMETRY_DISABLED=1
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    # Next's standalone server reads `process.env.HOSTNAME || '0.0.0.0'`.
+    # Docker sets HOSTNAME to the container ID, so without this the server
+    # binds to that name alone and resolves to a single interface: the
+    # process logs "Ready" and every external health check and proxied
+    # request is refused. Binding 0.0.0.0 explicitly listens on all
+    # interfaces, which is what a container behind a proxy needs.
+    HOSTNAME=0.0.0.0
 
 RUN groupadd --system --gid 1001 nodejs \
     && useradd --system --uid 1001 --gid nodejs nextjs
