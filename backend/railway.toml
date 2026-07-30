@@ -9,11 +9,23 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/health/ready"
-healthcheckTimeout = 30
+# Cold start runs Alembic against a freshly-provisioned Postgres and builds the
+# 54-table schema before the first byte is served. Thirty seconds is not enough
+# for that on a cold container; the previous value failed the deploy while the
+# migration was still running.
+healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# Railway injects $PORT. `--proxy-headers` is required because TLS terminates
-# at Railway's edge; without it every client IP is recorded as the proxy's and
-# the rate limiter throttles the whole internet as one caller.
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"
+# Railway executes this string directly, NOT through a shell, so `$PORT` is
+# passed to uvicorn verbatim and rejected as a non-integer. Wrapping in
+# `sh -c` restores variable expansion. `${PORT:-8000}` keeps the container
+# runnable outside Railway, where PORT is not injected.
+#
+# `alembic upgrade head &&` runs migrations before serving: chained with && so
+# a failed migration aborts the start rather than serving a half-built schema.
+#
+# `--proxy-headers` is required because TLS terminates at Railway's edge;
+# without it every client IP is recorded as the proxy's and the rate limiter
+# throttles the whole internet as one caller.
+startCommand = "sh -c 'alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*'"
