@@ -127,6 +127,46 @@ Plus platform seed data: 4 plans, 3 tenants, 9 users, 19,677 price rows.
 | **FE-002** | Dashboard stayed empty after signing in, until a manual reload | Queries that ran while anonymous cached their 401s; React Query never retried them | Invalidate all queries on sign-in and session restore; clear the cache on sign-out |
 | **FE-003** | Financials, Valuation and AI Research greyed out as "Ships in Module 2/4/6" | The pages existed and worked, but the sidebar pointed at top-level `/financials`, `/valuation`, `/ai` — routes that were never built — and carried a stale `module:` flag from before those modules were written. The company detail page had no outbound links either | Added `CompanyTabs`, rendered by all seven company pages; repointed the sidebar at the company in view |
 
+| **FE-004** | "Upload failed — Authentication required." | `docs.upload` called `fetch()` directly, attaching neither the bearer token nor cookies. Six further call sites had the same defect | All routed through one `rawFetch()`; exactly one `fetch()` remains in the client |
+| **DOC-001** | Employee headcount recorded as `31` | The rule's connective was optional, so "Headcount at 31 March 2026 was 612,400" matched `at 31` and stored the day of the month | Date clause consumed before the number; figure must be a whole token not followed by a month |
+| **DOC-002** | Every document titled "untitled"; citations read "untitled p.1" | PDF metadata title used verbatim; ReportLab and print-to-PDF drivers stamp "untitled" there | Placeholders rejected; falls back to the cover page's first line |
+| **AI-002** | AI refused to answer from an uploaded annual report | The offline provider's out-of-scope list hardcoded "headcount"/"employees", written before document ingestion existed | The list is consulted against actual evidence; future years, off-universe peers and past dates still refuse unconditionally |
+
+### FE-004 in detail — the reported upload failure
+
+The backend was never at fault. Reproduced directly against production:
+
+| Request | Status |
+|---|---|
+| `POST /documents/upload` with no credentials | **401** `{"detail":"Authentication required."}` |
+| `POST /documents/upload` with a bearer token | **201** |
+
+FE-001 fixed `request()` and `authed()`, but seven call sites called `fetch()`
+directly and so bypassed both — document upload and delete, portfolio delete,
+transaction delete, watchlist entry delete, report delete and report preview.
+All seven would have failed the same way. They now share one authenticated
+`rawFetch()`, and `Content-Type` is not forced so multipart uploads still set
+their own boundary.
+
+### Document Intelligence pipeline — verified end to end
+
+Uploaded a generated Infosys FY2026 annual report through the live UI and API:
+
+| Stage | Evidence |
+|---|---|
+| PDF upload | `POST /documents/upload` → **201** from the browser |
+| OCR | tesseract available; native text used where present |
+| Text extraction | 2 pages parsed |
+| Chunking | 2 chunks with page and section attribution |
+| Embeddings | `local-hashing / hash-4g`, 384 dimensions |
+| Vector storage | chunks retrievable by semantic score |
+| Entity extraction | 2 entities |
+| Knowledge graph | 2 nodes, 1 edge |
+| Search indexing | "attrition" → hybrid lexical 1.0 / semantic 0.19, answer quoted with `citation_audit.verified = true`, coverage 1.0 |
+| Library | document listed with title *Infosys Limited* |
+| Evidence page | headcount **342,900**, principal risks extracted |
+| **AI chat with citations** | "employee headcount at 342,900.00 `[doc_employee_headcount]` … per *Infosys Limited p.1*" |
+
 ### FE-003 in detail — "the modules are disabled"
 
 Nothing was missing. All six research pages were implemented, built and
