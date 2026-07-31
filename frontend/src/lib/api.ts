@@ -31,25 +31,48 @@ export class ApiError extends Error {
  *
  * Credentials are attached in one place so no caller can forget them.
  */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+/**
+ * The single fetch used by every call in this module.
+ *
+ * `request()` and `authed()` both delegate here, and so does every raw call
+ * that cannot use them (multipart uploads, DELETEs with no body, HTML
+ * previews). Centralising it is the point: seven call sites previously
+ * called `fetch()` directly and therefore sent no credentials at all, which
+ * was invisible while the backend ran with AUTH_DEV_MODE=true and produced
+ * "Authentication required." for every one of them in production.
+ *
+ * `Content-Type` is deliberately not forced here. A multipart body must be
+ * allowed to set its own header, including the generated boundary; sending
+ * `application/json` alongside a FormData body makes the server fail to parse
+ * it.
+ */
+async function rawFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-      ...(init?.headers ?? {}),
-    },
+    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
     credentials: "include",
     cache: "no-store",
   });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = body.detail ?? detail;
-    } catch { /* non-JSON error body */ }
-    throw new ApiError(res.status, detail);
-  }
+}
+
+/** Throw a typed ApiError carrying the server's `detail` when present. */
+async function raise(res: Response): Promise<never> {
+  let detail: unknown = res.statusText;
+  try {
+    detail = (await res.json()).detail ?? res.statusText;
+  } catch { /* non-JSON error body */ }
+  throw new ApiError(
+    res.status,
+    typeof detail === "string" ? detail : JSON.stringify(detail),
+  );
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await rawFetch(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) await raise(res);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -312,7 +335,7 @@ export const docsApi = {
     ),
 
   remove: (id: number) =>
-    fetch(`${API_BASE}${DOCS}/${id}`, { method: "DELETE" }).then((r) => {
+    rawFetch(`${DOCS}/${id}`, { method: "DELETE" }).then((r) => {
       if (!r.ok) throw new ApiError(r.status, r.statusText);
     }),
 
@@ -325,15 +348,10 @@ export const docsApi = {
     form.append("company_id", companyId);
     form.append("file", file);
     if (docType) form.append("doc_type", docType);
-    const res = await fetch(`${API_BASE}${DOCS}/upload`, {
-      method: "POST",
-      body: form,
-    });
-    if (!res.ok) {
-      let detail = res.statusText;
-      try { detail = (await res.json()).detail ?? detail; } catch { /* non-JSON */ }
-      throw new ApiError(res.status, detail);
-    }
+    // No Content-Type: the browser must set multipart/form-data itself so it
+    // can append the boundary. rawFetch attaches the bearer token and cookies.
+    const res = await rawFetch(`${DOCS}/upload`, { method: "POST", body: form });
+    if (!res.ok) await raise(res);
     return (await res.json()) as UploadResponse;
   },
 };
@@ -357,7 +375,7 @@ export const portfolioApi = {
     }),
 
   remove: (id: number) =>
-    fetch(`${API_BASE}${PF}/${id}`, { method: "DELETE" }).then((r) => {
+    rawFetch(`${PF}/${id}`, { method: "DELETE" }).then((r) => {
       if (!r.ok) throw new ApiError(r.status, r.statusText);
     }),
 
@@ -374,7 +392,7 @@ export const portfolioApi = {
     }),
 
   deleteTransaction: (id: number, txnId: number) =>
-    fetch(`${API_BASE}${PF}/${id}/transactions/${txnId}`, { method: "DELETE" })
+    rawFetch(`${PF}/${id}/transactions/${txnId}`, { method: "DELETE" })
       .then((r) => { if (!r.ok) throw new ApiError(r.status, r.statusText); }),
 
   performance: (id: number) =>
@@ -434,7 +452,7 @@ export const watchlistApi = {
     }),
 
   remove: (id: number, entryId: number) =>
-    fetch(`${API_BASE}/api/v1/watchlists/${id}/entries/${entryId}`, {
+    rawFetch(`/api/v1/watchlists/${id}/entries/${entryId}`, {
       method: "DELETE",
     }).then((r) => { if (!r.ok) throw new ApiError(r.status, r.statusText); }),
 };
@@ -473,7 +491,7 @@ export const reportApi = {
     }),
 
   remove: (id: number) =>
-    fetch(`${API_BASE}${RP}/${id}`, { method: "DELETE" }).then((r) => {
+    rawFetch(`${RP}/${id}`, { method: "DELETE" }).then((r) => {
       if (!r.ok) throw new ApiError(r.status, r.statusText);
     }),
 
@@ -484,7 +502,7 @@ export const reportApi = {
   previewUrl: (id: number) => `${API_BASE}${RP}/${id}/preview`,
 
   preview: async (id: number): Promise<string> => {
-    const res = await fetch(`${API_BASE}${RP}/${id}/preview`);
+    const res = await rawFetch(`${RP}/${id}/preview`);
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.text();
   },
@@ -535,30 +553,13 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
-async function authed<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-      ...(init?.headers ?? {}),
-    },
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    let detail: unknown = res.statusText;
-    try {
-      detail = (await res.json()).detail ?? res.statusText;
-    } catch { /* non-JSON error body */ }
-    throw new ApiError(
-      res.status,
-      typeof detail === "string" ? detail : JSON.stringify(detail),
-    );
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
-}
+/**
+ * Retained as a distinct name because the session calls read better as
+ * `authed(...)`, but there is now exactly one code path: every request in
+ * this module carries credentials, so no future endpoint can be added
+ * without them by accident.
+ */
+const authed = request;
 
 function query(params: Record<string, string | number | boolean | undefined>) {
   const search = new URLSearchParams();
