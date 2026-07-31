@@ -238,7 +238,10 @@ class ResearchAnalyst:
             passage = " ".join((hit.text or "").split())
             citations.append(Citation(
                 key=f"doc_p{hit.page}_c{hit.chunk_id}",
-                label=f"{hit.document_title} p.{hit.page}",
+                # The category, not just the document name. A reader needs to
+                # know they are being shown an annual report rather than an
+                # aggregator's summary — those carry very different weight.
+                label=f"[Annual Report] {hit.document_title} p.{hit.page}",
                 kind=EvidenceKind.DOCUMENT,
                 # The passage itself is the value: a citation whose value were
                 # a score would give the model nothing to quote.

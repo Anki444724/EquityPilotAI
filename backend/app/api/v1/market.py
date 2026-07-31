@@ -109,6 +109,40 @@ def providers_health(
     }
 
 
+@router.get("/filings/{ticker}", summary="Official filings for one company")
+def filings(
+    ticker: str,
+    filing_type: str | None = Query(default=None),
+    limit: int = Query(default=10, ge=1, le=50),
+    all_sources: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Walk the filing chain and report what answered.
+
+    India: uploaded reports -> NSE -> BSE. US: SEC EDGAR -> uploaded reports.
+    Every filing carries its source category, a regulator reference and a
+    confidence score that ranks official documents above third-party APIs.
+    """
+    from app.data.filings.base import FilingType
+    from app.data.filings.router import FilingRouter
+
+    wanted = None
+    if filing_type:
+        try:
+            wanted = [FilingType(filing_type)]
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"unknown filing_type; expected one of "
+                f"{[t.value for t in FilingType]}",
+            )
+
+    return FilingRouter(db).fetch(
+        ticker, filing_types=wanted, limit=limit, all_sources=all_sources,
+    ).as_dict()
+
+
 @router.get("/market/cache", summary="Market cache statistics")
 def cache_stats(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
     return cache().stats()
