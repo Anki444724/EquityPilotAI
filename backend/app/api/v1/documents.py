@@ -62,8 +62,18 @@ router = APIRouter(tags=["documents"])
 
 def _ingestion(db: Session = Depends(get_db)) -> DocumentIngestionService:
     """Async ingestion service. Sync dependency: the auth and DB layers are
-    synchronous, and an async dependency doing sync DB work blocks the loop."""
-    return DocumentIngestionService(db)
+    synchronous, and an async dependency doing sync DB work blocks the loop.
+
+    The storage backend is resolved here, so a misconfigured or unwritable
+    volume is reported as a 507 naming the problem. Constructing it inside the
+    endpoint's try block is not enough — a dependency raising is outside that
+    block, and the client would see a bare 500 with no indication that the
+    cause is a mount permission.
+    """
+    try:
+        return DocumentIngestionService(db)
+    except StorageError as exc:
+        raise HTTPException(status.HTTP_507_INSUFFICIENT_STORAGE, str(exc))
 
 
 def _service(db: Session = Depends(get_db)) -> DocumentService:

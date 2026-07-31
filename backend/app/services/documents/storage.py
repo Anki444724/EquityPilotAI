@@ -116,7 +116,28 @@ class LocalFileStorage(DocumentStorage):
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            # A volume mounted onto a path the application user does not own.
+            # Raised as a StorageError naming the uid so the cause is obvious
+            # from one log line, rather than surfacing as an opaque 500 on
+            # every upload.
+            raise StorageError(
+                f"cannot create {self.root}: permission denied for uid "
+                f"{os.getuid()}. The volume is mounted but owned by another "
+                f"user — chown the mount point to the application user, or "
+                f"point DOCUMENT_STORAGE_PATH at a writable directory."
+            ) from exc
+
+        # Existence is not enough: a root-owned mount is readable and
+        # traversable but not writable, and the failure would otherwise
+        # appear only on the first upload.
+        if not os.access(self.root, os.W_OK):
+            raise StorageError(
+                f"{self.root} is not writable by uid {os.getuid()}. "
+                f"The Railway Volume is mounted but owned by another user."
+            )
 
     def _path(self, key: str) -> Path:
         # Refuse traversal. A key is generated internally, but this is the
@@ -335,7 +356,7 @@ def get_storage() -> DocumentStorage:
     else:
         try:
             _STORAGE = LocalFileStorage(settings.DOCUMENT_STORAGE_PATH)
-        except (OSError, PermissionError) as exc:
+        except (OSError, PermissionError, StorageError) as exc:
             # The configured volume is not writable. In production that must
             # be loud — uploads cannot be retained and the whole redesign is
             # void — but a developer machine and CI have no /data mount, and

@@ -311,3 +311,29 @@ class TestStatusVocabulary:
         assert not DocumentStatus.EMBEDDED.is_indexed
         assert not DocumentStatus.FAILED.is_indexed
         assert DocumentStatus.FAILED.is_terminal
+
+
+class TestVolumePermissions:
+    """DEP-007: the Railway Volume is mounted but owned by root."""
+
+    def test_unwritable_root_raises_a_named_error(self, tmp_path):
+        """A container running as non-root cannot write a root-owned mount.
+
+        In production this surfaced as HTTP 500 on every upload with nothing
+        in the logs to explain it. The failure must name the path and the uid
+        so one log line is enough to diagnose it.
+        """
+        import os
+
+        mount = tmp_path / "vol"
+        mount.mkdir()
+        os.chmod(mount, 0o555)          # r-x, as a root-owned mount is to others
+        try:
+            with pytest.raises(StorageError, match="not writable|permission denied"):
+                LocalFileStorage(mount / "documents")
+        finally:
+            os.chmod(mount, 0o755)      # let tmp_path clean itself up
+
+    def test_writable_root_is_accepted(self, tmp_path):
+        storage = LocalFileStorage(tmp_path / "documents")
+        assert storage.put("documents/c/a.pdf", b"x").size_bytes == 1

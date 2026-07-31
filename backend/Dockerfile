@@ -68,8 +68,14 @@ RUN pip install --no-index --find-links=/wheels -r requirements.txt \
 
 COPY --chown=ierp:ierp . .
 
-RUN mkdir -p /app/backups /tmp/matplotlib \
-    && chown -R ierp:ierp /app/backups /tmp/matplotlib
+# /data/documents is where the Railway Volume holding uploaded PDFs is
+# mounted. It must exist and be owned by the application user *before* the
+# volume is attached: the container runs as non-root `ierp`, and a volume
+# mounted onto a path that does not exist is created owned by root, leaving
+# the app unable to write a single byte. Every upload then fails with
+# PermissionError, which surfaces to the client as a bare HTTP 500.
+RUN mkdir -p /app/backups /tmp/matplotlib /data/documents \
+    && chown -R ierp:ierp /app/backups /tmp/matplotlib /data
 
 USER ierp
 
