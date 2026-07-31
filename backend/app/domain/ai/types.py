@@ -76,6 +76,21 @@ class Citation:
     source: str = ""               # "06 Historical IS", "DCF engine", "AR FY25 p.42"
     fiscal_year: int | None = None
 
+    # --- retrieval provenance (document evidence only) ------------------
+    # Populated when the citation came from a RAG passage rather than a
+    # computed figure. A reader auditing a claim about prose needs to reach
+    # the exact paragraph, which a source string alone does not permit: two
+    # passages on the same page are indistinguishable without the chunk id.
+    document_id: int | None = None
+    chunk_id: int | None = None
+    page: int | None = None
+    #: Retrieval score, 0–1. Reported so a weakly-supported answer can be
+    #: recognised as weakly supported rather than read with equal confidence.
+    confidence: float | None = None
+    #: The verbatim passage, kept separate from `value` so truncation for the
+    #: prompt never silently shortens what the UI shows as the quotation.
+    snippet: str | None = None
+
     @property
     def marker(self) -> str:
         """Inline citation marker the model is told to use."""

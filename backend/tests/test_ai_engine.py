@@ -663,3 +663,87 @@ class TestDocumentEvidenceScope:
         assert _out_of_scope("What was revenue in FY2031?", rich)
         assert _out_of_scope("How does this compare with Tesla?", rich)
         assert _out_of_scope("What was the close on 14 March 2024?", rich)
+
+
+class TestRetrievalAugmentedGeneration:
+    """AI-003: the analyst never called the document retrieval service.
+
+    `ContextBuilder._add_documents` contributed only the handful of
+    regex-extracted fields and a one-line summary per document, so every word
+    of narrative prose in an uploaded report was invisible to the model. A
+    `document_search` tool existed, worked, and had no caller.
+    """
+
+    def test_multiline_passages_survive_the_evidence_parser(self):
+        """The second half of the bug.
+
+        Retrieval succeeded and the passages still never reached the model:
+        the evidence block is parsed line by line, and a PDF paragraph carries
+        newlines, so the rendered line failed to match and the passage was
+        dropped silently.
+        """
+        from app.domain.ai.types import Citation, EvidenceKind
+        from app.services.ai.providers.mock import _EVIDENCE
+
+        raw = "CHAIRMAN'S MESSAGE\nDear Shareholders,\nFY2025 was a good year."
+        collapsed = " ".join(raw.split())
+
+        multiline = Citation(
+            key="doc_p3_c9", label="AR p.3", kind=EvidenceKind.DOCUMENT,
+            value=raw, source="AR, page 3",
+        )
+        single = Citation(
+            key="doc_p3_c9", label="AR p.3", kind=EvidenceKind.DOCUMENT,
+            value=collapsed, source="AR, page 3",
+        )
+        assert _EVIDENCE.search(multiline.render()) is None, (
+            "a multi-line passage must not parse — this is the bug"
+        )
+        assert _EVIDENCE.search(single.render()) is not None
+
+    def test_citations_carry_page_chunk_and_confidence(self):
+        """Requirement 6: an answer about prose must be auditable."""
+        from app.domain.ai.types import Citation, EvidenceKind
+
+        citation = Citation(
+            key="doc_p3_c9", label="AR p.3", kind=EvidenceKind.DOCUMENT,
+            value="text", source="AR, page 3",
+            document_id=1, chunk_id=9, page=3, confidence=0.75, snippet="text",
+        )
+        assert citation.page == 3
+        assert citation.chunk_id == 9
+        assert citation.confidence == 0.75
+
+    def test_context_copy_does_not_leak_between_questions(self):
+        """`with_citations` must not mutate the cached context.
+
+        The context is built once per analyst and reused, so appending one
+        question's passages in place would leak them into every later answer,
+        including the citation audit.
+        """
+        from app.domain.ai.types import Citation, EvidenceKind
+        from app.services.ai.context_builder import GroundedContext
+
+        base = GroundedContext(company_id="c", ticker="T", name="T Ltd")
+        base.add(Citation("revenue", "Revenue", EvidenceKind.STATEMENT, 100.0))
+        extra = [Citation("doc_p1_c1", "AR p.1", EvidenceKind.DOCUMENT, "text")]
+
+        derived = base.with_citations(extra)
+        assert len(base.citations) == 1, "the cached context must be untouched"
+        assert len(derived.citations) == 2
+        assert derived.citations[0].key == "doc_p1_c1", "passages rank first"
+
+    def test_fixed_capabilities_skip_retrieval(self):
+        """`bull_case` has no query; retrieval would be meaningless."""
+        from app.services.ai.analyst import ResearchAnalyst
+
+        analyst = ResearchAnalyst.__new__(ResearchAnalyst)
+        assert analyst._retrieve("", "bull_case") == []
+        assert analyst._retrieve("   ", "chat") == []
+
+    def test_no_document_evidence_message_is_explicit(self):
+        """Requirement 5: distinguish 'nothing retrieved' from 'no figures'."""
+        from app.services.ai.providers.mock import _has_document_evidence
+
+        assert _has_document_evidence([("doc_p1_c1", "AR", "x", "y")])
+        assert not _has_document_evidence([("revenue", "Revenue", "x", "y")])

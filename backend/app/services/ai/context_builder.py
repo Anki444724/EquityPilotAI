@@ -14,7 +14,7 @@ guardrail layer distinguish a reported fact from a forecast downstream.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from app.domain.ai.types import Citation, EvidenceKind
 from app.domain.calc import safe_div
@@ -42,6 +42,24 @@ class GroundedContext:
     def add(self, citation: Citation) -> None:
         if citation.value is not None:
             self.citations.append(citation)
+
+    def with_citations(self, extra: list[Citation]) -> "GroundedContext":
+        """A copy carrying `extra` in addition to the computed evidence.
+
+        A copy rather than a mutation: the context is built once per analyst
+        and reused across capabilities, so appending one question's retrieved
+        passages in place would leak them into every later answer — including
+        the citation audit, which would then "verify" markers the next
+        question never retrieved.
+
+        Retrieved passages come first so they win the relevance ordering the
+        offline provider applies, and duplicates by key are dropped.
+        """
+        seen = {c.key for c in extra}
+        return replace(
+            self,
+            citations=list(extra) + [c for c in self.citations if c.key not in seen],
+        )
 
     def by_kind(self, kind: EvidenceKind) -> list[Citation]:
         return [c for c in self.citations if c.kind is kind]

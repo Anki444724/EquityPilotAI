@@ -15,6 +15,15 @@ class CitationOut(BaseModel):
     source: str = ""
     fiscal_year: int | None = None
 
+    # Retrieval provenance, present only on document evidence. A claim about
+    # narrative prose is auditable only if the reader can reach the exact
+    # paragraph: the page alone is not enough when a page holds several.
+    document_id: int | None = None
+    chunk_id: int | None = None
+    page: int | None = None
+    confidence: float | None = None
+    snippet: str | None = None
+
 
 class ClaimBlockOut(BaseModel):
     text: str

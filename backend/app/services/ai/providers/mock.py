@@ -67,6 +67,21 @@ _UNHELD_DIMENSIONS = (
     "market share", "geography", "europe", "america", "region",
     "segment split", "headcount", "employees",
 )
+#: Vocabulary indicating the question is about an uploaded document rather
+#: than a computed figure. Used only to choose the right refusal wording.
+_DOCUMENT_TERMS = (
+    "annual report", "uploaded", "document", "filing", "chairman",
+    "chairperson", "director", "management discussion", "md&a", "auditor",
+    "transcript", "conference call", "letter to shareholders", "statement",
+    "disclosed", "notes to accounts", "governance",
+)
+
+
+def _has_document_evidence(evidence) -> bool:
+    """Did retrieval put any document passage in front of the model?"""
+    return any("doc_" in str(item[0]) for item in evidence)
+
+
 #: Companies outside the coverage universe, named in a comparison.
 _OFF_UNIVERSE = ("tesla", "apple", "amazon", "google", "microsoft", "nvidia")
 
@@ -189,15 +204,35 @@ class OfflineProvider(LLMProvider):
         )
 
         if question.strip() and words and (overlap(ranked[0]) == 0 or out_of_scope):
+            # Distinguish "nothing was retrieved from the uploaded documents"
+            # from "the platform holds no figure". A question about a
+            # chairman's statement is answerable in principle — the answer
+            # lives in an uploaded report — so telling the user the platform
+            # only has financials is actively misleading when the real cause
+            # is that retrieval returned nothing.
+            asked_of_documents = any(
+                term in question.lower() for term in _DOCUMENT_TERMS
+            )
+            if asked_of_documents and not _has_document_evidence(evidence):
+                return (
+                    "**No evidence found in uploaded documents.**\n\n"
+                    "Nothing in the documents ingested for this company "
+                    "matches that question. Either the passage is not in any "
+                    "uploaded file, or no document covering it has been "
+                    "ingested yet.\n\n"
+                    "_No figures are offered above because none would be "
+                    "supported._"
+                )
             return (
                 "**Insufficient evidence.** The platform holds no figure that "
                 "bears on this question, so there is nothing to cite and no "
                 "answer to give.\n\n"
                 "The evidence available for this company covers reported "
-                "financials, forecast output, valuation and scoring. Anything "
-                "outside that — headcount, management commentary, market "
-                "share, prices on a specific past date — is not in the "
-                "platform's data and will not be inferred.\n\n"
+                "financials, forecast output, valuation and scoring, together "
+                "with whatever has been extracted from uploaded documents. "
+                "Anything outside that — market share, prices on a specific "
+                "past date, an off-universe peer — is not in the platform's "
+                "data and will not be inferred.\n\n"
                 "_No figures are offered above because none would be "
                 "supported._"
             )

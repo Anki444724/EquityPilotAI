@@ -14,8 +14,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+import structlog
+
 from app.domain.ai.types import (
-    Citation, ClaimType, CompletionResponse, NoProviderConfigured, Role,
+    Citation, ClaimType, CompletionResponse, EvidenceKind, NoProviderConfigured,
+    Role,
 )
 from app.services.ai.citation_engine import CitationAudit, annotate, audit
 from app.services.ai.context_builder import ContextBuilder, GroundedContext
@@ -26,6 +29,8 @@ from app.services.ai.prompt_library import (
     BUILTIN_PROMPTS, Capability, OutputStyle, PromptTemplate, get_prompt,
 )
 from app.services.ai.providers.router import ProviderRouter
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -97,9 +102,34 @@ class ResearchAnalyst:
         prompt_template = template or get_prompt(capability)
         context = self.context()
 
+        # --- retrieval-augmented generation -----------------------------
+        #
+        # The missing link. `ContextBuilder._add_documents` contributes only
+        # the handful of regex-extracted *fields* (headcount, principal risks)
+        # and a one-line summary per document. It never touches the chunks, so
+        # every word of narrative prose in an uploaded report — the chairman's
+        # statement, the MD&A, the auditor's opinion — was invisible to the
+        # model. A `document_search` tool existed and worked, and nothing ever
+        # called it.
+        #
+        # Retrieval runs per question, before the prompt is built, because the
+        # relevant passages depend on what was asked. Cached context cannot.
+        retrieved = self._retrieve(question, capability)
+        if retrieved:
+            context = context.with_citations(retrieved)
+
         built = self.prompts.build(
             prompt_template, context, question=question, memory=memory, style=style,
             include_history=capability == Capability.CHAT.value,
+        )
+
+        log.info(
+            "ai prompt assembled",
+            capability=capability,
+            question=question[:160] or None,
+            retrieved_chunks=len(retrieved),
+            total_evidence=len(context.citations),
+            prompt_chars=sum(len(m.content or "") for m in built.request.messages),
         )
 
         started = time.perf_counter()
@@ -109,6 +139,86 @@ class ResearchAnalyst:
         return self._finalise(
             capability, built, response, context, elapsed, memory, question
         )
+
+    #: Passages fetched per question. Ten is the brief's figure and comfortably
+    #: within the context window: ten 500-character passages is ~1,250 tokens.
+    RETRIEVAL_TOP_K = 10
+
+    def _retrieve(self, question: str, capability: str) -> list[Citation]:
+        """Fetch the passages that bear on this question.
+
+        Returns citations carrying the chunk id, page and retrieval score, so
+        the answer can be audited back to the exact paragraph rather than to a
+        document as a whole.
+        """
+        if not question.strip():
+            # A fixed capability (bull_case, swot…) has no query to retrieve
+            # against; those are served from the computed context as before.
+            return []
+
+        service = getattr(self.builder, "document_service", None)
+        if service is None:
+            return []
+
+        company = self.builder.analysis.company
+        try:
+            answer = service.search(
+                question, company_id=company.id, top_k=self.RETRIEVAL_TOP_K,
+            )
+        except Exception:  # noqa: BLE001 — retrieval must never break a chat
+            log.exception("document retrieval failed", company_id=company.id)
+            return []
+
+        hits = list(getattr(answer, "hits", []) or [])
+        log.info(
+            "document retrieval",
+            company_id=company.id, ticker=company.ticker,
+            question=question[:160], top_k=self.RETRIEVAL_TOP_K,
+            hits=len(hits),
+            chunks=[
+                {"chunk_id": h.chunk_id, "page": h.page,
+                 "score": round(h.score, 4),
+                 "lexical": round(h.lexical_score, 4),
+                 "semantic": round(h.semantic_score, 4),
+                 "preview": h.text[:80]}
+                for h in hits[:self.RETRIEVAL_TOP_K]
+            ],
+        )
+        if not hits:
+            log.info(
+                "no document evidence", company_id=company.id,
+                question=question[:160],
+            )
+            return []
+
+        citations: list[Citation] = []
+        for index, hit in enumerate(hits, start=1):
+            section = hit.section.value.replace("_", " ")
+            # Collapse whitespace. The evidence block is parsed line by line —
+            # `[key] label: value — source: …` — so a passage containing the
+            # newlines every PDF paragraph carries silently fails to match and
+            # the model never sees it. That is precisely how ten successfully
+            # retrieved passages produced an answer citing none of them.
+            passage = " ".join((hit.text or "").split())
+            citations.append(Citation(
+                key=f"doc_p{hit.page}_c{hit.chunk_id}",
+                label=f"{hit.document_title} p.{hit.page}",
+                kind=EvidenceKind.DOCUMENT,
+                # The passage itself is the value: a citation whose value were
+                # a score would give the model nothing to quote.
+                value=passage[:600],
+                unit="",
+                source=(
+                    f"{hit.document_title}, page {hit.page}"
+                    + (f", {section}" if section != "unknown" else "")
+                ),
+                document_id=hit.document_id,
+                chunk_id=hit.chunk_id,
+                page=hit.page,
+                confidence=round(hit.score, 4),
+                snippet=passage,
+            ))
+        return citations
 
     def _finalise(
         self,

@@ -65,6 +65,8 @@ def _result_out(analysis: AnalysisService, result: AnalystResult) -> AnalysisRes
             CitationOut(
                 key=c.key, label=c.label, kind=c.kind.value, value=c.value,
                 unit=c.unit, source=c.source, fiscal_year=c.fiscal_year,
+                document_id=c.document_id, chunk_id=c.chunk_id, page=c.page,
+                confidence=c.confidence, snippet=c.snippet,
             )
             for c in result.citations
         ],
@@ -390,7 +392,10 @@ async def report(
             citations=[
                 CitationOut(key=c.key, label=c.label, kind=c.kind.value,
                             value=c.value, unit=c.unit, source=c.source,
-                            fiscal_year=c.fiscal_year)
+                            fiscal_year=c.fiscal_year,
+                            document_id=c.document_id, chunk_id=c.chunk_id,
+                            page=c.page, confidence=c.confidence,
+                            snippet=c.snippet)
                 for c in r.citations
             ],
             is_supported=r.is_supported, warnings=r.warnings,
