@@ -146,6 +146,13 @@ class Settings(BaseSettings):
     # --- AI providers ------------------------------------------------
     # Keys are optional. With none set the platform runs normally and the AI
     # layer reports itself unavailable rather than failing requests.
+    # --- market data providers ---------------------------------------
+    #: Finnhub is the primary market-data provider (quotes, profiles, news,
+    #: earnings dates). Absent, the platform falls back to Yahoo Finance and
+    #: says so on every response. No default: a key belongs in the
+    #: environment, never in the image.
+    FINNHUB_API_KEY: str | None = None
+
     OPENROUTER_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
