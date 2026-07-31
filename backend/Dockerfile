@@ -77,7 +77,22 @@ COPY --chown=ierp:ierp . .
 RUN mkdir -p /app/backups /tmp/matplotlib /data/documents \
     && chown -R ierp:ierp /app/backups /tmp/matplotlib /data
 
-USER ierp
+# su-exec drops privileges in the entrypoint. gosu is the Debian equivalent;
+# su-exec is a few kilobytes and does the same job.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gosu; \
+    rm -rf /var/lib/apt/lists/*; \
+    ln -sf "$(command -v gosu)" /usr/local/bin/su-exec
+
+COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+# Deliberately NOT `USER ierp`: the entrypoint starts as root purely to take
+# ownership of the mounted volume, then drops to `ierp` before exec'ing the
+# application. A volume is mounted over its mount point after the image is
+# built, so build-time ownership is discarded and this is the only point at
+# which it can be corrected.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 EXPOSE 8000
 
