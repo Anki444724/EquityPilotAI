@@ -12,6 +12,7 @@
 
 import { ApiError, authApi, currentAccessToken, setSession } from "@/lib/api";
 import type { SessionUserFull } from "@/lib/types";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext, useCallback, useContext, useEffect, useMemo, useState,
   type ReactNode,
@@ -37,6 +38,7 @@ export function useAuth(): AuthState {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUserFull | null>(null);
   const [initialising, setInitialising] = useState(true);
+  const queryClient = useQueryClient();
 
   // Restore a session on first load. A 401 here is the normal "not signed in"
   // answer, not an error worth surfacing.
@@ -46,7 +48,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         if (!currentAccessToken()) await authApi.refresh();
         const me = await authApi.me();
-        if (!cancelled) setUser(me);
+        if (!cancelled) {
+          setUser(me);
+          await queryClient.invalidateQueries();
+        }
       } catch {
         if (!cancelled) {
           setSession(null);
@@ -57,12 +62,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
     await authApi.login(email, password);
     setUser(await authApi.me());
-  }, []);
+    // Every query that ran while the user was anonymous resolved to a 401 and
+    // is now cached as an error. React Query will not retry them on its own,
+    // so the dashboard would sit empty until a manual reload. Clearing the
+    // cache forces every mounted query to refetch with the new session.
+    await queryClient.invalidateQueries();
+  }, [queryClient]);
 
   const signOut = useCallback(async () => {
     try {
@@ -73,8 +84,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!(err instanceof ApiError)) throw err;
     } finally {
       setUser(null);
+      // Drop every cached answer: the next user of this browser must not see
+      // the previous one's data.
+      queryClient.clear();
     }
-  }, []);
+  }, [queryClient]);
 
   const value = useMemo(
     () => ({ user, initialising, signIn, signOut }),
