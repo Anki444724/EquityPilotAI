@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { CompanyTabs } from "@/components/layout/company-tabs";
 import { MetricGrid, WarningList } from "@/components/analysis/metric-grid";
 import {
   CashFlowChart, HistoryForecastChart, ScenarioChart, ValueRangeChart,
@@ -87,6 +88,7 @@ export default function ForecastPage({ params }: { params: Promise<{ id: string 
 
   return (
     <AppShell>
+      <CompanyTabs companyId={id} />
       {/* Header */}
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>

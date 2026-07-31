@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { CompanyTabs } from "@/components/layout/company-tabs";
 import {
   CapabilityPicker, CitationList, GuardrailPanel, Markdown, ProviderPanel, RunMeta,
 } from "@/components/ai/panels";
@@ -95,6 +96,7 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
 
   return (
     <AppShell>
+      <CompanyTabs companyId={id} />
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-xs">

@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { CompanyTabs } from "@/components/layout/company-tabs";
 import { ScenarioChart, ValueRangeChart } from "@/components/charts";
 import { QualityBanner } from "@/components/valuation/quality-banner";
 import {
@@ -81,6 +82,7 @@ export default function ValuationPage({ params }: { params: Promise<{ id: string
 
   return (
     <AppShell>
+      <CompanyTabs companyId={id} />
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-xs">

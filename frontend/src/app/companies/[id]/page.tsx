@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { CompanyTabs } from "@/components/layout/company-tabs";
 import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
 import { api } from "@/lib/api";
 import { crore, fiscalYear, marketCap, percent, plainNumber, rupees, signClass } from "@/lib/format";
@@ -55,6 +56,7 @@ export default function CompanyProfilePage({
 
   return (
     <AppShell>
+      <CompanyTabs companyId={id} />
       {/* Header */}
       <Card className="mb-5">
         <CardBody>

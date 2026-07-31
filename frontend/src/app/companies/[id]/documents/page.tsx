@@ -9,6 +9,7 @@
  */
 
 import { AppShell } from "@/components/layout/app-shell";
+import { CompanyTabs } from "@/components/layout/company-tabs";
 import {
   CitationList, CoverageGrid, DOC_TYPE_LABELS, DocumentCard, EntityGroups,
   ExtractedTableView, FactTable, HitList, InfoNote, KnowledgeGraphView,
@@ -141,6 +142,7 @@ export default function DocumentsPage({ params }: { params: Promise<{ id: string
 
   return (
     <AppShell>
+      <CompanyTabs companyId={id} />
       <div className="mx-auto max-w-[1400px] space-y-4 p-4">
         {/* ---------------------------------------------------- header */}
         <div className="flex flex-wrap items-end justify-between gap-3">

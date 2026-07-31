@@ -1,6 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { CompanyTabs } from "@/components/layout/company-tabs";
 import { DebtPanels, NoData, ShareholdingHeader, WorkingCapitalHeader } from "@/components/analysis/panels";
 import { FlagList, MetricGrid, WarningList } from "@/components/analysis/metric-grid";
 import { Badge, Card, CardBody, Skeleton, Stat } from "@/components/ui";
@@ -39,6 +40,7 @@ export default function FinancialsPage({ params }: { params: Promise<{ id: strin
 
   return (
     <AppShell>
+      <CompanyTabs companyId={id} />
       {profile.isLoading && <Skeleton className="h-24" />}
 
       {profile.data && (

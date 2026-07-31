@@ -4,24 +4,35 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BarChart3, Briefcase, Building2, Eye, FileSearch, FileText,
-  LayoutDashboard, LoaderCircle, Moon, Search, Settings, ShieldCheck,
-  Sparkles, Sun, TrendingUp,
+  BarChart3, Briefcase, Building2, Eye, FileSearch, FileText, Gauge,
+  LayoutDashboard, LineChart, LoaderCircle, Moon, Search, Settings,
+  ShieldCheck, Sparkles, Sun, TrendingUp,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { CommandPalette } from "./command-palette";
 import { useTheme } from "./theme-provider";
 import { useAuth } from "./auth-provider";
 import { SignIn } from "./sign-in";
 
+// The research modules are per-company: there is no meaningful "Financials"
+// page without a company to show financials *for*. They were previously
+// listed here as top-level hrefs that no route ever served, and flagged
+// `module: 2/4/6` — a placeholder from before those modules were built. The
+// flag rendered them permanently greyed out as "Ships in Module N", so three
+// fully-implemented modules looked unbuilt in production.
+//
+// They now resolve against the company the user is currently looking at, and
+// fall back to the company list when there is none.
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "d" },
   { href: "/companies", label: "Companies", icon: Building2, key: "c" },
-  { href: "/financials", label: "Financials", icon: BarChart3, module: 2 },
-  { href: "/valuation", label: "Valuation", icon: TrendingUp, module: 4 },
-  { href: "/ai", label: "AI Research", icon: Sparkles, module: 6 },
+  { href: "/financials", label: "Financials", icon: BarChart3, perCompany: "financials" },
+  { href: "/valuation", label: "Valuation", icon: TrendingUp, perCompany: "valuation" },
+  { href: "/scoring", label: "Scoring", icon: Gauge, perCompany: "scoring" },
+  { href: "/forecast", label: "Forecast", icon: LineChart, perCompany: "forecast" },
+  { href: "/ai", label: "AI Research", icon: Sparkles, perCompany: "ai" },
   { href: "/documents", label: "Documents", icon: FileSearch },
   { href: "/portfolio", label: "Portfolio", icon: Briefcase },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
@@ -33,11 +44,16 @@ const NAV = [
   { href: "/platform", label: "Platform Ops", icon: ShieldCheck },
 ] as const;
 
+/** Remembered across navigations so the research links stay usable after the
+ *  user leaves the company pages. Session-scoped, not persisted. */
+const LAST_COMPANY_KEY = "ierp:last-company";
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, toggle } = useTheme();
   const { user: sessionUser, initialising } = useAuth();
+  const [lastCompanyId, setLastCompanyId] = useState<string | null>(null);
   // Only ask the API who we are once a session exists; otherwise every
   // authenticated page fires a guaranteed 401 on mount.
   const { data: user } = useQuery({
@@ -61,6 +77,33 @@ export function AppShell({ children }: { children: ReactNode }) {
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); clearTimeout(timer); };
   }, [router]);
+
+  // Resolve the per-company research links against whichever company the user
+  // is looking at. The id is remembered so the sidebar still works after
+  // navigating away to, say, the dashboard.
+  const activeCompanyId = useMemo(() => {
+    const match = /^\/companies\/([^/]+)/.exec(pathname);
+    return match?.[1] ?? null;
+  }, [pathname]);
+
+  useEffect(() => {
+    if (activeCompanyId) {
+      setLastCompanyId(activeCompanyId);
+      try {
+        window.sessionStorage.setItem(LAST_COMPANY_KEY, activeCompanyId);
+      } catch { /* private browsing */ }
+    }
+  }, [activeCompanyId]);
+
+  useEffect(() => {
+    if (lastCompanyId) return;
+    try {
+      const stored = window.sessionStorage.getItem(LAST_COMPANY_KEY);
+      if (stored) setLastCompanyId(stored);
+    } catch { /* private browsing */ }
+  }, [lastCompanyId]);
+
+  const companyForNav = activeCompanyId ?? lastCompanyId;
 
   // Nothing behind the shell is reachable without a session, so gate here
   // rather than in each of the eleven pages.
@@ -91,28 +134,29 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
           {NAV.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(item.href + "/");
-            const locked = "module" in item;
+            const segment = "perCompany" in item ? item.perCompany : null;
+            // A per-company module points at the company in view; with none
+            // chosen yet it sends the user to pick one rather than dead-ending.
+            const href = segment
+              ? (companyForNav ? `/companies/${companyForNav}/${segment}` : "/companies")
+              : item.href;
+            const active = segment
+              ? pathname.endsWith(`/${segment}`)
+              : pathname === item.href || pathname.startsWith(item.href + "/");
+            const needsCompany = Boolean(segment) && !companyForNav;
             const Icon = item.icon;
             return (
               <Link
                 key={item.href}
-                href={locked ? "#" : item.href}
-                onClick={(e) => locked && e.preventDefault()}
-                title={locked ? `Ships in Module ${item.module}` : undefined}
+                href={href}
+                title={needsCompany ? "Choose a company first" : undefined}
                 className={cn(
                   "flex items-center gap-2.5 rounded px-2.5 py-2 text-[0.8125rem] transition-colors",
                   active ? "bg-accent-500 text-white" : "text-white/65 hover:bg-white/10 hover:text-white",
-                  locked && "cursor-not-allowed opacity-35 hover:bg-transparent hover:text-white/65",
                 )}
               >
                 <Icon size={15} className="shrink-0" />
                 <span className="flex-1">{item.label}</span>
-                {locked && (
-                  <span className="rounded bg-white/10 px-1 text-[0.5625rem] font-medium">
-                    M{item.module}
-                  </span>
-                )}
               </Link>
             );
           })}
