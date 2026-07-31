@@ -265,12 +265,23 @@ def main() -> int:
     check("tenant-scoped admin reachable",
           lambda: (lambda c, b: (c in (200, 403), f"HTTP {c}", b))(*s.call("/api/v1/admin/audit/summary")))
 
-    # 404 is the correct answer for a tenant admin: the operator console does
-    # not confirm its own existence to a caller who may not use it. Anonymous
-    # callers get 401. Only 200 would be a failure.
-    check("cross-tenant operator console still refused",
-          lambda: (lambda c, b: (c in (401, 403, 404), f"HTTP {c} (must not be 200)", b))
-          (*s.call("/api/v1/platform/tenants")))
+    # What is correct here depends on who is signed in. A tenant Admin must be
+    # refused — 404 rather than 403, so the console does not confirm its own
+    # existence to a caller who may not use it. A Super Admin legitimately
+    # holds the cross-tenant permission and must be let through. Asserting a
+    # refusal unconditionally reported a working platform as broken the moment
+    # the verifying account was promoted.
+    def operator_console():
+        code, body = s.call("/api/v1/platform/tenants")
+        _, me = s.call("/api/v1/auth/me")
+        role = me.get("role") if isinstance(me, dict) else None
+        if role == "super_admin":
+            return (code == 200,
+                    f"HTTP {code} — super admin, cross-tenant access expected", body)
+        return (code in (401, 403, 404),
+                f"HTTP {code} — {role}, refusal expected", body)
+
+    check("operator console honours the caller's role", operator_console)
 
     # ----------------------------------------------------------- summary
     passed = sum(1 for _, v, _, _ in results if v == "PASS")

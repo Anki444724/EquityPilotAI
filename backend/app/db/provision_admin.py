@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.core import crypto
+from app.services.platform import crypto
 from app.db.base import SessionLocal
 from app.domain.platform.identity import Role, UserStatus
 from app.domain.platform.limits import (
