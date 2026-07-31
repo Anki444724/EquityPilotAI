@@ -125,6 +125,29 @@ Plus platform seed data: 4 plans, 3 tenants, 9 users, 19,677 price rows.
 | **DEP-006** | Frontend would have shipped calling `localhost:8000` | `NEXT_PUBLIC_*` is inlined at *build* time; with no `/frontend/railway.toml`, Railway used Railpack and never passed the Docker ARG | Added `frontend/railway.toml` with `[build.args]` |
 | **FE-001** | "Cannot reach the API. Start the backend on port 8000" and "No companies match 'TCS'" | The frontend **never authenticated**. It was built against `AUTH_DEV_MODE=true`, where every caller is a super admin, so it had no sign-in at all | `request()` now sends credentials; added `AuthProvider`, a sign-in screen, and a session gate |
 | **FE-002** | Dashboard stayed empty after signing in, until a manual reload | Queries that ran while anonymous cached their 401s; React Query never retried them | Invalidate all queries on sign-in and session restore; clear the cache on sign-out |
+| **FE-003** | Financials, Valuation and AI Research greyed out as "Ships in Module 2/4/6" | The pages existed and worked, but the sidebar pointed at top-level `/financials`, `/valuation`, `/ai` — routes that were never built — and carried a stale `module:` flag from before those modules were written. The company detail page had no outbound links either | Added `CompanyTabs`, rendered by all seven company pages; repointed the sidebar at the company in view |
+
+### FE-003 in detail — "the modules are disabled"
+
+Nothing was missing. All six research pages were implemented, built and
+deployed, and every one rendered correctly when its URL was typed directly:
+
+| Page | Lines | Live content |
+|---|---|---|
+| `financials` | 300 | 12 fiscal years, 8 sub-tabs incl. Ratios |
+| `forecast` | 445 | 8.9 % revenue CAGR over 5 years |
+| `valuation` | 285 | DCF/Relative/WACC/Sensitivity/Monte Carlo |
+| `scoring` | 313 | 13 categories, grade |
+| `ai` | 355 | Investment thesis |
+| `documents` | — | Document intelligence |
+
+They were simply unreachable. The routes live under `/companies/[id]/…`,
+while the sidebar advertised top-level paths that no route served, disabled
+by a `module: 2/4/6` marker left over from before those modules existed. The
+company detail page linked only back to the company list.
+
+The result was a platform that looked like a company browser: **the analysis
+was all there, and none of it was clickable.**
 
 ### FE-001 in detail — the reported failure
 
@@ -231,6 +254,8 @@ An authenticated harness, because a `401` proves the guard and not the module.
 | Drill into TCS | Company page renders real financials |
 | Session across reload | Survives via the httpOnly refresh cookie |
 | All 8 authenticated pages | Render, no stale errors, no 5xx |
+| Research tabs (post FE-003) | Financials, Forecast, Valuation, Scoring, AI Research, Documents all reachable by clicking, all rendering real output, no 5xx |
+| **Full research workflow** | **136/136 companies** return 200 from all five engines (financials, ratios, forecast, valuation, scoring) |
 
 ### Frontend, verified in a real browser
 
