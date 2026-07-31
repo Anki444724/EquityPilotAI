@@ -147,11 +147,20 @@ class Settings(BaseSettings):
     # Keys are optional. With none set the platform runs normally and the AI
     # layer reports itself unavailable rather than failing requests.
     # --- market data providers ---------------------------------------
-    #: Finnhub is the primary market-data provider (quotes, profiles, news,
-    #: earnings dates). Absent, the platform falls back to Yahoo Finance and
-    #: says so on every response. No default: a key belongs in the
-    #: environment, never in the image.
+    #: Financial Modeling Prep is the primary provider. Absent or rate
+    #: limited, the platform falls back to Yahoo Finance, then to its own
+    #: database, then to uploaded documents — naming the tier that answered
+    #: on every response. No default: a key belongs in the environment.
+    #: Finnhub is the primary provider (profile, quote, key metrics, news,
+    #: earnings). It does not serve the three statements, which fall through
+    #: to the next tier rather than blocking them.
     FINNHUB_API_KEY: str | None = None
+    FMP_API_KEY: str | None = None
+    #: Seconds a market snapshot is cached in-process. Protects FMP's
+    #: 250-call daily free budget from a page rendering several tickers.
+    MARKET_CACHE_TTL_SECONDS: int = 300
+    MARKET_TIMEOUT_SECONDS: float = 15.0
+    MARKET_RETRY_ATTEMPTS: int = 3
 
     OPENROUTER_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None

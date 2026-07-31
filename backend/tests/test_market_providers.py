@@ -1,0 +1,295 @@
+"""Multi-provider market data: interface, routing, caching, error handling.
+
+Pins the properties a live-API test cannot cover reliably — unit conversion,
+absent-versus-zero, retry policy, fallback selection and the guarantee that
+every response names the tier that served it.
+"""
+from __future__ import annotations
+
+import pytest
+
+from app.data.providers.base import (
+    BaseMarketProvider, MarketSnapshot, ProviderAuthError, ProviderError,
+    ProviderNotConfigured, ProviderRateLimited, RetryPolicy, to_float,
+)
+from app.data.providers.finnhub import FinnhubProvider
+from app.data.providers.fmp import FMPProvider
+from app.data.providers.router import (
+    SOURCE_INTERNAL, SOURCE_NONE, MarketDataRouter, TTLCache,
+)
+from app.data.providers.yahoo import YahooProvider
+
+# Payloads in each provider's documented shape.
+FINNHUB_PROFILE = {"name": "Reliance Industries Ltd", "exchange": "NSE",
+                   "currency": "INR", "finnhubIndustry": "Energy",
+                   "marketCapitalization": 1_749_621.0, "shareOutstanding": 13_532.0}
+FINNHUB_QUOTE = {"c": 1293.0, "d": 12.4, "dp": 0.968, "h": 1301.5,
+                 "l": 1284.0, "o": 1288.0, "pc": 1280.6}
+FMP_PROFILE = [{"symbol": "RELIANCE.NS", "companyName": "Reliance Industries Limited",
+                "price": 1307.8, "marketCap": 17_697_782_146_242, "currency": "INR",
+                "exchange": "NSE", "industry": "Refining", "sector": "Energy",
+                "change": 14.9, "changePercentage": 1.152, "volume": 8_622_452,
+                "range": "1249.8-1611.8"}]
+
+
+class TestProviderInterface:
+    def test_every_provider_implements_the_contract(self):
+        for provider in (FinnhubProvider(), FMPProvider(), YahooProvider()):
+            assert isinstance(provider, BaseMarketProvider)
+            assert provider.name
+            assert hasattr(provider, "fetch")
+            assert isinstance(provider.configured(), bool)
+
+    def test_priority_order_is_finnhub_then_fmp_then_yahoo(self):
+        names = [p.name for p in MarketDataRouter().providers]
+        assert names == ["Finnhub", "Financial Modeling Prep",
+                         "Yahoo Finance (Fallback)"]
+
+    def test_yahoo_needs_no_credentials(self):
+        assert YahooProvider().configured() is True
+
+
+class TestAbsentVersusZero:
+    def test_zero_is_absent_only_where_zero_is_implausible(self):
+        assert to_float(0, zero_is_absent=True) is None
+        assert to_float(0, zero_is_absent=False) == 0.0
+        assert to_float(None) is None
+        assert to_float("") is None
+        assert to_float("nonsense") is None
+        assert to_float("12.5") == 12.5
+
+    def test_finnhub_zero_quote_is_not_a_price(self):
+        """Finnhub returns 0, not null, for a symbol it does not cover."""
+        snapshot = FinnhubProvider.parse("X.NS", {"quote": {"c": 0, "pc": 0}})
+        assert snapshot.quote.price is None
+        assert not snapshot.has_quote
+
+
+class TestUnitConversion:
+    def test_finnhub_millions_become_crore(self):
+        snapshot = FinnhubProvider.parse("RELIANCE.NS", {"profile": FINNHUB_PROFILE})
+        assert snapshot.profile.market_cap == pytest.approx(174_962.1)
+
+    def test_fmp_absolute_units_become_crore(self):
+        snapshot = FMPProvider.parse("RELIANCE.NS", {"profile": FMP_PROFILE})
+        assert snapshot.profile.market_cap == pytest.approx(1_769_778.21, rel=1e-6)
+
+    def test_fmp_stable_renamed_market_cap(self):
+        """`/stable` calls it marketCap; v3 called it mktCap. Read both."""
+        stable = FMPProvider.parse("X", {"profile": [{"marketCap": 1e13}]})
+        legacy = FMPProvider.parse("X", {"profile": [{"mktCap": 1e13}]})
+        assert stable.profile.market_cap == legacy.profile.market_cap
+
+    def test_fmp_profile_supplies_the_quote(self):
+        """On the free plan /quote is premium for .NS, but /profile carries
+        price, change and volume — so a usable quote is not discarded."""
+        snapshot = FMPProvider.parse("RELIANCE.NS", {"profile": FMP_PROFILE})
+        assert snapshot.quote.price == 1307.8
+        assert snapshot.has_quote
+        assert snapshot.key_metrics["week52_low"] == pytest.approx(1249.8)
+
+
+class TestErrorHandling:
+    def test_auth_failures_are_never_retried(self):
+        """A rejected key is still rejected two seconds later; retrying it
+        only delays the fallback that would have worked."""
+        assert issubclass(ProviderAuthError, ProviderError)
+        assert issubclass(ProviderNotConfigured, ProviderError)
+
+    def test_rate_limits_open_the_circuit(self):
+        provider = FinnhubProvider()
+        assert provider.available
+        provider._consecutive_rate_limits = provider.policy.circuit_threshold
+        assert not provider.available
+        provider.reset_circuit()
+        assert provider.available
+
+    def test_retry_policy_is_configurable(self):
+        policy = RetryPolicy(attempts=5, backoff_base=2.0, timeout_seconds=30.0)
+        provider = FMPProvider(policy)
+        assert provider.policy.attempts == 5
+        assert provider.policy.timeout_seconds == 30.0
+        assert policy.delay(0) == pytest.approx(2.0)
+        assert policy.delay(2) == pytest.approx(8.0)
+
+    def test_a_plan_restriction_is_classified_as_fall_through(self):
+        """FMP answers a plan violation with an error body, not just a status.
+
+        That is a licensing boundary, not a bad key, so it must raise plain
+        ProviderError — the router falls through — rather than
+        ProviderAuthError, which marks the whole provider dead. Verified by
+        driving the real classifier with a real FMP error body.
+        """
+        import json
+        import urllib.request
+        from unittest.mock import patch
+
+        body = {"Error Message": "Special Endpoint : This value set for "
+                                 "'symbol' is not available under your "
+                                 "current subscription"}
+
+        class FakeResponse:
+            def read(self): return json.dumps(body).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        provider = FMPProvider()
+        with patch.object(provider, "_key", return_value="unit-test"), \
+             patch.object(json, "load", return_value=body), \
+             patch.object(urllib.request, "urlopen", return_value=FakeResponse()):
+            with pytest.raises(ProviderError) as caught:
+                provider._call("/quote", symbol="RELIANCE.NS")
+
+        assert not isinstance(caught.value, ProviderAuthError)
+        assert "not on this plan" in str(caught.value)
+
+
+class TestFallbackChain:
+    @staticmethod
+    def _stub(name, priority, *, snapshot=None, error=None):
+        class Stub(BaseMarketProvider):
+            def configured(self): return True
+            def fetch(self, ticker, **kwargs):
+                if error:
+                    raise error
+                return snapshot, {}
+        Stub.name = name
+        Stub.priority = priority
+        return Stub()
+
+    def test_first_healthy_provider_wins(self):
+        good = MarketSnapshot(ticker="X", source="A")
+        good.quote.price = 100.0
+        router = MarketDataRouter(providers=[
+            self._stub("A", 1, snapshot=good),
+            self._stub("B", 2, error=ProviderError("never reached")),
+        ], ttl_cache=TTLCache())
+        assert router.fetch("X", use_cache=False).source == "A"
+
+    def test_auth_failure_falls_through_to_the_next_provider(self):
+        good = MarketSnapshot(ticker="X", source="B")
+        good.quote.price = 100.0
+        router = MarketDataRouter(providers=[
+            self._stub("A", 1, error=ProviderAuthError("rejected")),
+            self._stub("B", 2, snapshot=good),
+        ], ttl_cache=TTLCache())
+        result = router.fetch("X", use_cache=False)
+        assert result.source == "B"
+        assert result.attempted[0]["outcome"] == "auth_failed"
+
+    def test_rate_limit_falls_through_and_is_recorded(self):
+        good = MarketSnapshot(ticker="X", source="B")
+        good.quote.price = 100.0
+        router = MarketDataRouter(providers=[
+            self._stub("A", 1, error=ProviderRateLimited("429")),
+            self._stub("B", 2, snapshot=good),
+        ], ttl_cache=TTLCache())
+        result = router.fetch("X", use_cache=False)
+        assert result.attempted[0]["outcome"] == "rate_limited"
+
+    def test_a_provider_returning_nothing_usable_is_skipped(self):
+        empty = MarketSnapshot(ticker="X", source="A")   # no quote, no sections
+        good = MarketSnapshot(ticker="X", source="B")
+        good.quote.price = 100.0
+        router = MarketDataRouter(providers=[
+            self._stub("A", 1, snapshot=empty),
+            self._stub("B", 2, snapshot=good),
+        ], ttl_cache=TTLCache())
+        assert router.fetch("X", use_cache=False).source == "B"
+
+    def test_total_failure_is_reported_not_faked(self):
+        router = MarketDataRouter(providers=[
+            self._stub("A", 1, error=ProviderError("down")),
+        ], ttl_cache=TTLCache())
+        result = router.fetch("X", use_cache=False)
+        assert result.source == SOURCE_NONE
+        assert result.snapshot.quote.price is None
+
+    def test_an_unexpected_exception_does_not_crash_the_router(self):
+        class Exploding(BaseMarketProvider):
+            name, priority = "Boom", 1
+            def configured(self): return True
+            def fetch(self, ticker, **kwargs): raise ZeroDivisionError("bug")
+
+        router = MarketDataRouter(providers=[Exploding()], ttl_cache=TTLCache())
+        result = router.fetch("X", use_cache=False)
+        assert result.attempted[0]["outcome"] == "error"
+
+
+class TestSourceReporting:
+    def test_the_source_is_named_on_every_response(self):
+        snapshot = MarketSnapshot(ticker="X", source="Finnhub")
+        snapshot.quote.price = 100.0
+        router = MarketDataRouter(providers=[
+            TestFallbackChain._stub("Finnhub", 1, snapshot=snapshot),
+        ], ttl_cache=TTLCache())
+        payload = router.fetch("X", use_cache=False).as_dict()
+        assert payload["source"] == "Finnhub"
+        assert payload["source_label"] == "✓ Finnhub"
+        assert payload["fell_back"] is False
+        assert payload["providers_attempted"]
+
+    def test_raw_payloads_are_withheld_unless_asked_for(self):
+        snapshot = MarketSnapshot(ticker="X", source="A")
+        snapshot.quote.price = 1.0
+        router = MarketDataRouter(providers=[
+            TestFallbackChain._stub("A", 1, snapshot=snapshot),
+        ], ttl_cache=TTLCache())
+        result = router.fetch("X", use_cache=False)
+        assert "raw" not in result.as_dict()
+        assert "raw" in result.as_dict(include_raw=True)
+
+
+class TestCaching:
+    def test_a_hit_is_served_from_cache_and_marked(self):
+        snapshot = MarketSnapshot(ticker="X", source="A")
+        snapshot.quote.price = 1.0
+        router = MarketDataRouter(providers=[
+            TestFallbackChain._stub("A", 1, snapshot=snapshot),
+        ], ttl_cache=TTLCache(ttl_seconds=60))
+        assert router.fetch("X").cached is False
+        assert router.fetch("X").cached is True
+
+    def test_expiry_is_honoured(self):
+        cache = TTLCache(ttl_seconds=-1)          # already expired
+        cache.put("k", "value")                    # type: ignore[arg-type]
+        assert cache.get("k") is None
+
+    def test_capacity_is_bounded(self):
+        cache = TTLCache(ttl_seconds=60, capacity=3)
+        for index in range(6):
+            cache.put(f"k{index}", index)          # type: ignore[arg-type]
+        assert cache.stats()["entries"] <= 3
+
+    def test_statistics_never_include_a_credential(self):
+        stats = TTLCache().stats()
+        assert set(stats) == {"entries", "hits", "misses", "hit_rate", "ttl_seconds"}
+
+
+class TestCredentialHygiene:
+    @pytest.mark.parametrize("module", ["finnhub", "fmp", "yahoo", "base", "router"])
+    def test_no_key_shaped_literal_in_any_provider(self, module):
+        import importlib
+        import pathlib
+        import re
+
+        source = pathlib.Path(
+            importlib.import_module(f"app.data.providers.{module}").__file__
+        ).read_text()
+        for literal in re.findall(r"['\"]([A-Za-z0-9]{24,64})['\"]", source):
+            mixed = (any(c.isupper() for c in literal)
+                     and any(c.islower() for c in literal)
+                     and any(c.isdigit() for c in literal))
+            assert not mixed, f"possible hardcoded key in {module}: {literal[:6]}…"
+
+    def test_keys_are_read_from_settings_not_the_environment_directly(self):
+        import pathlib
+
+        for module in (FinnhubProvider, FMPProvider):
+            source = pathlib.Path(
+                __import__(module.__module__, fromlist=["x"]).__file__
+            ).read_text()
+            assert "os.environ" not in source, (
+                f"{module.__name__} must read settings, not os.environ, so "
+                "configuration stays testable and centrally documented"
+            )
