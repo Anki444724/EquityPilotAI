@@ -23,7 +23,7 @@ import structlog
 from app.data.providers.base import (
     BaseMarketProvider, CompanyProfile, MarketSnapshot, ProviderAuthError,
     ProviderError, ProviderNotConfigured, ProviderRateLimited, Quote,
-    RetryPolicy, SymbolNotFound, to_float,
+    RetryPolicy, SymbolNotFound, normalise_symbol, to_float,
 )
 
 log = structlog.get_logger(__name__)
@@ -113,11 +113,7 @@ class FMPProvider(BaseMarketProvider):
     # -- symbols ----------------------------------------------------------
     @staticmethod
     def to_symbol(ticker: str) -> str:
-        """FMP uses the same `.NS` suffix as Yahoo for NSE listings."""
-        symbol = (ticker or "").strip().upper()
-        if not symbol:
-            raise SymbolNotFound("empty ticker")
-        return symbol if "." in symbol else f"{symbol}.NS"
+        return normalise_symbol(ticker)
 
     # -- endpoints --------------------------------------------------------
     def company_profile(self, ticker: str) -> list[dict]:

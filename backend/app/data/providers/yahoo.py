@@ -18,7 +18,7 @@ import structlog
 
 from app.data.providers.base import (
     BaseMarketProvider, CompanyProfile, MarketSnapshot, ProviderError,
-    Quote, RetryPolicy, to_float,
+    Quote, RetryPolicy, normalise_symbol, to_float,
 )
 
 log = structlog.get_logger(__name__)
@@ -41,8 +41,7 @@ class YahooProvider(BaseMarketProvider):
 
     @staticmethod
     def to_symbol(ticker: str) -> str:
-        symbol = (ticker or "").strip().upper()
-        return symbol if "." in symbol else f"{symbol}.NS"
+        return normalise_symbol(ticker)
 
     def fetch(self, ticker: str, **kwargs) -> tuple[MarketSnapshot, dict[str, Any]]:
         from app.data import yahoo_source

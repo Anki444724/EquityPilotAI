@@ -234,10 +234,37 @@ class BaseMarketProvider(ABC):
 
             except urllib.error.HTTPError as exc:
                 last = exc
-                if exc.code in (401, 403):
-                    # Never retried: a rejected key will still be rejected.
+                if exc.code == 401:
+                    # The key itself is wrong. Never retried, and fatal for
+                    # the provider: it will be wrong for every other symbol.
                     raise ProviderAuthError(
-                        f"{self.name}: credentials rejected (HTTP {exc.code})"
+                        f"{self.name}: credentials rejected (HTTP 401)"
+                    ) from exc
+                if exc.code == 403:
+                    # Ambiguous, and the distinction matters. Finnhub answers
+                    # 403 "You don't have access to this resource" for a
+                    # symbol outside the plan while serving US symbols
+                    # perfectly — treating that as a bad key would disable a
+                    # working provider for every ticker. A body naming access
+                    # or the plan is a per-request entitlement boundary and
+                    # falls through; anything else is treated as a credential
+                    # failure.
+                    body = ""
+                    try:
+                        body = exc.read().decode("utf-8", "replace")[:300].lower()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    entitlement = any(marker in body for marker in (
+                        "access to this resource", "not available under",
+                        "subscription", "premium", "upgrade", "your plan",
+                        "restricted endpoint",
+                    ))
+                    if entitlement:
+                        raise SymbolNotFound(
+                            f"{self.name}: not included in this plan"
+                        ) from exc
+                    raise ProviderAuthError(
+                        f"{self.name}: credentials rejected (HTTP 403)"
                     ) from exc
                 if exc.code == 429:
                     self._consecutive_rate_limits += 1
@@ -265,3 +292,24 @@ class BaseMarketProvider(ABC):
             f"{self.name}: failed after {self.policy.attempts} attempts: "
             f"{safe(str(last))[:160]}"
         )
+
+#: Suffixes that already identify an exchange. A bare symbol needs a default.
+_KNOWN_SUFFIXES = (".NS", ".BO", ".L", ".TO", ".AX", ".HK", ".SS", ".SZ", ".DE", ".PA")
+
+#: Bare symbols are assumed to be NSE, because that is the platform's
+#: universe — but only when they look Indian. A US ticker is short, all
+#: letters, and must be left alone: appending ".NS" to AAPL produced
+#: "AAPL.NS", which every provider rejects, so a symbol the primary serves
+#: perfectly was reported as unsupported.
+def normalise_symbol(ticker: str, *, default_suffix: str = ".NS") -> str:
+    symbol = (ticker or "").strip().upper()
+    if not symbol:
+        raise SymbolNotFound("empty ticker")
+    if any(symbol.endswith(suffix) for suffix in _KNOWN_SUFFIXES) or "." in symbol:
+        return symbol
+    from app.data.nse_universe import NSE_UNIVERSE  # local: avoids a cycle
+
+    if symbol in {row[0] for row in NSE_UNIVERSE}:
+        return f"{symbol}{default_suffix}"
+    # Not in the Indian universe: treat it as already fully qualified.
+    return symbol

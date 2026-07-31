@@ -293,3 +293,97 @@ class TestCredentialHygiene:
                 f"{module.__name__} must read settings, not os.environ, so "
                 "configuration stays testable and centrally documented"
             )
+
+
+class TestPlanEntitlementVersusBadKey:
+    """MKT-001: a 403 can mean two very different things.
+
+    Finnhub's free tier serves US symbols and answers 403 "You don't have
+    access to this resource" for Indian ones. Classifying that as a
+    credential failure disabled a provider that was working perfectly for
+    AAPL, so a 403 whose body names access or the plan now falls through
+    per-symbol while a genuine credential rejection still abandons the
+    provider.
+    """
+
+    @staticmethod
+    def _raise(code: int, body: bytes):
+        import io
+        import urllib.error
+
+        return urllib.error.HTTPError(
+            "https://example.test", code, "err", {}, io.BytesIO(body),
+        )
+
+    def test_entitlement_403_falls_through(self, monkeypatch):
+        import urllib.request
+
+        from app.data.providers.base import SymbolNotFound
+
+        provider = FinnhubProvider()
+        monkeypatch.setattr(provider, "_key", lambda: "unit-test")
+        monkeypatch.setattr(
+            urllib.request, "urlopen",
+            lambda *a, **k: (_ for _ in ()).throw(self._raise(
+                403, b'{"error":"You don\'t have access to this resource."}')),
+        )
+        with pytest.raises(SymbolNotFound):
+            provider.quote("RELIANCE.NS")
+
+    def test_a_genuine_403_still_abandons_the_provider(self, monkeypatch):
+        import urllib.request
+
+        provider = FinnhubProvider()
+        monkeypatch.setattr(provider, "_key", lambda: "unit-test")
+        monkeypatch.setattr(
+            urllib.request, "urlopen",
+            lambda *a, **k: (_ for _ in ()).throw(
+                self._raise(403, b'{"error":"Forbidden"}')),
+        )
+        with pytest.raises(ProviderAuthError):
+            provider.quote("AAPL")
+
+    def test_401_is_always_a_credential_failure(self, monkeypatch):
+        import urllib.request
+
+        provider = FinnhubProvider()
+        monkeypatch.setattr(provider, "_key", lambda: "unit-test")
+        monkeypatch.setattr(
+            urllib.request, "urlopen",
+            lambda *a, **k: (_ for _ in ()).throw(
+                self._raise(401, b'{"error":"Invalid API key."}')),
+        )
+        with pytest.raises(ProviderAuthError):
+            provider.quote("AAPL")
+
+
+class TestSymbolNormalisation:
+    """MKT-002: appending .NS to a US ticker made AAPL unservable.
+
+    Every provider rejected "AAPL.NS", so a symbol the primary serves
+    perfectly was reported as unsupported by all five tiers.
+    """
+
+    def test_us_symbols_are_left_alone(self):
+        from app.data.providers.base import normalise_symbol
+
+        assert normalise_symbol("AAPL") == "AAPL"
+        assert normalise_symbol("MSFT") == "MSFT"
+
+    def test_indian_symbols_get_the_nse_suffix(self):
+        from app.data.providers.base import normalise_symbol
+
+        assert normalise_symbol("RELIANCE") == "RELIANCE.NS"
+        assert normalise_symbol("TCS") == "TCS.NS"
+
+    def test_an_explicit_suffix_is_never_doubled(self):
+        from app.data.providers.base import normalise_symbol
+
+        assert normalise_symbol("RELIANCE.NS") == "RELIANCE.NS"
+        assert normalise_symbol("BARC.L") == "BARC.L"
+
+    def test_all_providers_agree_on_the_mapping(self):
+        for ticker in ("AAPL", "RELIANCE", "RELIANCE.NS", "TCS"):
+            assert (FinnhubProvider.to_symbol(ticker)
+                    == FMPProvider.to_symbol(ticker)
+                    == YahooProvider.to_symbol(ticker))
