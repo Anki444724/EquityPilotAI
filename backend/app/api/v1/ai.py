@@ -310,6 +310,52 @@ async def analyse(
 
 
 # ------------------------------------------------------------------------ chat
+@router.post(
+    "/company/{ticker}/ai/research-report",
+    summary="Section-aware research report",
+)
+async def research_report(
+    ticker: str,
+    sections: str | None = Query(default=None,
+                                 description="Comma-separated section keys"),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Run each section against the provider its route assigns.
+
+    The business model comes from the annual report, financial performance
+    from the database, valuation from the valuation engine. The scoring
+    engine contributes to the three score sections and nothing else — it is a
+    derived opinion about a company, not a source of fact about one.
+
+    Every section reports its source, provider, confidence, citations and
+    timestamp, and the response carries a routing table showing which
+    provider answered what.
+    """
+    from app.services.ai.orchestration import Section
+    from app.services.ai.report_orchestrator import ReportOrchestrator
+
+    analysis = AnalysisService.for_ticker(db, ticker)
+    if analysis is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown ticker {ticker}")
+
+    wanted = None
+    if sections:
+        try:
+            wanted = [Section(s.strip()) for s in sections.split(",") if s.strip()]
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"unknown section; expected from {[s.value for s in Section]}",
+            ) from exc
+
+    service = AIService(db)
+    report = await ReportOrchestrator(service.analyst_for(analysis)).run(
+        sections=wanted,
+    )
+    return report.as_dict()
+
+
 @router.post("/company/{ticker}/ai/chat", response_model=ChatResponse,
              summary="Grounded conversation with memory")
 async def chat(

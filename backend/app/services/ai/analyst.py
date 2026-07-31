@@ -101,10 +101,17 @@ class ResearchAnalyst:
         provider: str | None = None,
         template: PromptTemplate | None = None,
         source: SourceDirective | None = None,
+        context_override: GroundedContext | None = None,
     ) -> AnalystResult:
-        """Produce one grounded analysis."""
+        """Produce one grounded analysis.
+
+        `context_override` lets the report orchestrator hand in a context
+        already restricted to one section's permitted sources, so a section
+        about the business model cannot be answered from scoring output that
+        happens to rank first.
+        """
         prompt_template = template or get_prompt(capability)
-        context = self.context()
+        context = context_override if context_override is not None else self.context()
 
         # --- retrieval-augmented generation -----------------------------
         #
