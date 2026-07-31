@@ -631,3 +631,35 @@ class TestGroundedContext:
         context.add(Citation("b", "B", EvidenceKind.SCORING, 2.0, "", "S"))
         rendered = context.render_evidence([EvidenceKind.SCORING])
         assert "[b]" in rendered and "[a]" not in rendered
+
+
+class TestDocumentEvidenceScope:
+    """AI-002: a stale keyword list refused questions documents can answer."""
+
+    def test_headcount_refused_when_no_document_supplies_it(self):
+        """The original guarantee: no evidence, no answer."""
+        from app.services.ai.providers.mock import _out_of_scope
+
+        assert _out_of_scope(
+            "What is the employee headcount?",
+            "Revenue (FY26) EBITDA margin Current market price",
+        )
+
+    def test_headcount_answered_once_a_document_supplies_it(self):
+        """After ingesting an annual report the platform holds headcount, and
+        refusing on the keyword alone denies a question it can now cite."""
+        from app.services.ai.providers.mock import _out_of_scope
+
+        assert not _out_of_scope(
+            "What is the employee headcount?",
+            "Revenue (FY26) Employee headcount 342900 Principal risk 1",
+        )
+
+    def test_genuinely_unheld_scopes_still_refuse_unconditionally(self):
+        """Evidence about this company never answers these, whatever it says."""
+        from app.services.ai.providers.mock import _out_of_scope
+
+        rich = "Employee headcount Revenue market share geography Europe"
+        assert _out_of_scope("What was revenue in FY2031?", rich)
+        assert _out_of_scope("How does this compare with Tesla?", rich)
+        assert _out_of_scope("What was the close on 14 March 2024?", rich)

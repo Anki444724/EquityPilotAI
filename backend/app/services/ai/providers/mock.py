@@ -71,17 +71,34 @@ _UNHELD_DIMENSIONS = (
 _OFF_UNIVERSE = ("tesla", "apple", "amazon", "google", "microsoft", "nvidia")
 
 
-def _out_of_scope(question: str) -> bool:
-    """True when the question asks for a scope the platform does not hold."""
+def _out_of_scope(question: str, evidence_labels: str = "") -> bool:
+    """True when the question asks for a scope the platform does not hold.
+
+    `_UNHELD_DIMENSIONS` was written when the platform held nothing but the 54
+    canonical line items, and headcount genuinely was unavailable. Document
+    ingestion changed that: an uploaded annual report contributes headcount,
+    attrition, principal risks and similar disclosures as real, cited
+    evidence. Refusing on a fixed keyword list then denies a question the
+    platform can now answer from a document the user uploaded for exactly
+    that purpose.
+
+    So the list is treated as a default rather than a verdict: a dimension is
+    only out of scope when nothing in the evidence actually covers it. The
+    genuinely unheld scopes — a future year, an off-universe peer, a specific
+    past date — remain unconditional, because no amount of evidence about
+    *this* company answers a question about Tesla.
+    """
     lowered = question.lower()
     if _FUTURE_YEAR.search(question):
         return True
     if _SPECIFIC_DATE.search(question):
         return True
-    if any(term in lowered for term in _UNHELD_DIMENSIONS):
-        return True
     if any(name in lowered for name in _OFF_UNIVERSE):
         return True
+    labels = evidence_labels.lower()
+    for term in _UNHELD_DIMENSIONS:
+        if term in lowered and term not in labels:
+            return True
     return False
 
 
@@ -164,7 +181,12 @@ class OfflineProvider(LLMProvider):
         # platform does not hold; these are questions about a *scope* it does
         # not hold — a future year, a geography, an off-universe peer, a
         # specific past date — and they need naming explicitly.
-        out_of_scope = _out_of_scope(question)
+        # Pass the evidence labels so a dimension the platform *does* now hold
+        # — headcount from an uploaded annual report, for instance — is not
+        # refused on the strength of a stale keyword list.
+        out_of_scope = _out_of_scope(
+            question, " ".join(" ".join(str(f) for f in item) for item in evidence),
+        )
 
         if question.strip() and words and (overlap(ranked[0]) == 0 or out_of_scope):
             return (
