@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db.base import Base, SessionLocal, engine
+from app.services.platform.cache import Namespace, cache
 from app.domain.financials.canonical import Precedence
 from app.domain.financials.line_items import LineItem as LI
 from app.models.analysis import (  # noqa: F401  (registers Module 2 tables)
@@ -183,6 +184,10 @@ def seed(db: Session, *, reset: bool = True) -> dict[str, int]:
                 )
                 n_fact += 1
     db.commit()
+    # Canonical facts are cached by CompanyService.load_financials, and a
+    # seed run has just replaced them. Anything already cached describes a
+    # database state that no longer exists.
+    cache.invalidate(Namespace.STATEMENTS)
     return {"companies": len(UNIVERSE), "facts": n_fact}
 
 

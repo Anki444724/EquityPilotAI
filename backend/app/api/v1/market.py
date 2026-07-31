@@ -143,9 +143,44 @@ def filings(
     ).as_dict()
 
 
+@router.get("/pipelines", summary="Report pipelines by market")
+def pipelines(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
+    """The declared evidence stack for each market, highest precedence first."""
+    from app.services.ai.pipelines import describe_pipelines
+
+    return describe_pipelines()
+
+
+@router.get("/pipelines/{ticker}", summary="Pipeline governing one ticker")
+def pipeline_for_ticker(
+    ticker: str, user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    from app.services.ai.pipelines import pipeline_for
+
+    return pipeline_for(ticker).as_dict()
+
+
 @router.get("/market/cache", summary="Market cache statistics")
 def cache_stats(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
+    """Market-tier cache only. See `/platform/cache` for all four namespaces."""
     return cache().stats()
+
+
+@router.get("/platform/cache", summary="Unified cache statistics")
+def platform_cache_stats(
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Hit rates for market data, statements, news and RAG retrieval.
+
+    The operational question this answers is "is the cache actually working",
+    which was previously unanswerable: market data reported its own hit rate
+    and the other three read paths reported nothing at all.
+    """
+    from app.services.platform.cache import cache as unified
+
+    payload = unified.snapshot()
+    payload["market_tier"] = cache().stats()
+    return payload
 
 
 @router.get("/market/{ticker}", summary="Market snapshot for one ticker")

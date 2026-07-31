@@ -51,13 +51,60 @@ class _Entry:
     expires_at: float
 
 
-class TTLCache:
-    """Small thread-safe TTL cache.
+def _is_news_key(key: str) -> bool:
+    """Did this fetch include news?
 
-    In-memory and per-process, which is the right scope here: the data is
-    public, cheap to refetch and stale within minutes, so the complexity of a
-    shared cache would buy very little. Its real job is protecting FMP's
-    250-call daily budget from a page that renders five tickers.
+    The market cache key is `symbol|news|history|earnings`, so a snapshot that
+    carried news is attributed to the NEWS namespace as well as MARKET_DATA.
+    The brief lists them as separate cacheable things and they are fetched in
+    one call, so the accounting reflects both rather than pretending news is
+    uncached.
+    """
+    parts = key.split("|")
+    return len(parts) > 1 and parts[1] == "True"
+
+
+def _mirror_stat(*, hit: bool, news: bool) -> None:
+    """Report market-cache activity through the unified stats.
+
+    Wrapped in a try/except that swallows: this is telemetry, and telemetry
+    must never be able to fail a market-data fetch.
+    """
+    try:
+        from app.services.platform.cache import Namespace, cache
+
+        namespaces = [Namespace.MARKET_DATA]
+        if news:
+            namespaces.append(Namespace.NEWS)
+        for namespace in namespaces:
+            stat = cache.stats[namespace]
+            if hit:
+                stat.hits += 1
+            else:
+                stat.misses += 1
+    except Exception:  # noqa: BLE001 - telemetry is never load-bearing
+        pass
+
+
+class TTLCache:
+    """Small thread-safe TTL cache for market snapshots.
+
+    In-memory and per-process. Its real job is protecting FMP's 250-call daily
+    budget from a page that renders five tickers.
+
+    Phase 2 added a unified `CacheService`, and the obvious move was to
+    replace this with it. That was not done, for a reason worth recording: a
+    `MarketDataResult` holds the *provenance* of a fetch — which providers
+    were attempted, which answered, the measured latency — and those fields
+    are only meaningful for the request that produced them. Serving another
+    caller's `attempted` list and calling it their own would corrupt the audit
+    trail the market layer exists to provide, so the cached copy is rebuilt
+    with `cached=True` and a fresh `resolved` rather than returned verbatim.
+
+    What *is* shared is the accounting: hits and misses are mirrored into the
+    unified cache stats, so `/health/cache` reports one hit rate across all
+    four namespaces rather than making an operator find this class to learn
+    how market caching is performing.
     """
 
     def __init__(self, ttl_seconds: float = 300.0, capacity: int = 512) -> None:
@@ -75,8 +122,10 @@ class TTLCache:
                 if entry is not None:
                     del self._data[key]
                 self.misses += 1
+                _mirror_stat(hit=False, news=_is_news_key(key))
                 return None
             self.hits += 1
+            _mirror_stat(hit=True, news=_is_news_key(key))
             return entry.value
 
     def put(self, key: str, value: "MarketDataResult") -> None:

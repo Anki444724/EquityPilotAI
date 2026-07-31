@@ -60,6 +60,7 @@ from app.services.documents.pipeline.search import (
 from app.services.documents.pipeline.vector_store import (
     InMemoryVectorStore, VectorRecord,
 )
+from app.services.platform.cache import Namespace, cache
 
 logger = logging.getLogger(__name__)
 
@@ -506,11 +507,35 @@ class DocumentService:
         document_ids: list[int] | None = None,
         sections: list[SectionKind] | None = None,
     ) -> SearchAnswer:
-        """Answer a question from the indexed corpus, with citations."""
-        store = self.build_index(company_id)
-        engine = DocumentSearch(store, self.embedder, SearchConfig(top_k=top_k))
-        return engine.answer(
-            query, top_k=top_k, document_ids=document_ids, sections=sections
+        """Answer a question from the indexed corpus, with citations.
+
+        Cached (Phase 2). Retrieval over an unchanged corpus is deterministic,
+        and `build_index` reloads and re-embeds every chunk for the company on
+        each call — so the fifteen sections of a report paid that cost fifteen
+        times over for a corpus that could not have changed between them.
+        Ingestion and reindexing invalidate the namespace explicitly, so a
+        newly uploaded report is visible immediately rather than after the TTL.
+        """
+        def compute() -> SearchAnswer:
+            store = self.build_index(company_id)
+            engine = DocumentSearch(
+                store, self.embedder, SearchConfig(top_k=top_k),
+            )
+            return engine.answer(
+                query, top_k=top_k, document_ids=document_ids,
+                sections=sections,
+            )
+
+        return cache.get_or_set(
+            Namespace.RAG, compute,
+            company_id, query, top_k,
+            # Both narrow the result set, so they must be part of the key or a
+            # filtered search would serve an unfiltered answer.
+            sorted(document_ids) if document_ids else None,
+            sorted(s.value for s in sections) if sections else None,
+            # The embedding model is part of the identity of a result: change
+            # it and every cached answer is from a different index.
+            self.embedder.spec,
         )
 
     def citations_for(self, answer: SearchAnswer, limit: int = 8) -> list[DocumentCitation]:
@@ -545,6 +570,10 @@ class DocumentService:
             if document is not None:
                 document.embedding_spec = spec
         self.db.commit()
+        # The corpus these answers were drawn from no longer exists in the
+        # same form. Serving a cached hit from the previous embedding model
+        # would return citations into an index that has been replaced.
+        cache.invalidate(Namespace.RAG)
         return len(chunks)
 
     # ================================================================

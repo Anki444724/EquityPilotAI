@@ -32,6 +32,7 @@ from app.schemas.company import (
     CompanySummary,
     DataCoverage,
 )
+from app.services.platform.cache import Namespace, cache
 
 #: Valid canonical keys, used to skip unknown rows defensively.
 _VALID_ITEMS = {item.value for item in LineItem}
@@ -132,7 +133,21 @@ class CompanyService:
 
         Rows arrive at mixed precedence tiers; the builder applies the
         `0C Data Map` chain (override > store > alias > absent).
+
+        Cached (Phase 2). One query it may be, but for a covered company it
+        returns several hundred rows and then builds the full canonical
+        structure over them, and every analysis, valuation, score and report
+        section begins by calling this. Filed statements change when a company
+        reports — four times a year at most — so the recomputation was pure
+        waste on every request in between.
         """
+        return cache.get_or_set(
+            Namespace.STATEMENTS,
+            lambda: self._load_financials_uncached(company_id),
+            company_id,
+        )
+
+    def _load_financials_uncached(self, company_id: str) -> CanonicalFinancials:
         rows = (
             self.db.execute(
                 select(

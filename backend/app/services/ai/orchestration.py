@@ -94,6 +94,32 @@ class SectionRoute:
     synthesises: bool = False
 
     @property
+    def stage(self) -> int:
+        """Which execution wave this section belongs to.
+
+        Phase 2 runs sections concurrently, and concurrency is only safe where
+        there is no data dependency. Two constraints govern the waves:
+
+        * **Stage 0 — retrieval sections.** Business Model, Financial
+          Performance, Valuation, Risks, Latest News, Management Commentary
+          and the rest each gather their own evidence from their own route.
+          None reads another's output, so all may run at once.
+        * **Stage 1 — synthesis sections.** Bull, Bear and Verdict reason over
+          the union of what stage 0 found. Starting them early would have them
+          reason over a half-filled evidence pool, and which half would depend
+          on which coroutine happened to finish first — a report that differs
+          between runs of identical input.
+        * **Stage 2 — the executive summary.** It summarises the verdict as
+          well, so it follows stage 1.
+
+        Deriving the stage from `synthesises` rather than hard-coding a list
+        means a new section is placed correctly by declaring what it does.
+        """
+        if self.section is Section.EXECUTIVE_SUMMARY:
+            return 2
+        return 1 if self.synthesises else 0
+
+    @property
     def kinds(self) -> frozenset[EvidenceKind]:
         allowed: set[EvidenceKind] = set()
         for provider in self.providers:
@@ -279,9 +305,26 @@ class SectionResult:
     completion_tokens: int = 0
     cost_usd: float = 0.0
 
+    # --- timings (Phase 2) ---------------------------------------------
+    # Split so the benchmark can attribute latency. `retrieval_ms` and
+    # `llm_ms` do not sum to `total_ms`: the remainder is evidence selection,
+    # prompt assembly and the citation audit, and seeing that residual is the
+    # point — it is where an unexpected cost would hide.
+    retrieval_ms: float = 0.0
+    llm_ms: float = 0.0
+    total_ms: float = 0.0
+    #: True when the provider router served this from its completion cache,
+    #: in which case `llm_ms` is cache-lookup time and no tokens were bought.
+    cached_completion: bool = False
+
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def overhead_ms(self) -> float:
+        """Time in the section that was neither retrieval nor the model."""
+        return max(0.0, self.total_ms - self.retrieval_ms - self.llm_ms)
 
     @property
     def has_evidence(self) -> bool:
@@ -323,6 +366,13 @@ class SectionResult:
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "cost_usd": round(self.cost_usd, 6),
+            "timings_ms": {
+                "retrieval": round(self.retrieval_ms, 1),
+                "llm": round(self.llm_ms, 1),
+                "overhead": round(self.overhead_ms, 1),
+                "total": round(self.total_ms, 1),
+            },
+            "cached_completion": self.cached_completion,
         }
 
 

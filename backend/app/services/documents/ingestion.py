@@ -36,6 +36,7 @@ from app.models.document import Document, DocumentJob
 from app.services.documents.storage import (
     DocumentStorage, StorageError, free_disk_bytes, get_storage,
 )
+from app.services.platform.cache import Namespace, cache
 
 log = structlog.get_logger(__name__)
 
@@ -372,6 +373,14 @@ class DocumentIngestionService:
         job.duration_ms = round(elapsed, 3)
         job.timings = result.timing_map()
         self.db.commit()
+
+        # A new document has entered the corpus, so every cached retrieval
+        # answer was computed against an index that is now incomplete. Without
+        # this, a user who uploads an annual report and immediately asks about
+        # it is told there is no evidence — for up to the TTL, and with no
+        # indication why. Explicit invalidation is what lets the RAG cache have
+        # a long TTL safely.
+        cache.invalidate(Namespace.RAG)
 
         log.info(
             "ingestion complete", document_id=document.id, job_id=job.id,

@@ -8,6 +8,7 @@ scoring engine, rather than both from whichever block ranked first.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,6 +21,7 @@ from app.services.ai.orchestration import (
     ROUTES, Provider, Section, SectionResult, SectionRoute, presentation_rank,
     score_section, select_evidence, utc_now,
 )
+from app.services.ai.pipelines import pipeline_for
 from app.services.ai.section_writer import (
     NO_EVIDENCE, SectionBrief, build_extra, looks_unevidenced,
 )
@@ -34,6 +36,10 @@ class OrchestratedReport:
     sections: list[SectionResult] = field(default_factory=list)
     latency_ms: float = 0.0
     generated_at: str = ""
+    #: The market pipeline that governed this report's evidence, so a reader
+    #: can see that a US company was served from SEC-first and an Indian one
+    #: from annual-reports-first without inferring it from the sources.
+    pipeline: dict[str, Any] = field(default_factory=dict)
 
     @property
     def grounded_sections(self) -> int:
@@ -60,6 +66,35 @@ class OrchestratedReport:
     @property
     def total_tokens(self) -> int:
         return sum(s.total_tokens for s in self.sections)
+
+    def timings(self) -> dict[str, Any]:
+        """Where the time went.
+
+        `retrieval_ms` and `llm_ms` are *sums of work done*, not elapsed
+        wall-clock: sections now run concurrently, so they routinely exceed
+        `wall_ms`. That is not an error but the measure of the parallelism —
+        the ratio of summed work to elapsed time is the speed-up actually
+        achieved, and it is reported as `concurrency_factor` rather than left
+        for a reader to infer from two numbers that look contradictory.
+        """
+        retrieval = sum(s.retrieval_ms for s in self.sections)
+        llm = sum(s.llm_ms for s in self.sections)
+        work = sum(s.total_ms for s in self.sections)
+        wall = self.latency_ms or 1.0
+        return {
+            "wall_ms": round(self.latency_ms, 1),
+            "retrieval_ms_sum": round(retrieval, 1),
+            "llm_ms_sum": round(llm, 1),
+            "section_work_ms_sum": round(work, 1),
+            "overhead_ms_sum": round(
+                sum(s.overhead_ms for s in self.sections), 1,
+            ),
+            "concurrency_factor": round(work / wall, 2),
+            "llm_share_of_work": round(llm / work, 3) if work else 0.0,
+            "cached_completions": sum(
+                1 for s in self.sections if s.cached_completion
+            ),
+        }
 
     @property
     def total_cost_usd(self) -> float:
@@ -103,6 +138,8 @@ class OrchestratedReport:
             "writer_mix": self.writer_mix(),
             "total_tokens": self.total_tokens,
             "total_cost_usd": round(self.total_cost_usd, 6),
+            "timings": self.timings(),
+            "pipeline": self.pipeline,
         }
 
 
@@ -130,12 +167,38 @@ class ReportOrchestrator:
         # what the earlier sections actually found, rather than re-retrieving.
         gathered: list = list(context.citations)
 
-        for route in routes:
-            result = await self._run_section(route, gathered, question)
-            results.append(result)
-            for citation in result.citations:
-                if citation.key not in {c.key for c in gathered}:
-                    gathered.append(citation)
+        # Sections run concurrently within a stage and sequentially between
+        # stages. Stage 0 is the six retrieval sections the brief names plus
+        # the score sections — none reads another's output. Stage 1 is the
+        # thesis sections, which reason over everything stage 0 gathered.
+        # Stage 2 is the executive summary, which summarises the verdict too.
+        #
+        # The merge after each stage is deliberately *ordered by route* rather
+        # than by completion. `asyncio.gather` preserves input order in its
+        # results, so evidence is folded into `gathered` in the same sequence
+        # regardless of which request returned first. Merging in completion
+        # order would make the thesis prompts depend on network timing, and
+        # two runs of the same report would differ for no visible reason.
+        for stage in sorted({r.stage for r in routes}):
+            wave = [r for r in routes if r.stage == stage]
+            log.info(
+                "orchestration stage", stage=stage, sections=len(wave),
+                titles=[r.title for r in wave],
+            )
+            # `gathered` is snapshotted per wave: every section in a wave sees
+            # the same evidence pool, so a section cannot be influenced by a
+            # sibling that happens to finish first.
+            snapshot = list(gathered)
+            answered = await asyncio.gather(*(
+                self._run_section(route, snapshot, question) for route in wave
+            ))
+            results.extend(answered)
+            seen = {c.key for c in gathered}
+            for result in answered:
+                for citation in result.citations:
+                    if citation.key not in seen:
+                        gathered.append(citation)
+                        seen.add(citation.key)
 
         # Execution order is `ROUTES`; the reader's order is
         # `PRESENTATION_ORDER`. The executive summary is written last, because
@@ -146,6 +209,7 @@ class ReportOrchestrator:
         report = OrchestratedReport(
             ticker=context.ticker, company=company, sections=results,
             latency_ms=elapsed, generated_at=utc_now(),
+            pipeline=pipeline_for(context.ticker).as_dict(),
         )
         log.info(
             "report orchestrated", ticker=context.ticker,
@@ -164,10 +228,15 @@ class ReportOrchestrator:
         # passages fetched for "risks" are about risk rather than whatever the
         # user's opening sentence happened to mention.
         retrieved: list = []
+        retrieval_started = time.perf_counter()
         if any(p in (Provider.RAG, Provider.FILINGS) for p in route.providers):
             retrieved = self.analyst._retrieve(  # noqa: SLF001 — same package
                 route.prompt, "chat",
             )
+        # Measured separately from the model call so the benchmark can say
+        # where the time actually goes. Before this was split out, "the report
+        # takes 45 seconds" was the whole of what anyone knew about it.
+        retrieval_ms = (time.perf_counter() - retrieval_started) * 1000
 
         pool = list(gathered)
         for citation in retrieved:
@@ -189,6 +258,8 @@ class ReportOrchestrator:
                 provider_used=None, source_category=None, confidence=0.0,
                 attempted=attempted, timestamp=utc_now(),
                 writer_provider="none", writer_model="none",
+                retrieval_ms=retrieval_ms,
+                total_ms=(time.perf_counter() - started) * 1000,
             )
 
         source_category = self._category(provider, route)
@@ -213,6 +284,8 @@ class ReportOrchestrator:
         writer_model = "none"
         prompt_tokens = completion_tokens = 0
         cost_usd = 0.0
+        cached_completion = False
+        llm_started = time.perf_counter()
         try:
             answer = await self.analyst.run(
                 "chat", question=route.prompt, source=directive,
@@ -229,6 +302,7 @@ class ReportOrchestrator:
             prompt_tokens = answer.prompt_tokens
             completion_tokens = answer.completion_tokens
             cost_usd = answer.cost_usd
+            cached_completion = answer.cached
         except TypeError:
             # The analyst does not accept an override on this path; compose
             # from the evidence directly rather than failing the section.
@@ -239,6 +313,8 @@ class ReportOrchestrator:
                         error=str(exc)[:160])
             content = self._compose(route, selected)
             writer_provider = "deterministic-composer"
+
+        llm_ms = (time.perf_counter() - llm_started) * 1000
 
         if not content:
             content = self._compose(route, selected)
@@ -262,6 +338,9 @@ class ReportOrchestrator:
             writer_provider=writer_provider, writer_model=writer_model,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             cost_usd=cost_usd,
+            retrieval_ms=retrieval_ms, llm_ms=llm_ms,
+            total_ms=(time.perf_counter() - started) * 1000,
+            cached_completion=cached_completion,
         )
 
     @staticmethod
