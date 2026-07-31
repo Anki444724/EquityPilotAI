@@ -25,9 +25,11 @@ from typing import Any
 
 import structlog
 
+from app.data.providers.symbols import ResolvedSymbol, resolve
 from app.data.providers.base import (
     BaseMarketProvider, MarketSnapshot, ProviderAuthError, ProviderError,
-    ProviderNotConfigured, ProviderRateLimited, SymbolNotFound,
+    ProviderMetadata, ProviderNotConfigured, ProviderRateLimited,
+    SymbolNotFound,
 )
 from app.data.providers.finnhub import FinnhubProvider
 from app.data.providers.fmp import FMPProvider
@@ -120,13 +122,24 @@ class MarketDataResult:
     latency_ms: float = 0.0
     cached: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    resolved: ResolvedSymbol | None = None
 
     @property
     def fell_back(self) -> bool:
         return self.source != FinnhubProvider.name
 
     def as_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
+        from app.data.providers.currency import format_money
+
         payload = asdict(self.snapshot)
+        # Item 3: provenance on every response.
+        payload["meta"] = self.snapshot.meta.as_dict()
+        currency = self.snapshot.meta.currency
+        cap = self.snapshot.profile.market_cap
+        payload["profile"]["market_cap_display"] = format_money(cap, currency)
+        payload["profile"]["currency"] = currency
+        if self.resolved is not None:
+            payload["symbol"] = self.resolved.as_dict()
         payload["source"] = self.source
         payload["source_label"] = f"✓ {self.source}"
         payload["fell_back"] = self.fell_back
@@ -159,6 +172,21 @@ class MarketDataRouter:
         )
         self.cache = ttl_cache or _CACHE
 
+    def _chain_for(self, resolved) -> list[str]:
+        """Tier order for this listing.
+
+        Different markets deserve different orders, which is the substance of
+        the brief rather than a detail. For an Indian company the platform's
+        own screener pipeline holds twelve years of validated, consolidated
+        statements that no free external tier will serve, so it leads; the
+        externals are there for a live price. For a US company the platform
+        holds nothing, so the externals lead and there is no internal tier
+        worth trying first.
+        """
+        if resolved.is_indian:
+            return ["internal", "documents", "external"]
+        return ["external", "internal", "documents"]
+
     def fetch(
         self,
         ticker: str,
@@ -169,101 +197,136 @@ class MarketDataRouter:
         include_history: bool = True,
         include_earnings: bool = True,
     ) -> MarketDataResult:
-        key = f"{ticker.upper()}|{include_news}|{include_history}|{include_earnings}"
+        resolved = resolve(ticker)
+        key = (f"{resolved.canonical}|{include_news}|{include_history}"
+               f"|{include_earnings}")
         if use_cache:
             hit = self.cache.get(key)
             if hit is not None:
-                # Copied so the caller cannot mutate what the next one reads.
                 return MarketDataResult(
                     snapshot=hit.snapshot, source=hit.source,
                     attempted=hit.attempted, latency_ms=hit.latency_ms,
-                    cached=True, raw=hit.raw,
+                    cached=True, raw=hit.raw, resolved=resolved,
                 )
 
         started = time.perf_counter()
         attempted: list[dict[str, Any]] = []
 
-        for provider in self.providers:
-            if not provider.configured():
-                attempted.append({
-                    "provider": provider.name, "outcome": "skipped",
-                    "reason": "not configured",
-                })
-                continue
-            if not provider.available:
-                attempted.append({
-                    "provider": provider.name, "outcome": "skipped",
-                    "reason": "circuit open after repeated rate limits",
-                })
-                continue
+        def finish(snapshot: MarketSnapshot, source: str,
+                   raw: dict[str, Any] | None = None) -> MarketDataResult:
+            elapsed = (time.perf_counter() - started) * 1000
+            self._stamp(snapshot, resolved, source)
+            result = MarketDataResult(
+                snapshot=snapshot, source=source, attempted=attempted,
+                latency_ms=elapsed, raw=raw or {}, resolved=resolved,
+            )
+            if use_cache:
+                self.cache.put(key, result)
+            log.info("market data served", ticker=resolved.canonical,
+                     source=source, market=resolved.market,
+                     ms=round(elapsed, 1))
+            return result
 
-            try:
-                snapshot, raw = provider.fetch(
-                    ticker, include_news=include_news,
-                    include_history=include_history,
-                    include_earnings=include_earnings,
-                )
-                if not snapshot.has_quote and snapshot.filled_sections == 0:
-                    raise ProviderError("returned nothing usable")
+        for tier in self._chain_for(resolved):
+            if tier == "external":
+                for provider in self.providers:
+                    outcome = self._try(provider, resolved, attempted,
+                                        include_news=include_news,
+                                        include_history=include_history,
+                                        include_earnings=include_earnings)
+                    if outcome is not None:
+                        snapshot, raw = outcome
+                        return finish(snapshot, provider.name, raw)
 
-                attempted.append({"provider": provider.name, "outcome": "served"})
-                result = MarketDataResult(
-                    snapshot=snapshot, source=provider.name, attempted=attempted,
-                    latency_ms=(time.perf_counter() - started) * 1000, raw=raw,
-                )
-                if use_cache:
-                    self.cache.put(key, result)
-                log.info("market data served", ticker=ticker,
-                         source=provider.name, ms=round(result.latency_ms, 1))
-                return result
+            elif tier == "internal" and db is not None:
+                internal = self._from_internal_db(db, resolved.base)
+                if internal is not None:
+                    attempted.append({"provider": SOURCE_INTERNAL,
+                                      "outcome": "served"})
+                    return finish(internal, SOURCE_INTERNAL)
+                attempted.append({"provider": SOURCE_INTERNAL,
+                                  "outcome": "no_data"})
 
-            except (ProviderAuthError, ProviderNotConfigured) as exc:
-                # Not retried and not re-tried later in this request: a
-                # rejected key is rejected for every endpoint.
-                attempted.append({"provider": provider.name, "outcome": "auth_failed",
-                                  "reason": str(exc)[:160]})
-            except ProviderRateLimited as exc:
-                attempted.append({"provider": provider.name, "outcome": "rate_limited",
-                                  "reason": str(exc)[:160]})
-            except SymbolNotFound as exc:
-                attempted.append({"provider": provider.name, "outcome": "not_covered",
-                                  "reason": str(exc)[:160]})
-            except ProviderError as exc:
-                attempted.append({"provider": provider.name, "outcome": "failed",
-                                  "reason": str(exc)[:160]})
-            except Exception as exc:  # noqa: BLE001 - a provider must not crash the router
-                attempted.append({"provider": provider.name, "outcome": "error",
-                                  "reason": f"{type(exc).__name__}: {exc}"[:160]})
+            elif tier == "documents" and db is not None:
+                documents = self._from_documents(db, resolved.base)
+                if documents is not None:
+                    attempted.append({"provider": SOURCE_DOCUMENTS,
+                                      "outcome": "served"})
+                    return finish(documents, SOURCE_DOCUMENTS)
+                attempted.append({"provider": SOURCE_DOCUMENTS,
+                                  "outcome": "no_data"})
 
-        # --- tier 3: the platform's own database ---------------------------
-        if db is not None:
-            internal = self._from_internal_db(db, ticker)
-            if internal is not None:
-                attempted.append({"provider": SOURCE_INTERNAL, "outcome": "served"})
-                result = MarketDataResult(
-                    snapshot=internal, source=SOURCE_INTERNAL, attempted=attempted,
-                    latency_ms=(time.perf_counter() - started) * 1000,
-                )
-                log.info("market data served from internal database", ticker=ticker)
-                return result
-            attempted.append({"provider": SOURCE_INTERNAL, "outcome": "no_data"})
-
-            # --- tier 4: uploaded documents --------------------------------
-            documents = self._from_documents(db, ticker)
-            if documents is not None:
-                attempted.append({"provider": SOURCE_DOCUMENTS, "outcome": "served"})
-                return MarketDataResult(
-                    snapshot=documents, source=SOURCE_DOCUMENTS, attempted=attempted,
-                    latency_ms=(time.perf_counter() - started) * 1000,
-                )
-            attempted.append({"provider": SOURCE_DOCUMENTS, "outcome": "no_data"})
-
-        log.warning("no market data provider could serve", ticker=ticker,
+        log.warning("no provider could serve", ticker=resolved.canonical,
                     attempted=[a["provider"] for a in attempted])
+        empty = MarketSnapshot(ticker=resolved.canonical, source=SOURCE_NONE)
+        self._stamp(empty, resolved, SOURCE_NONE)
         return MarketDataResult(
-            snapshot=MarketSnapshot(ticker=ticker.upper(), source=SOURCE_NONE),
-            source=SOURCE_NONE, attempted=attempted,
+            snapshot=empty, source=SOURCE_NONE, attempted=attempted,
             latency_ms=(time.perf_counter() - started) * 1000,
+            resolved=resolved,
+        )
+
+    def _try(self, provider, resolved, attempted: list, **kwargs):
+        """One external provider. Returns None when the router should move on."""
+        if not provider.configured():
+            attempted.append({"provider": provider.name, "outcome": "skipped",
+                              "reason": "not configured"})
+            return None
+        if not provider.available:
+            attempted.append({"provider": provider.name, "outcome": "skipped",
+                              "reason": "circuit open"})
+            return None
+
+        call_started = time.perf_counter()
+        try:
+            snapshot, raw = provider.fetch(resolved.canonical, **kwargs)
+            if not snapshot.has_quote and snapshot.filled_sections == 0:
+                raise ProviderError("returned nothing usable")
+            provider.record(ok=True, ms=(time.perf_counter() - call_started) * 1000)
+            attempted.append({"provider": provider.name, "outcome": "served"})
+            return snapshot, raw
+        except (ProviderAuthError, ProviderNotConfigured) as exc:
+            outcome, reason = "auth_failed", str(exc)
+        except ProviderRateLimited as exc:
+            outcome, reason = "rate_limited", str(exc)
+        except SymbolNotFound as exc:
+            outcome, reason = "not_covered", str(exc)
+        except ProviderError as exc:
+            outcome, reason = "failed", str(exc)
+        except Exception as exc:  # noqa: BLE001 - never let one provider crash the router
+            outcome, reason = "error", f"{type(exc).__name__}: {exc}"
+
+        provider.record(ok=False, ms=(time.perf_counter() - call_started) * 1000)
+        attempted.append({"provider": provider.name, "outcome": outcome,
+                          "reason": reason[:160]})
+        return None
+
+    @staticmethod
+    def _stamp(snapshot: MarketSnapshot, resolved, source: str) -> None:
+        """Attach provenance, and score how complete the answer is."""
+        from datetime import datetime, timezone
+
+        currency = (snapshot.profile.currency or resolved.currency or "USD").upper()
+        snapshot.profile.currency = currency
+
+        # Confidence: how much of what was asked for arrived, discounted for
+        # answering from a fallback rather than the primary. Reported rather
+        # than hidden so a thin answer is visibly thin.
+        completeness = min(snapshot.filled_sections / 6.0, 1.0)
+        tier_weight = {
+            SOURCE_INTERNAL: 0.75, SOURCE_DOCUMENTS: 0.5, SOURCE_NONE: 0.0,
+        }.get(source, 1.0 if source == (
+            "Finnhub" if resolved.is_us else "Financial Modeling Prep"
+        ) else 0.85)
+
+        snapshot.meta = ProviderMetadata(
+            provider=source,
+            currency=currency,
+            exchange=snapshot.profile.exchange or resolved.exchange,
+            market=resolved.market,
+            timezone=resolved.timezone,
+            last_updated=datetime.now(timezone.utc).isoformat(),
+            confidence=round(completeness * tier_weight, 3),
         )
 
     # -- lower tiers ------------------------------------------------------
@@ -287,10 +350,18 @@ class MarketDataRouter:
             from app.data.providers.base import CompanyProfile, Quote
 
             snapshot = MarketSnapshot(ticker=ticker.upper(), source=SOURCE_INTERNAL)
+            # The platform's own column is denominated in ₹ crore, whereas
+            # `market_cap` on the snapshot is absolute units in the listing's
+            # currency — the formatter divides. Passing the crore figure
+            # straight through rendered "₹1,990,820.00" instead of
+            # "₹19.91 lakh crore": right number, wrong scale, and the reader
+            # cannot tell which they are looking at.
+            crore = company.market_cap
             snapshot.profile = CompanyProfile(
                 name=company.name, exchange=company.exchange, currency="INR",
                 industry=company.industry, sector=company.sector,
-                market_cap=company.market_cap,
+                market_cap=(crore * 1e7) if crore else None,
+                market_cap_crore=crore,
             )
             snapshot.quote = Quote(price=company.current_price)
             snapshot.unavailable.append(

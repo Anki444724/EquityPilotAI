@@ -16,6 +16,7 @@ from typing import Any
 
 import structlog
 
+from app.data.providers.currency import to_crore
 from app.data.providers.base import (
     BaseMarketProvider, CompanyProfile, MarketSnapshot, ProviderAuthError,
     ProviderError, ProviderNotConfigured, Quote, RetryPolicy, SymbolNotFound,
@@ -119,18 +120,23 @@ class FinnhubProvider(BaseMarketProvider):
 
         profile = usable("profile")
         if profile:
+            # Finnhub reports both in millions of the listing currency.
+            # Scaled to absolute units and left in that currency: the caller
+            # formats it, because only the currency knows whether "crore" or
+            # "billion" is the right word.
             cap = to_float(profile.get("marketCapitalization"), zero_is_absent=True)
             shares = to_float(profile.get("shareOutstanding"), zero_is_absent=True)
+            currency = (profile.get("currency") or "").upper() or None
+            absolute_cap = cap * 1e6 if cap else None
             snapshot.profile = CompanyProfile(
                 name=profile.get("name") or None,
                 exchange=profile.get("exchange") or None,
-                currency=profile.get("currency") or None,
+                currency=currency,
                 industry=profile.get("finnhubIndustry") or None,
                 website=profile.get("weburl") or None,
-                market_cap=round(cap * _MILLIONS_TO_CRORE, 2) if cap else None,
-                shares_outstanding=(
-                    round(shares * _MILLIONS_TO_CRORE, 4) if shares else None
-                ),
+                market_cap=absolute_cap,
+                market_cap_crore=to_crore(absolute_cap, currency or ""),
+                shares_outstanding=shares * 1e6 if shares else None,
             )
         else:
             snapshot.unavailable.append("company profile")

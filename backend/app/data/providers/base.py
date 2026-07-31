@@ -102,9 +102,46 @@ class CompanyProfile:
     sector: str | None = None
     description: str | None = None
     website: str | None = None
-    #: ₹ crore, the platform's unit throughout.
+    #: In the listing's own currency, unscaled. Formatting into crore,
+    #: billions or 兆 is a presentation decision made against the currency —
+    #: dividing a USD figure by a crore produced "489,721 cr" for Apple,
+    #: which is arithmetically defensible and semantically nonsense.
     market_cap: float | None = None
+    #: Convenience for the Indian pipeline, which is denominated in ₹ crore
+    #: throughout. None for any other currency, so a caller cannot mistake a
+    #: foreign figure for an Indian one.
+    market_cap_crore: float | None = None
+    currency: str = "USD"
     shares_outstanding: float | None = None
+
+
+@dataclass(slots=True)
+class ProviderMetadata:
+    """Provenance carried by every response.
+
+    Not decoration: a USD price and an INR price differ by two orders of
+    magnitude, and a figure from the platform's own database can be weeks
+    older than a live quote. A reader comparing two numbers has to be able to
+    tell which is which without inspecting the code that produced them.
+    """
+
+    provider: str = "Unavailable"
+    currency: str = "USD"
+    exchange: str | None = None
+    market: str | None = None
+    timezone: str | None = None
+    last_updated: str | None = None
+    #: 0-1. How much of what was asked for actually arrived, discounted when
+    #: the answer came from a fallback tier rather than the primary.
+    confidence: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider, "currency": self.currency,
+            "exchange": self.exchange, "market": self.market,
+            "timezone": self.timezone, "last_updated": self.last_updated,
+            "confidence_score": round(self.confidence, 3),
+        }
 
 
 @dataclass(slots=True)
@@ -113,6 +150,7 @@ class MarketSnapshot:
 
     ticker: str
     source: str = "Unavailable"
+    meta: ProviderMetadata = field(default_factory=ProviderMetadata)
     profile: CompanyProfile = field(default_factory=CompanyProfile)
     quote: Quote = field(default_factory=Quote)
     key_metrics: dict[str, Any] = field(default_factory=dict)
@@ -182,6 +220,36 @@ class BaseMarketProvider(ABC):
     def reset_circuit(self) -> None:
         self._consecutive_rate_limits = 0
 
+    # -- health telemetry -------------------------------------------------
+    def record(self, *, ok: bool, ms: float) -> None:
+        """Remember the outcome, for /providers/health."""
+        from datetime import datetime, timezone
+
+        self._calls = getattr(self, "_calls", 0) + 1
+        self._total_ms = getattr(self, "_total_ms", 0.0) + ms
+        if ok:
+            self._last_success = datetime.now(timezone.utc).isoformat()
+        else:
+            self._failures = getattr(self, "_failures", 0) + 1
+
+    def health(self) -> dict[str, Any]:
+        calls = getattr(self, "_calls", 0)
+        failures = getattr(self, "_failures", 0)
+        return {
+            "provider": self.name,
+            "configured": self.configured(),
+            "circuit_open": not self.available,
+            "calls": calls,
+            "failures": failures,
+            "average_response_ms": (
+                round(getattr(self, "_total_ms", 0.0) / calls, 1) if calls else None
+            ),
+            "last_successful_request": getattr(self, "_last_success", None),
+            "rate_limit_remaining": getattr(self, "_rate_remaining", None),
+            "timeout_seconds": self.policy.timeout_seconds,
+            "retry_attempts": self.policy.attempts,
+        }
+
     @abstractmethod
     def configured(self) -> bool:
         """Are credentials present? Never returns the credential itself."""
@@ -228,6 +296,9 @@ class BaseMarketProvider(ABC):
                 with urllib.request.urlopen(
                     request, timeout=self.policy.timeout_seconds,
                 ) as response:
+                    remaining = response.headers.get("X-Ratelimit-Remaining")
+                    if remaining is not None:
+                        self._rate_remaining = remaining
                     payload = json.load(response)
                 self._consecutive_rate_limits = 0
                 return payload

@@ -20,6 +20,7 @@ from typing import Any
 
 import structlog
 
+from app.data.providers.currency import to_crore
 from app.data.providers.base import (
     BaseMarketProvider, CompanyProfile, MarketSnapshot, ProviderAuthError,
     ProviderError, ProviderNotConfigured, ProviderRateLimited, Quote,
@@ -184,15 +185,19 @@ class FMPProvider(BaseMarketProvider):
                 profile.get("marketCap") or profile.get("mktCap"),
                 zero_is_absent=True,
             )
+            currency = (profile.get("currency") or "").upper() or None
             snapshot.profile = CompanyProfile(
                 name=profile.get("companyName") or None,
                 exchange=profile.get("exchange") or profile.get("exchangeFullName"),
-                currency=profile.get("currency") or None,
+                currency=currency,
                 industry=profile.get("industry") or None,
                 sector=profile.get("sector") or None,
                 description=(profile.get("description") or "")[:600] or None,
                 website=profile.get("website") or None,
-                market_cap=round(cap / _CRORE, 2) if cap else None,
+                # FMP reports absolute units already. Kept as-is, in the
+                # listing's own currency.
+                market_cap=cap,
+                market_cap_crore=to_crore(cap, currency or ""),
             )
             # `/stable/profile` carries the last price, change and volume.
             # That matters on the free plan, where `/stable/quote` is

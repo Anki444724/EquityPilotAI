@@ -66,13 +66,23 @@ class TestAbsentVersusZero:
 
 
 class TestUnitConversion:
-    def test_finnhub_millions_become_crore(self):
+    def test_finnhub_millions_become_absolute_units_in_native_currency(self):
+        """No longer forced into crore: the currency decides the scale."""
         snapshot = FinnhubProvider.parse("RELIANCE.NS", {"profile": FINNHUB_PROFILE})
-        assert snapshot.profile.market_cap == pytest.approx(174_962.1)
+        assert snapshot.profile.market_cap == pytest.approx(1_749_621e6)
+        assert snapshot.profile.currency == "INR"
+        # INR, so the crore convenience is populated.
+        assert snapshot.profile.market_cap_crore == pytest.approx(174_962.1)
 
-    def test_fmp_absolute_units_become_crore(self):
+    def test_a_usd_listing_gets_no_crore_figure(self):
+        usd = dict(FINNHUB_PROFILE, currency="USD")
+        snapshot = FinnhubProvider.parse("AAPL", {"profile": usd})
+        assert snapshot.profile.market_cap_crore is None
+
+    def test_fmp_absolute_units_are_preserved(self):
         snapshot = FMPProvider.parse("RELIANCE.NS", {"profile": FMP_PROFILE})
-        assert snapshot.profile.market_cap == pytest.approx(1_769_778.21, rel=1e-6)
+        assert snapshot.profile.market_cap == pytest.approx(17_697_782_146_242)
+        assert snapshot.profile.market_cap_crore == pytest.approx(1_769_778.21, rel=1e-6)
 
     def test_fmp_stable_renamed_market_cap(self):
         """`/stable` calls it marketCap; v3 called it mktCap. Read both."""
@@ -129,6 +139,7 @@ class TestErrorHandling:
                                  "current subscription"}
 
         class FakeResponse:
+            headers: dict[str, str] = {}
             def read(self): return json.dumps(body).encode()
             def __enter__(self): return self
             def __exit__(self, *a): return False
@@ -387,3 +398,140 @@ class TestSymbolNormalisation:
             assert (FinnhubProvider.to_symbol(ticker)
                     == FMPProvider.to_symbol(ticker)
                     == YahooProvider.to_symbol(ticker))
+
+
+class TestCurrencyHandling:
+    """MKT-003: every large figure was divided by a crore.
+
+    Apple's market capitalisation rendered as "489,721 cr" — arithmetically
+    defensible, semantically nonsense, and impossible for a reader to catch
+    because the number looks plausible.
+    """
+
+    def test_each_currency_uses_its_own_scale(self):
+        from app.data.providers.currency import format_money
+
+        assert format_money(17_697_782_146_242, "INR") == "₹17.70 lakh crore"
+        assert format_money(1_749_621e7, "INR").endswith("lakh crore")
+        assert format_money(4_897_205_110_000, "USD") == "$4.90T"
+        assert format_money(2.4e12, "EUR") == "€2.40T"
+        assert format_money(8.9e11, "GBP") == "£890.00B"
+        assert "兆" in format_money(3.1e14, "JPY")
+
+    def test_us_figures_are_never_labelled_crore(self):
+        from app.data.providers.currency import format_money
+
+        for amount in (1e9, 4.9e12, 5e11):
+            assert "crore" not in format_money(amount, "USD")
+
+    def test_crore_conversion_refuses_foreign_currency(self):
+        """Returning a number would let a USD figure pass as Indian."""
+        from app.data.providers.currency import to_crore
+
+        assert to_crore(1e12, "INR") == pytest.approx(100_000.0)
+        assert to_crore(1e12, "USD") is None
+        assert to_crore(None, "INR") is None
+
+    def test_market_is_resolved_from_the_suffix(self):
+        from app.data.providers.currency import resolve_market
+
+        assert resolve_market("RELIANCE.NS")[2] == "INR"
+        assert resolve_market("AAPL")[2] == "USD"
+        assert resolve_market("BARC.L")[2] == "GBP"
+        assert resolve_market("7203.T")[3] == "Asia/Tokyo"
+
+    def test_the_provider_currency_wins_over_the_suffix_table(self):
+        from app.data.providers.currency import resolve_market
+
+        _, _, currency, _ = resolve_market("AAPL", provider_currency="usd")
+        assert currency == "USD"
+
+
+class TestSymbolResolver:
+    """MKT-002 hardened into a first-class resolver."""
+
+    def test_the_briefs_examples(self):
+        from app.data.providers.symbols import resolve
+
+        assert resolve("AAPL").display == "NASDAQ:AAPL"
+        assert resolve("AAPL").finnhub == "AAPL"
+        assert resolve("AAPL").fmp == "AAPL"
+        assert resolve("RELIANCE").canonical == "RELIANCE.NS"
+        assert resolve("TCS").canonical == "TCS.NS"
+        assert resolve("INFY").canonical == "INFY.NS"
+
+    def test_us_symbols_never_receive_the_nse_suffix(self):
+        from app.data.providers.symbols import resolve
+
+        for ticker in ("AAPL", "MSFT", "NVDA", "GOOGL", "TSLA"):
+            assert not resolve(ticker).canonical.endswith(".NS")
+            assert resolve(ticker).is_us
+
+    def test_venue_prefixes_are_understood(self):
+        from app.data.providers.symbols import resolve
+
+        assert resolve("NASDAQ:AAPL").canonical == "AAPL"
+        assert resolve("NSE:RELIANCE").canonical == "RELIANCE.NS"
+
+    def test_a_suffix_is_never_doubled(self):
+        from app.data.providers.symbols import resolve
+
+        assert resolve("RELIANCE.NS").canonical == "RELIANCE.NS"
+        assert resolve("BARC.L").canonical == "BARC.L"
+
+
+class TestProviderMetadata:
+    def test_every_required_field_is_present(self):
+        from app.data.providers.base import ProviderMetadata
+
+        payload = ProviderMetadata().as_dict()
+        for field_name in ("provider", "currency", "exchange", "market",
+                           "timezone", "last_updated", "confidence_score"):
+            assert field_name in payload
+
+    def test_confidence_is_bounded(self):
+        from app.data.providers.base import MarketSnapshot
+        from app.data.providers.router import MarketDataRouter
+        from app.data.providers.symbols import resolve
+
+        snapshot = MarketSnapshot(ticker="AAPL")
+        snapshot.quote.price = 100.0
+        MarketDataRouter._stamp(snapshot, resolve("AAPL"), "Finnhub")
+        assert 0.0 <= snapshot.meta.confidence <= 1.0
+        assert snapshot.meta.market == "United States"
+        assert snapshot.meta.timezone == "America/New_York"
+
+
+class TestMarketAwareRouting:
+    def test_indian_listings_prefer_the_internal_pipeline(self):
+        from app.data.providers.router import MarketDataRouter
+        from app.data.providers.symbols import resolve
+
+        chain = MarketDataRouter()._chain_for(resolve("RELIANCE.NS"))
+        assert chain[0] == "internal"
+        assert chain.index("internal") < chain.index("external")
+
+    def test_us_listings_prefer_the_external_providers(self):
+        from app.data.providers.router import MarketDataRouter
+        from app.data.providers.symbols import resolve
+
+        chain = MarketDataRouter()._chain_for(resolve("AAPL"))
+        assert chain[0] == "external"
+
+
+class TestProviderHealth:
+    def test_telemetry_is_recorded(self):
+        provider = FinnhubProvider()
+        provider.record(ok=True, ms=120.0)
+        provider.record(ok=False, ms=80.0)
+        health = provider.health()
+        assert health["calls"] == 2
+        assert health["failures"] == 1
+        assert health["average_response_ms"] == pytest.approx(100.0)
+        assert health["last_successful_request"]
+
+    def test_health_never_leaks_a_credential(self):
+        for provider in (FinnhubProvider(), FMPProvider(), YahooProvider()):
+            rendered = str(provider.health())
+            assert "apikey" not in rendered.lower()
+            assert "token" not in rendered.lower()

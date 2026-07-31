@@ -11,6 +11,7 @@ comparing two numbers must be able to tell which is which.
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -49,6 +50,63 @@ def providers(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
     tiers.append({"priority": len(tiers) + 1, "name": SOURCE_DOCUMENTS,
                   "configured": True, "available": True})
     return {"tiers": tiers, "cache": cache().stats()}
+
+
+@router.get("/providers/health", summary="Provider health")
+def providers_health(
+    probe: bool = Query(default=False, description="Make one live call per provider"),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Reachability, authentication, rate limit, latency, last success.
+
+    `probe=false` reports what has been observed so far and costs nothing.
+    `probe=true` makes one real call per provider, which is the only way to
+    distinguish "configured" from "actually working" — but it spends quota,
+    so it is opt-in rather than the default.
+    """
+    from app.data.providers.base import (
+        ProviderAuthError, ProviderError, ProviderNotConfigured,
+    )
+
+    engine = get_router()
+    report: list[dict[str, Any]] = []
+    for provider in engine.providers:
+        entry = provider.health()
+        entry["reachable"] = None
+        entry["authenticated"] = None
+        if probe and provider.configured():
+            started = time.perf_counter()
+            try:
+                provider.fetch("AAPL", include_news=False,
+                               include_history=False, include_earnings=False)
+                entry.update(reachable=True, authenticated=True)
+            except ProviderAuthError:
+                entry.update(reachable=True, authenticated=False)
+            except (ProviderNotConfigured,):
+                entry.update(reachable=None, authenticated=False)
+            except ProviderError as exc:
+                # Reached it and got a considered answer; the failure is
+                # about coverage or the plan, not connectivity.
+                entry.update(reachable=True, authenticated=True,
+                             probe_note=str(exc)[:120])
+            except Exception as exc:  # noqa: BLE001
+                entry.update(reachable=False, authenticated=None,
+                             probe_note=f"{type(exc).__name__}: {exc}"[:120])
+            entry["probe_ms"] = round((time.perf_counter() - started) * 1000, 1)
+        report.append(entry)
+
+    for name in (SOURCE_INTERNAL, SOURCE_DOCUMENTS):
+        report.append({"provider": name, "configured": True,
+                       "circuit_open": False, "reachable": True,
+                       "authenticated": True})
+
+    healthy = sum(1 for r in report if r.get("configured")
+                  and not r.get("circuit_open"))
+    return {
+        "status": "ok" if healthy else "degraded",
+        "providers": report,
+        "cache": cache().stats(),
+    }
 
 
 @router.get("/market/cache", summary="Market cache statistics")
