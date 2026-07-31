@@ -123,6 +123,35 @@ Plus platform seed data: 4 plans, 3 tenants, 9 users, 19,677 price rows.
 | **DEP-004** | Edge returned `502 Application failed to respond` while the container was healthy | Service domain targeted port 8000; uvicorn bound Railway's injected `PORT=8080` | Pinned `PORT=8000` to match the domain |
 | **DEP-005** | Frontend logged `✓ Ready` then `1/1 replicas never became healthy` | Next's standalone server reads `process.env.HOSTNAME \|\| '0.0.0.0'`, and Docker sets `HOSTNAME` to the container ID — so it bound to that name instead of all interfaces | `ENV HOSTNAME=0.0.0.0` in the runtime stage |
 | **DEP-006** | Frontend would have shipped calling `localhost:8000` | `NEXT_PUBLIC_*` is inlined at *build* time; with no `/frontend/railway.toml`, Railway used Railpack and never passed the Docker ARG | Added `frontend/railway.toml` with `[build.args]` |
+| **FE-001** | "Cannot reach the API. Start the backend on port 8000" and "No companies match 'TCS'" | The frontend **never authenticated**. It was built against `AUTH_DEV_MODE=true`, where every caller is a super admin, so it had no sign-in at all | `request()` now sends credentials; added `AuthProvider`, a sign-in screen, and a session gate |
+| **FE-002** | Dashboard stayed empty after signing in, until a manual reload | Queries that ran while anonymous cached their 401s; React Query never retried them | Invalidate all queries on sign-in and session restore; clear the cache on sign-out |
+
+### FE-001 in detail — the reported failure
+
+The environment variables were **not** baked incorrectly. The deployed bundle
+contained the production API host and zero `localhost:8000` references, and
+CORS was correct. The real fault was that the client had no way to
+authenticate:
+
+1. `request()` — used by the dashboard, the company list and search — sent no
+   credentials at all. Only `authed()` attached the `Authorization` header.
+2. `authApi.login` and `setSession` existed but were **never called**: a grep
+   across `src/app` and `src/components` returned nothing. There was no
+   sign-in UI, so the in-memory access token stayed `null` forever.
+3. Every call therefore returned `401`, and the dashboard rendered any error
+   as "Start the backend on port 8000" — a connectivity message for an
+   authentication failure. Search hit the same 401 and rendered its empty
+   state, "No companies match 'TCS'".
+
+This was invisible in development because `AUTH_DEV_MODE=true` treats every
+caller as a super admin. Production correctly enforces authentication, which
+exposed the gap.
+
+**An honest note on my earlier verification.** I previously observed these
+401s and judged them "correct for an anonymous visitor". That was wrong: I had
+proved the *backend* worked by calling it with `curl` and a bearer token,
+never that the *product* worked. A user who cannot sign in has no way to stop
+being anonymous. The authenticated harness now drives the real UI.
 
 ### DEP-005 in detail
 
@@ -190,6 +219,18 @@ An authenticated harness, because a `401` proves the guard and not the module.
 | 8 · Portfolio | Transaction → FIFO holding replayed from ledger, ₹1,200.50 average cost, live P&L, score and intrinsic value joined in |
 | 9 · Reports | 17 sections, 1,982 words, 7 charts, 11 tables, **100 % citation coverage (18/18)**; **51-page PDF** and valid `.docx` downloaded |
 | 10 · Tenancy | Tenant admin reachable; operator console correctly refused |
+
+### Frontend, verified in a real browser (post-fix)
+
+| Check | Result |
+|---|---|
+| Anonymous `/dashboard` | Sign-in screen shown; no "port 8000" message |
+| Sign in through the form | `POST /auth/login` → **200**, `/auth/me` → **200** |
+| Dashboard **without** reload | **136 companies · 136 with financials · 28 sectors · 42,565 data points** |
+| Search "TCS" | **1 matching company — Tata Consultancy Services Ltd**, ₹2,432.00, ₹8.80 L Cr |
+| Drill into TCS | Company page renders real financials |
+| Session across reload | Survives via the httpOnly refresh cookie |
+| All 8 authenticated pages | Render, no stale errors, no 5xx |
 
 ### Frontend, verified in a real browser
 
