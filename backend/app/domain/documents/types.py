@@ -69,6 +69,53 @@ EXTENSION_MAP: dict[str, FileFormat] = {
 }
 
 
+class DocumentStatus(StrEnum):
+    """Lifecycle of an uploaded document.
+
+    Previously these were bare strings written at four call sites, which is
+    how a document could be marked "ready" while holding zero chunks. The
+    vocabulary is now declared once and the transitions are checked.
+
+    UPLOADED is distinct from QUEUED on purpose: the bytes are durably stored
+    the moment the request returns, before any job exists. If enqueueing
+    itself fails the document is still safe on disk and can be retried, which
+    is the whole point of storing the original.
+    """
+
+    UPLOADED = "uploaded"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    OCR_COMPLETE = "ocr_complete"
+    CHUNKED = "chunked"
+    EMBEDDED = "embedded"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}
+
+    @property
+    def is_indexed(self) -> bool:
+        """Is this document usable by search and the AI layer?"""
+        return self is DocumentStatus.COMPLETED
+
+
+#: Fraction complete when a status is reached, for the progress bar. Parsing
+#: and OCR dominate a scanned report, so the early stages carry most of the
+#: weight; embedding is fast by comparison.
+STATUS_PROGRESS: dict[DocumentStatus, float] = {
+    DocumentStatus.UPLOADED: 0.0,
+    DocumentStatus.QUEUED: 0.02,
+    DocumentStatus.PROCESSING: 0.05,
+    DocumentStatus.OCR_COMPLETE: 0.45,
+    DocumentStatus.CHUNKED: 0.70,
+    DocumentStatus.EMBEDDED: 0.90,
+    DocumentStatus.COMPLETED: 1.0,
+    DocumentStatus.FAILED: 1.0,
+}
+
+
 class ProcessingStage(StrEnum):
     """The pipeline stages, in execution order.
 

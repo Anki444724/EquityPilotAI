@@ -103,6 +103,15 @@ async def lifespan(app: FastAPI):
 
         start_in_process(SessionLocal)
 
+        # Document ingestion runs its own loop. Long jobs — a 1000-page
+        # scanned report can take minutes — must not sit in the same queue as
+        # second-scale work like notifications, or one report blocks it all.
+        from app.services.documents.worker import (
+            start_in_process as start_document_worker,
+        )
+
+        start_document_worker(SessionLocal)
+
     yield
 
     # Flush whatever the collector is still holding, so the last minute of a
@@ -114,7 +123,12 @@ async def lifespan(app: FastAPI):
         db.close()
 
     if settings.WORKER_ENABLED or settings.SCHEDULER_ENABLED:
+        from app.services.documents.worker import (
+            stop_in_process as stop_document_worker,
+        )
         from app.services.platform.jobs.worker import stop_in_process
+
+        stop_document_worker()
 
         stop_in_process()
 

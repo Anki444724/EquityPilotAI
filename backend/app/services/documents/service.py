@@ -67,6 +67,10 @@ logger = logging.getLogger(__name__)
 #: without letting a mis-click consume the disk.
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
+#: Terminal-success statuses. "completed" is current; "ready" is the
+#: pre-migration spelling retained so an upgraded database keeps working.
+INDEXED_STATUSES = frozenset({"completed", "ready"})
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -465,7 +469,7 @@ class DocumentService:
         query = (
             select(DocumentChunk, Document)
             .join(Document, DocumentChunk.document_id == Document.id)
-            .where(Document.status == "ready")
+            .where(Document.status.in_(INDEXED_STATUSES))
         )
         if company_id is not None:
             query = query.where(Document.company_id == company_id)
@@ -522,7 +526,7 @@ class DocumentService:
         query = (
             select(DocumentChunk)
             .join(Document, DocumentChunk.document_id == Document.id)
-            .where(Document.status == "ready")
+            .where(Document.status.in_(INDEXED_STATUSES))
         )
         if company_id is not None:
             query = query.where(Document.company_id == company_id)
@@ -722,7 +726,7 @@ class DocumentService:
             "coverage": round(len(best) / FIELD_COUNT, 4) if FIELD_COUNT else 0.0,
             "avg_confidence": round(sum(best.values()) / len(best), 4) if best else 0.0,
             "documents": len(documents),
-            "documents_ready": sum(1 for d in documents if d.status == "ready"),
+            "documents_ready": sum(1 for d in documents if d.status in INDEXED_STATUSES),
             "categories": per_category,
         }
 

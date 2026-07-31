@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.documents.types import (
     DocumentType, EntityKind, FileFormat, RelationKind, SectionKind,
@@ -85,13 +85,28 @@ class DocumentDetail(DocumentSummary):
     #: `Base.metadata` is SQLAlchemy's own MetaData object, so a field simply
     #: named `metadata` with from_attributes=True picks that up instead and
     #: fails validation on every request.
+    #: Nullable on the model: under asynchronous ingestion the row is created
+    #: when the upload is accepted, before anything has been parsed, so a
+    #: queued document genuinely has no metadata yet. A plain default is not
+    #: enough — Pydantic only applies it when the attribute is absent, not
+    #: when it is present and None — so the None is coerced explicitly.
     doc_metadata: dict[str, str] = Field(
         default_factory=dict, serialization_alias="metadata",
     )
 
+    @field_validator("doc_metadata", mode="before")
+    @classmethod
+    def _default_metadata(cls, value: object) -> object:
+        return {} if value is None else value
+
 
 class UploadResponse(BaseModel):
-    """Result of an upload — including whether it was a duplicate."""
+    """Result of an upload.
+
+    Returned with 202 Accepted, not 201: the bytes are stored and the work is
+    queued, but parsing, OCR, chunking and embedding have not run yet. The
+    client polls `status_url` until `status` reaches "completed" or "failed".
+    """
 
     document: DocumentSummary
     #: "created", "duplicate" or "new_version".
@@ -99,6 +114,48 @@ class UploadResponse(BaseModel):
     duplicate_of: int | None = None
     superseded: int | None = None
     message: str
+    #: Ingestion job, absent for a byte-identical duplicate (nothing requeued).
+    job_id: int | None = None
+    #: Where to poll for progress.
+    status_url: str | None = None
+
+
+class ProcessingLogEntry(BaseModel):
+    """One line of the persisted processing log."""
+
+    at: str
+    stage: str
+    status: str
+    progress: float
+    message: str
+    ms: float = 0.0
+
+
+class DocumentStatusResponse(BaseModel):
+    """Live ingestion state, for polling after a 202."""
+
+    document_id: int
+    filename: str
+    status: str
+    stage: str
+    #: 0.0–1.0.
+    progress: float
+    #: Whole percent, for a progress bar.
+    progress_percent: int
+    attempts: int = 0
+    error: str | None = None
+    page_count: int = 0
+    chunk_count: int = 0
+    fact_count: int = 0
+    entity_count: int = 0
+    processing_ms: float = 0.0
+    #: True once search and the AI layer can use this document.
+    indexed: bool = False
+    #: True while the client should keep polling.
+    pending: bool = True
+    storage_key: str | None = None
+    storage_backend: str | None = None
+    log: list[ProcessingLogEntry] = []
 
 
 # ---------------------------------------------------------------------------

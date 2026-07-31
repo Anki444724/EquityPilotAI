@@ -81,6 +81,11 @@ class GroundedContext:
 #: Unit codes as stored by Module 7, rendered for the evidence block. Mapping
 #: rather than raw codes because "inr_cr" in a prompt invites the model to
 #: reproduce it verbatim in prose meant for a human.
+#: A document is usable by the analyst only when ingestion finished.
+#: "completed" is current; "ready" is the pre-migration spelling, retained so
+#: a database upgraded in place keeps serving its existing corpus.
+_INDEXED_STATUSES = frozenset({"completed", "ready"})
+
 _DOCUMENT_UNITS: dict[str, str] = {
     "inr_cr": "₹ cr", "inr_lakh": "₹ lakh", "inr_mn": "₹ mn",
     "inr_bn": "₹ bn", "inr": "₹", "percent": "%", "x": "x",
@@ -186,7 +191,10 @@ class ContextBuilder:
             context.unavailable.append("Uploaded documents (retrieval failed)")
             return
 
-        ready = [d for d in documents if d.status == "ready"]
+        # "completed" is the post-redesign terminal status; "ready" is the
+        # pre-migration spelling, still present in databases upgraded in
+        # place. Both mean the document is fully indexed and citable.
+        ready = [d for d in documents if d.status in _INDEXED_STATUSES]
         if not ready:
             context.unavailable.append(
                 "Uploaded filings, transcripts and rating reports "
@@ -279,6 +287,7 @@ class ContextBuilder:
 
     def _add_ratios(self, context: GroundedContext) -> None:
         from app.services.ratios.service import RatioService
+
 
         service = RatioService(
             self.analysis.incomes, self.analysis.balances, self.analysis.cash_flows

@@ -18,10 +18,23 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Callable, Protocol
+
+
+class ProgressCallback(Protocol):
+    """Called as each pipeline stage completes.
+
+    Signature: (stage_name, fraction_complete, detail) -> None. Deliberately
+    a plain callable rather than a class: the orchestrator stays free of any
+    dependency on the database, the job queue or the worker, which is what
+    lets it run unchanged in a unit test.
+    """
+
+    def __call__(self, stage: str, fraction: float, detail: str = "") -> None: ...
 
 from app.domain.documents.types import (
-    Chunk, DetectedSection, DocumentType, ExtractedEntity, ExtractedTable,
-    FileFormat, ParsedDocument, ProcessingStage, content_hash,
+    PIPELINE_STAGES, Chunk, DetectedSection, DocumentType, ExtractedEntity,
+    ExtractedTable, FileFormat, ParsedDocument, ProcessingStage, content_hash,
 )
 from app.services.documents.extractors import office, pdf  # noqa: F401  (register)
 from app.services.documents.extractors.base import DocumentParser, parse_document
@@ -130,8 +143,20 @@ class IngestionPipeline:
         company_ticker: str | None = None,
         doc_type: DocumentType | None = None,
         build_graph: bool = True,
+        progress: ProgressCallback | None = None,
     ) -> IngestionResult:
+        """Run every stage.
+
+        `progress` is invoked as each stage completes, carrying the stage name,
+        the fraction done and a short detail line. The background worker uses
+        it to advance the document's status and append to its processing log,
+        so a 900-page report reports "OCR complete, 412 of 900 pages" while it
+        is still running rather than only when it finishes. It is optional:
+        tests and the re-index path call `run` without one.
+        """
         timings: list[StageTiming] = []
+        total_stages = len(PIPELINE_STAGES) or 1
+        completed = 0
 
         def stage(name: ProcessingStage):
             """Context manager recording elapsed time for one stage."""
@@ -142,8 +167,19 @@ class IngestionPipeline:
                     return self_inner
 
                 def __exit__(self_inner, *exc):
+                    nonlocal completed
                     elapsed = (time.perf_counter() - self_inner.start) * 1000.0
                     timings.append(StageTiming(name, elapsed))
+                    completed += 1
+                    if progress is not None and not any(exc):
+                        try:
+                            progress(
+                                name.value, min(completed / total_stages, 0.99),
+                                f"{name.value} finished in {elapsed:.0f} ms",
+                            )
+                        except Exception:  # noqa: BLE001
+                            # Progress reporting must never break ingestion.
+                            pass
                     return False
 
             return _Timer()

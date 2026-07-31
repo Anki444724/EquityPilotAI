@@ -104,7 +104,7 @@ def handle_document_processing(db: Session, payload: dict[str, Any]) -> dict[str
     document = db.get(Document, document_id)
     if document is None:
         return {"skipped": True, "reason": "document no longer exists"}
-    if document.status == "ready" and not payload.get("force"):
+    if document.status in {"completed", "ready"} and not payload.get("force"):
         return {"skipped": True, "reason": "already processed"}
 
     spool = Path(payload.get("spool_path") or "")

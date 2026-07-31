@@ -30,30 +30,40 @@ import time
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status,
 )
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.security import CurrentUser, get_current_user
 from app.db.base import get_db
 from app.domain.documents.fields import FIELD_COUNT, FIELD_SPECS, FieldCategory
 from app.domain.documents.types import (
-    DocumentError, DocumentType, EntityKind, PIPELINE_STAGES, ParseFailure,
-    ProcessingStage, RelationKind, SectionKind, UnsupportedFormat,
+    DocumentError, DocumentStatus, DocumentType, EntityKind, PIPELINE_STAGES,
+    ParseFailure, ProcessingStage, RelationKind, SectionKind, UnsupportedFormat,
 )
 from app.models.document import Document, DocumentJob
 from app.schemas.document import (
     CapabilitiesResponse, CategoryCoverage, ChunkOut, CitationOut,
     CoverageResponse, DocumentDetail, DocumentSummary, EntityOut, FactOut,
     FieldSpecOut, GraphResponse, JobOut, PageOut, ReindexResponse,
-    SearchHitOut, SearchResponse, SectionOut, StatisticsResponse, TableOut,
-    UploadResponse,
+    DocumentStatusResponse, ProcessingLogEntry, SearchHitOut, SearchResponse,
+    SectionOut, StatisticsResponse, TableOut, UploadResponse,
 )
 from app.services.documents.extractors.base import registered_formats
 from app.services.documents.extractors.ocr import OcrEngine
 from app.services.documents.pipeline.search import verify_answer_citations
+from app.services.documents.ingestion import (
+    DocumentIngestionService, IngestionError,
+)
 from app.services.documents.service import MAX_UPLOAD_BYTES, DocumentService
+from app.services.documents.storage import StorageError, get_storage, iter_stream
 
 router = APIRouter(tags=["documents"])
+
+
+def _ingestion(db: Session = Depends(get_db)) -> DocumentIngestionService:
+    """Async ingestion service. Sync dependency: the auth and DB layers are
+    synchronous, and an async dependency doing sync DB work blocks the loop."""
+    return DocumentIngestionService(db)
 
 
 def _service(db: Session = Depends(get_db)) -> DocumentService:
@@ -78,28 +88,43 @@ def _detail(service: DocumentService, document: Document) -> DocumentDetail:
 @router.post(
     "/documents/upload",
     response_model=UploadResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload and ingest a document",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload a document and queue it for ingestion",
 )
 async def upload_document(
     company_id: str = Form(...),
     file: UploadFile = File(...),
     doc_type: DocumentType | None = Form(default=None),
-    process: bool = Form(default=True),
-    service: DocumentService = Depends(_service),
+    ingestion: DocumentIngestionService = Depends(_ingestion),
     user: CurrentUser = Depends(get_current_user),
 ) -> UploadResponse:
-    payload = await file.read()
+    """Validate, store the bytes, create the row, enqueue — then return.
+
+    **202 Accepted, not 201 Created.** Nothing has been parsed when this
+    returns. Ingesting a 500–1000 page annual report takes minutes and cannot
+    happen inside an HTTP request: the edge proxy times out long before, and
+    the client is left unable to discover the outcome of work that may still
+    be running. The response carries `status_url`; poll it until `pending`
+    is false.
+
+    The upload is streamed to storage rather than read into memory, so a
+    200 MB report costs a buffer, not 200 MB of resident set.
+    """
+    declared = None
+    length = file.headers.get("content-length") if file.headers else None
+    if length and length.isdigit():
+        declared = int(length)
+
     try:
-        outcome = service.upload(
-            company_id, payload, file.filename or "upload",
-            doc_type=doc_type, uploaded_by=user.id, process=process,
+        accepted = ingestion.accept(
+            company_id, file.file, file.filename or "upload",
+            doc_type=doc_type, uploaded_by=user.id, declared_size=declared,
         )
     except UnsupportedFormat as exc:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc))
-    except ParseFailure as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
-    except DocumentError as exc:
+    except StorageError as exc:
+        raise HTTPException(status.HTTP_507_INSUFFICIENT_STORAGE, str(exc))
+    except (IngestionError, DocumentError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
     messages = {
@@ -111,14 +136,131 @@ async def upload_document(
             "A new version of an existing document. The previous version is "
             "retained and marked superseded so earlier citations still resolve."
         ),
-        "created": "Document ingested.",
+        "created": (
+            "Upload stored and queued for ingestion. Poll status_url for "
+            "progress."
+        ),
     }
     return UploadResponse(
-        document=DocumentSummary.model_validate(outcome.document),
-        action=outcome.action,
-        duplicate_of=outcome.duplicate_of,
-        superseded=outcome.superseded,
-        message=messages[outcome.action],
+        document=DocumentSummary.model_validate(accepted.document),
+        action=accepted.action,
+        duplicate_of=accepted.duplicate_of,
+        superseded=accepted.superseded,
+        message=messages[accepted.action],
+        job_id=accepted.job_id,
+        status_url=f"/api/v1/documents/{accepted.document.id}/status",
+    )
+
+
+@router.get(
+    "/documents/{document_id}/status",
+    response_model=DocumentStatusResponse,
+    summary="Ingestion progress for one document",
+)
+def document_status(
+    document_id: int,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> DocumentStatusResponse:
+    """Poll target for the 202. Cheap enough to call every second."""
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown document")
+
+    state = DocumentStatus(document.status) if document.status in {
+        s.value for s in DocumentStatus
+    } else None
+    return DocumentStatusResponse(
+        document_id=document.id,
+        filename=document.filename,
+        status=document.status,
+        stage=document.stage,
+        progress=round(document.progress, 4),
+        progress_percent=int(round(document.progress * 100)),
+        attempts=document.attempts,
+        error=document.error,
+        page_count=document.page_count,
+        chunk_count=document.chunk_count,
+        fact_count=document.fact_count,
+        entity_count=document.entity_count,
+        processing_ms=document.processing_ms,
+        indexed=bool(state and state.is_indexed),
+        pending=not (state.is_terminal if state else False),
+        storage_key=document.storage_key,
+        storage_backend=document.storage_backend,
+        log=[ProcessingLogEntry(**e) for e in (document.processing_log or [])],
+    )
+
+
+@router.post(
+    "/documents/{document_id}/reprocess",
+    response_model=UploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Re-run ingestion from the stored original",
+)
+def reprocess_document(
+    document_id: int,
+    force: bool = Query(default=False),
+    ingestion: DocumentIngestionService = Depends(_ingestion),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> UploadResponse:
+    """Re-parse a document without asking anyone to upload it again.
+
+    This is what retaining the original buys. Changing the chunker, the OCR
+    settings or the embedding model, or recovering a failed run, re-reads the
+    stored bytes.
+    """
+    try:
+        job_id = ingestion.reprocess(document_id, force=force)
+    except IngestionError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+
+    document = db.get(Document, document_id)
+    return UploadResponse(
+        document=DocumentSummary.model_validate(document),
+        action="created",
+        message="Re-ingestion queued from the stored original.",
+        job_id=job_id,
+        status_url=f"/api/v1/documents/{document_id}/status",
+    )
+
+
+@router.get(
+    "/documents/{document_id}/source",
+    summary="Download the stored original",
+)
+def download_source(
+    document_id: int,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream the original file back.
+
+    Streamed in blocks so serving a 200 MB report does not materialise it in
+    memory, and so an auditor can verify a citation against the actual page.
+    """
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown document")
+    if not document.storage_key:
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            "this document predates source retention; no original is stored",
+        )
+    storage = get_storage()
+    try:
+        handle = storage.open(document.storage_key)
+    except StorageError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+
+    return StreamingResponse(
+        iter_stream(handle),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{document.filename}"',
+            "Content-Length": str(document.size_bytes),
+        },
     )
 
 
@@ -341,6 +483,10 @@ def reindex(
 ) -> ReindexResponse:
     """Re-embed stored chunks without re-parsing the source files."""
     started = time.perf_counter()
+    # Re-embeds stored chunks without re-parsing — the cheap path, correct
+    # when only the embedding model changed. To re-parse from the original
+    # bytes (new chunker, new OCR settings, or recovering a failed run) use
+    # POST /documents/{id}/reprocess, which re-reads the stored source.
     count = service.reindex(company_id)
     return ReindexResponse(
         reindexed_chunks=count,

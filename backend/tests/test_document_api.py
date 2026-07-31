@@ -60,9 +60,32 @@ def uploaded(api_client, company_id, corpus_bytes) -> dict[str, int]:
             data={"company_id": company_id},
             files={"file": (filename, payload, "application/pdf")},
         )
-        assert response.status_code == 201, response.text
+        # 202 Accepted: the bytes are stored and the job queued, but nothing
+        # has been parsed yet. The pipeline moved off the request path so a
+        # 1000-page report cannot time out the client.
+        assert response.status_code == 202, response.text
         ids[key] = response.json()["document"]["id"]
+
+    _drain_document_queue()
     return ids
+
+
+def _drain_document_queue() -> int:
+    """Run the background worker until the queue is empty.
+
+    The API no longer ingests inside the request, so a test that asserts on
+    chunks, facts or search results must first let the worker do the work.
+    """
+    from tests.conftest import TestingSession
+    from app.services.documents.worker import DocumentWorker
+
+    worker = DocumentWorker(TestingSession)
+    processed = 0
+    while worker.run_once():
+        processed += 1
+        if processed > 200:            # guard against a stuck job looping
+            break
+    return processed
 
 
 # ===========================================================================
@@ -73,7 +96,7 @@ class TestUpload:
         response = api_client.get(f"{BASE}/documents/{uploaded['annual_report']}")
         assert response.status_code == 200
         document = response.json()
-        assert document["status"] == "ready"
+        assert document["status"] == "completed"
         assert document["doc_type"] == "annual_report"
         assert document["period"] == "FY25"
         assert document["fiscal_year"] == 2025
@@ -104,7 +127,7 @@ class TestUpload:
                 )
             },
         )
-        assert response.status_code == 201
+        assert response.status_code == 202
         payload = response.json()
         assert payload["action"] == "duplicate"
         assert payload["duplicate_of"] == uploaded["annual_report"]
@@ -200,8 +223,10 @@ class TestUpload:
                 data={"company_id": company_id},
                 files={"file": (filename, payload, "application/octet-stream")},
             )
-            assert response.status_code == 201, f"{filename}: {response.text}"
-            assert response.json()["document"]["status"] == "ready", filename
+            assert response.status_code == 202, f"{filename}: {response.text}"
+            # 202 returns before ingestion runs, so the queued status is
+            # what the upload reports; the corpus fixture drains the worker.
+            assert response.json()["document"]["status"] == "queued", filename
 
 
 # ===========================================================================
@@ -570,7 +595,7 @@ class TestOperations:
         assert response.status_code == 200
         jobs = response.json()
         assert jobs
-        finished = [j for j in jobs if j["status"] == "ready"]
+        finished = [j for j in jobs if j["status"] in {"succeeded", "ready"}]
         assert finished
         assert finished[0]["duration_ms"] > 0
         assert finished[0]["timings"]

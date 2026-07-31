@@ -51,6 +51,20 @@ class Document(Base):
 
     #: SHA-256 of the raw upload. Identity for duplicate and version detection.
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    # --- durable storage of the original upload -------------------------
+    #: Key of the stored source bytes, e.g.
+    #: "documents/<company_id>/<sha256>.pdf". The original is retained for the
+    #: life of the document so a re-index can re-parse it and a failed
+    #: ingestion loses nothing. Nullable only so rows created before this
+    #: column existed remain readable — those cannot be re-indexed and say so.
+    storage_key: Mapped[str | None] = mapped_column(String(512), index=True)
+    #: Which backend holds the bytes ("local" or "s3"). Recorded so a database
+    #: restored against a different backend reports a mismatch rather than
+    #: silently 404ing on every read.
+    storage_backend: Mapped[str | None] = mapped_column(String(16))
+    #: Resolved path or URI at write time — for operators reading the table.
+    storage_location: Mapped[str | None] = mapped_column(String(1024))
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     #: Set when a newer version of the same logical document arrives. A
     #: superseded document is excluded from search but never deleted, so a
@@ -62,10 +76,18 @@ class Document(Base):
     period: Mapped[str | None] = mapped_column(String(16))
     fiscal_year: Mapped[int | None] = mapped_column(Integer)
 
-    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    status: Mapped[str] = mapped_column(String(20), default="uploaded", index=True)
     stage: Mapped[str] = mapped_column(String(20), default="queued")
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     error: Mapped[str | None] = mapped_column(Text)
+    #: Ordered processing log: one entry per stage transition, carrying the
+    #: stage, a message, elapsed milliseconds and a timestamp. Persisted with
+    #: the document rather than only emitted to stdout, because the question
+    #: "why does this 900-page report have no chunks?" is asked days later,
+    #: long after the container that processed it has gone.
+    processing_log: Mapped[list | None] = mapped_column(JSON)
+    #: Attempts made by the worker, mirrored from the job for display.
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     char_count: Mapped[int] = mapped_column(Integer, default=0)

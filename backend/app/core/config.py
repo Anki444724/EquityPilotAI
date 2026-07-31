@@ -97,6 +97,28 @@ class Settings(BaseSettings):
     #: the limit is shared across replicas rather than per-process.
     RATE_LIMIT_BACKEND: Literal["memory", "redis"] = "memory"
 
+    # --- document storage (Module 7) --------------------------------
+    #: "local" writes to DOCUMENT_STORAGE_PATH — a Railway Volume in
+    #: production. "s3" / "r2" / "minio" use the S3-compatible client.
+    #: The original upload is retained permanently: without it a re-index
+    #: cannot re-parse, and a failed ingestion loses the document.
+    DOCUMENT_STORAGE_BACKEND: Literal["local", "s3", "r2", "minio"] = "local"
+    #: Mount path of the Railway Volume attached to the API service.
+    DOCUMENT_STORAGE_PATH: str = "/data/documents"
+    DOCUMENT_S3_BUCKET: str | None = None
+    DOCUMENT_S3_ENDPOINT: str | None = None
+    DOCUMENT_S3_REGION: str | None = None
+    DOCUMENT_S3_ACCESS_KEY: str | None = None
+    DOCUMENT_S3_SECRET_KEY: str | None = None
+    #: Hard ceiling on a single upload. 500–1000 page annual reports with
+    #: scanned plates run to a few hundred megabytes.
+    DOCUMENT_MAX_UPLOAD_MB: int = 256
+    #: Refuse an upload when the volume would drop below this afterwards.
+    DOCUMENT_MIN_FREE_DISK_MB: int = 512
+    #: Retain the source bytes when a document row is deleted. Off by
+    #: default: a deliberate delete should not leave orphaned files.
+    DOCUMENT_KEEP_BYTES_ON_DELETE: bool = False
+
     # --- observability ----------------------------------------------------
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     LOG_FORMAT: Literal["json", "console"] = "console"
