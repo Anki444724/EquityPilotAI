@@ -86,26 +86,35 @@ class _Answering:
 class TestFallbackOrder:
     """PD-001 — the order is declared, not inherited from an import tuple."""
 
-    def test_gemini_precedes_openrouter(self):
-        assert FALLBACK_ORDER.index("Gemini") < FALLBACK_ORDER.index("OpenRouter")
+    def test_openrouter_precedes_gemini(self):
+        """Phase 1 reversal.
+
+        The order was Gemini-first, which in practice meant the platform
+        served template prose: the Gemini free tier spends its daily
+        generation quota within a few reports and 429s thereafter, so the
+        chain fell through to the offline composer for the rest of the day.
+        A provider that answers reliably belongs in front of one that answers
+        for the first few requests.
+        """
+        assert FALLBACK_ORDER.index("OpenRouter") < FALLBACK_ORDER.index("Gemini")
 
     def test_the_chain_follows_the_declared_order(self):
         # Deliberately registered in the wrong order to prove the sort runs.
         router = ProviderRouter(configs=_configured(claude, openrouter, gemini))
-        assert [c.name for c in router.chain()] == ["Gemini", "OpenRouter", "Claude"]
+        assert [c.name for c in router.chain()] == ["OpenRouter", "Gemini", "Claude"]
 
     def test_an_explicit_preference_overrides_the_default_order(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
-        assert router.chain(preferred="openrouter")[0].name == "OpenRouter"
+        assert router.chain(preferred="gemini")[0].name == "Gemini"
 
     def test_a_live_provider_always_outranks_the_offline_one(self):
         """The platform must never silently serve template output when a real
         model was available."""
         from app.services.ai.providers import mock
 
-        configs = _configured(gemini) + [mock.DEFAULTS]
+        configs = _configured(openrouter) + [mock.DEFAULTS]
         chain = ProviderRouter(configs=configs).chain()
-        assert chain[0].name == "Gemini"
+        assert chain[0].name == "OpenRouter"
         assert chain[-1].payload_shape == "offline"
 
     def test_an_unlisted_provider_sorts_last_rather_than_crashing(self):
@@ -124,37 +133,44 @@ class TestFallbackOrder:
         assert [c.name for c in ProviderRouter(configs=configs).chain()] == ["Gemini"]
 
 
-class TestGeminiToOpenRouterFallback:
-    """The hop the brief asks for, proven end to end."""
+class TestOpenRouterToGeminiFallback:
+    """The hop the brief asks for, proven end to end.
 
-    def test_openrouter_serves_when_gemini_is_out_of_quota(self):
+    Phase 1 reversed the direction: OpenRouter is the primary writing layer
+    and Gemini the standby, so the interesting hop is now OpenRouter down to
+    Gemini rather than the other way round.
+    """
+
+    def test_gemini_serves_when_openrouter_is_out_of_quota(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         dead = _Failing(RateLimitError(
-            "quota", provider="Gemini", retry_after=0.01, quota_exhausted=True,
+            "quota", provider="OpenRouter", retry_after=0.01,
+            quota_exhausted=True,
         ))
-        alive = _Answering("OpenRouter")
-        router.build = lambda c: dead if c.name == "Gemini" else alive
+        alive = _Answering("Gemini")
+        router.build = lambda c: dead if c.name == "OpenRouter" else alive
 
         response = asyncio.run(router.complete(_request(), use_cache=False))
-        assert response.provider == "OpenRouter"
-        assert response.fell_back_from == "Gemini"
+        assert response.provider == "Gemini"
+        assert response.fell_back_from == "OpenRouter"
 
     def test_the_fallback_is_recorded_not_hidden(self):
         """A caller must be able to tell it did not get its first choice."""
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         router.build = lambda c: (
-            _Failing(ProviderError("down", provider="Gemini", retryable=False))
-            if c.name == "Gemini" else _Answering("OpenRouter")
+            _Failing(ProviderError("down", provider="OpenRouter",
+                                   retryable=False))
+            if c.name == "OpenRouter" else _Answering("Gemini")
         )
         response = asyncio.run(router.complete(_request(), use_cache=False))
-        assert response.fell_back_from == "Gemini"
+        assert response.fell_back_from == "OpenRouter"
         assert router.ledger.fallbacks == 1
 
     def test_no_fallback_marker_when_the_first_choice_answers(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         router.build = lambda c: _Answering(c.name)
         response = asyncio.run(router.complete(_request(), use_cache=False))
-        assert response.provider == "Gemini"
+        assert response.provider == "OpenRouter"
         assert response.fell_back_from is None
 
     def test_the_whole_chain_is_exhausted_before_giving_up(self):
@@ -176,9 +192,10 @@ class TestQuotaAwareRetry:
     def test_an_exhausted_quota_is_not_retried(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         dead = _Failing(RateLimitError(
-            "quota", provider="Gemini", retry_after=0.01, quota_exhausted=True,
+            "quota", provider="OpenRouter", retry_after=0.01,
+            quota_exhausted=True,
         ))
-        router.build = lambda c: dead if c.name == "Gemini" else _Answering("OpenRouter")
+        router.build = lambda c: dead if c.name == "OpenRouter" else _Answering("Gemini")
         asyncio.run(router.complete(_request(), use_cache=False))
         assert dead.attempts == QUOTA_EXHAUSTED_ATTEMPTS == 1
 
@@ -187,9 +204,10 @@ class TestQuotaAwareRetry:
         provider that was merely busy for a second."""
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         dead = _Failing(RateLimitError(
-            "busy", provider="Gemini", retry_after=0.001, quota_exhausted=False,
+            "busy", provider="OpenRouter", retry_after=0.001,
+            quota_exhausted=False,
         ))
-        router.build = lambda c: dead if c.name == "Gemini" else _Answering("OpenRouter")
+        router.build = lambda c: dead if c.name == "OpenRouter" else _Answering("Gemini")
         asyncio.run(router.complete(_request(), use_cache=False))
         assert dead.attempts == MAX_ATTEMPTS == 3
 

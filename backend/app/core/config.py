@@ -163,6 +163,16 @@ class Settings(BaseSettings):
     MARKET_RETRY_ATTEMPTS: int = 3
 
     OPENROUTER_API_KEY: str | None = None
+    #: Model OpenRouter serves the writing layer with. Overridable without a
+    #: deploy because model availability on a given key changes underneath us:
+    #: several catalogue entries answer 404 "No endpoints found" depending on
+    #: the account's provider entitlements, and pinning that in code would
+    #: turn a supplier change into a release.
+    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+    #: Sent as HTTP-Referer / X-Title. OpenRouter attributes usage with these
+    #: and rate-limits anonymous traffic more aggressively.
+    OPENROUTER_SITE_URL: str = "https://frontend-production-1a313.up.railway.app"
+    OPENROUTER_APP_NAME: str = "EquityPilotAI"
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None

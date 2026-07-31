@@ -34,6 +34,8 @@ log = structlog.get_logger(__name__)
 class Section(StrEnum):
     """The sections of a research report, in the order they are written."""
 
+    EXECUTIVE_SUMMARY = "executive_summary"
+    CATALYSTS = "catalysts"
     BUSINESS_MODEL = "business_model"
     REVENUE_SEGMENTS = "revenue_segments"
     FINANCIAL_PERFORMANCE = "financial_performance"
@@ -140,6 +142,14 @@ ROUTES: tuple[SectionRoute, ...] = (
         "its financials?",
     ),
     SectionRoute(
+        Section.CATALYSTS, "Catalysts",
+        (Provider.RAG, Provider.MARKET_DATA, Provider.FILINGS,
+         Provider.FINANCIAL_DB),
+        SourceCategory.ANNUAL_REPORT,
+        "What identifiable events, announcements or trends could re-rate this "
+        "company over the next twelve months?",
+    ),
+    SectionRoute(
         Section.LATEST_NEWS, "Latest News",
         (Provider.MARKET_DATA, Provider.FILINGS),
         SourceCategory.MARKET_DATA,
@@ -191,9 +201,53 @@ ROUTES: tuple[SectionRoute, ...] = (
         "Weigh every preceding section and state a verdict.",
         synthesises=True,
     ),
+    # Executed last, presented first — see PRESENTATION_ORDER below.
+    SectionRoute(
+        Section.EXECUTIVE_SUMMARY, "Executive Summary",
+        (Provider.SYNTHESIS,),
+        SourceCategory.INTERNAL_DATABASE,
+        "State the investment case in five sentences: what the company does, "
+        "how it is performing, what it is worth, the single largest risk, and "
+        "the conclusion.",
+        synthesises=True,
+    ),
 )
 
 ROUTES_BY_SECTION: dict[Section, SectionRoute] = {r.section: r for r in ROUTES}
+
+#: The order a reader sees, which is not the order the sections are written.
+#:
+#: An executive summary that leads a report must be composed *after* the
+#: material it summarises, or it is a summary of nothing. `ROUTES` is
+#: therefore execution order and this is presentation order; the orchestrator
+#: sorts by this before returning. Getting these the same way round was the
+#: alternative — write the summary first from raw evidence — and it produces
+#: exactly the generic opening paragraph this platform exists to avoid.
+PRESENTATION_ORDER: tuple[Section, ...] = (
+    Section.EXECUTIVE_SUMMARY,
+    Section.BUSINESS_MODEL,
+    Section.REVENUE_SEGMENTS,
+    Section.FINANCIAL_PERFORMANCE,
+    Section.VALUATION,
+    Section.BULL_THESIS,
+    Section.BEAR_THESIS,
+    Section.RISKS,
+    Section.CATALYSTS,
+    Section.MANAGEMENT_COMMENTARY,
+    Section.LATEST_NEWS,
+    Section.QUALITY_SCORES,
+    Section.RISK_SCORES,
+    Section.INSTITUTIONAL_SCORE,
+    Section.INVESTMENT_VERDICT,
+)
+
+
+def presentation_rank(section: Section) -> int:
+    """Sort key for display order; unlisted sections fall to the end."""
+    try:
+        return PRESENTATION_ORDER.index(section)
+    except ValueError:
+        return len(PRESENTATION_ORDER)
 
 
 @dataclass(slots=True)
@@ -212,6 +266,22 @@ class SectionResult:
     attempted: list[dict[str, Any]] = field(default_factory=list)
     timestamp: str = ""
     evidence_count: int = 0
+
+    # --- writing layer -------------------------------------------------
+    # Deliberately distinct from `provider_used`, which names where the
+    # *evidence* came from. Conflating the two is how a reader ends up
+    # believing OpenRouter sourced the annual report. Both are reported:
+    # "Annual Report (RAG), written by OpenRouter/gpt-4o-mini" is the honest
+    # description of a section.
+    writer_provider: str = "none"
+    writer_model: str = "none"
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
     @property
     def has_evidence(self) -> bool:
@@ -247,6 +317,12 @@ class SectionResult:
             "timestamp": self.timestamp,
             "providers_attempted": self.attempted,
             "has_evidence": self.has_evidence,
+            "writer_provider": self.writer_provider,
+            "writer_model": self.writer_model,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "cost_usd": round(self.cost_usd, 6),
         }
 
 

@@ -17,8 +17,11 @@ import structlog
 from app.data.filings.base import SourceCategory
 from app.domain.ai.sourcing import SourceDirective, SourceScope
 from app.services.ai.orchestration import (
-    ROUTES, Provider, Section, SectionResult, SectionRoute, score_section,
-    select_evidence, utc_now,
+    ROUTES, Provider, Section, SectionResult, SectionRoute, presentation_rank,
+    score_section, select_evidence, utc_now,
+)
+from app.services.ai.section_writer import (
+    NO_EVIDENCE, SectionBrief, build_extra, looks_unevidenced,
 )
 
 log = structlog.get_logger(__name__)
@@ -46,9 +49,33 @@ class OrchestratedReport:
                 "confidence": round(s.confidence, 3),
                 "citations": len(s.citations),
                 "timestamp": s.timestamp,
+                # The evidence provider and the writer are different things
+                # and are reported separately; see `SectionResult`.
+                "written_by": s.writer_provider,
+                "model": s.writer_model,
             }
             for s in self.sections
         ]
+
+    @property
+    def total_tokens(self) -> int:
+        return sum(s.total_tokens for s in self.sections)
+
+    @property
+    def total_cost_usd(self) -> float:
+        return sum(s.cost_usd for s in self.sections)
+
+    def writer_mix(self) -> dict[str, int]:
+        """How many sections each *writing* provider produced.
+
+        The figure that shows at a glance whether the platform is serving
+        live prose or has quietly degraded to the offline composer — the
+        condition Phase 1 exists to end.
+        """
+        mix: dict[str, int] = {}
+        for section in self.sections:
+            mix[section.writer_provider] = mix.get(section.writer_provider, 0) + 1
+        return mix
 
     def provider_mix(self) -> dict[str, int]:
         """How many sections each provider answered.
@@ -73,6 +100,9 @@ class OrchestratedReport:
             "sections": [s.as_dict() for s in self.sections],
             "routing_table": self.routing_table(),
             "provider_mix": self.provider_mix(),
+            "writer_mix": self.writer_mix(),
+            "total_tokens": self.total_tokens,
+            "total_cost_usd": round(self.total_cost_usd, 6),
         }
 
 
@@ -106,6 +136,11 @@ class ReportOrchestrator:
             for citation in result.citations:
                 if citation.key not in {c.key for c in gathered}:
                     gathered.append(citation)
+
+        # Execution order is `ROUTES`; the reader's order is
+        # `PRESENTATION_ORDER`. The executive summary is written last, because
+        # it summarises the rest, and presented first.
+        results.sort(key=lambda r: presentation_rank(r.section))
 
         elapsed = (time.perf_counter() - started) * 1000
         report = OrchestratedReport(
@@ -144,44 +179,89 @@ class ReportOrchestrator:
         if not selected:
             # Reported, never omitted: a reader must be able to see that a
             # section was attempted and found nothing, which is itself a
-            # finding about the company's disclosure.
+            # finding about the company's disclosure. No model is called —
+            # there is nothing to write from, and asking a model to say
+            # nothing is a slower way of getting the same sentence with a
+            # fabrication risk attached.
             return SectionResult(
                 section=route.section, title=route.title,
-                content=(
-                    f"**No evidence available.** None of "
-                    f"{', '.join(p.value for p in route.providers)} holds "
-                    f"anything bearing on this section."
-                ),
+                content=NO_EVIDENCE,
                 provider_used=None, source_category=None, confidence=0.0,
                 attempted=attempted, timestamp=utc_now(),
+                writer_provider="none", writer_model="none",
             )
+
+        source_category = self._category(provider, route)
+        confidence = score_section(provider, selected)
 
         directive = SourceDirective(scope=SourceScope.HYBRID)
         restricted = self.analyst.context().with_citations(selected)
         restricted = restricted.restricted_to(route.kinds)
 
+        brief = SectionBrief(
+            title=route.title,
+            provider=provider.value if provider else "—",
+            source=source_category.value if source_category else "—",
+            confidence=confidence,
+            citations=tuple(selected[:8]),
+            ticker=self.analyst.context().ticker,
+            company=self.analyst.context().name or self.analyst.context().ticker,
+        )
+
         content = ""
+        writer_provider = "none"
+        writer_model = "none"
+        prompt_tokens = completion_tokens = 0
+        cost_usd = 0.0
         try:
             answer = await self.analyst.run(
                 "chat", question=route.prompt, source=directive,
-                context_override=restricted,
+                context_override=restricted, extra=build_extra(brief),
+                # Retrieval already ran above, against this section's own
+                # prompt, and its results are in `selected`. Letting the
+                # analyst retrieve again would re-admit document passages to
+                # sections whose route excludes them.
+                retrieve=False,
             )
-            content = answer.display_content or answer.content
+            content = (answer.display_content or answer.content or "").strip()
+            writer_provider = answer.provider
+            writer_model = answer.model
+            prompt_tokens = answer.prompt_tokens
+            completion_tokens = answer.completion_tokens
+            cost_usd = answer.cost_usd
         except TypeError:
             # The analyst does not accept an override on this path; compose
             # from the evidence directly rather than failing the section.
             content = self._compose(route, selected)
+            writer_provider = "deterministic-composer"
         except Exception as exc:  # noqa: BLE001 — one section must not fail the report
             log.warning("section failed", section=route.section.value,
                         error=str(exc)[:160])
             content = self._compose(route, selected)
+            writer_provider = "deterministic-composer"
+
+        if not content:
+            content = self._compose(route, selected)
+            writer_provider = "deterministic-composer"
+
+        # A writer that declined for want of evidence must not keep the
+        # confidence its provider would have earned. The provider did supply
+        # evidence — that is why we got here — but if the model judged it
+        # irrelevant to the section, presenting 0.93 confidence beside the
+        # sentence "no verified evidence available" is a contradiction the
+        # reader would be right to distrust.
+        if looks_unevidenced(content):
+            confidence = 0.0
 
         return SectionResult(
             section=route.section, title=route.title, content=content,
-            provider_used=provider, source_category=self._category(provider, route),
-            confidence=score_section(provider, selected),
+            provider_used=provider, source_category=source_category,
+            confidence=confidence,
             citations=selected[:8], attempted=attempted,
             timestamp=utc_now(), evidence_count=len(selected),
+            writer_provider=writer_provider, writer_model=writer_model,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
         )
 
     @staticmethod

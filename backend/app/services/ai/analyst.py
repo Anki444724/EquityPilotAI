@@ -102,6 +102,8 @@ class ResearchAnalyst:
         template: PromptTemplate | None = None,
         source: SourceDirective | None = None,
         context_override: GroundedContext | None = None,
+        extra: str = "",
+        retrieve: bool = True,
     ) -> AnalystResult:
         """Produce one grounded analysis.
 
@@ -109,6 +111,18 @@ class ResearchAnalyst:
         already restricted to one section's permitted sources, so a section
         about the business model cannot be answered from scoring output that
         happens to rank first.
+
+        `extra` is appended verbatim to the task block. The orchestrator uses
+        it to hand the model the section's provenance — which provider served
+        the evidence, at what confidence, and with which page references — so
+        the writer can state its own sourcing instead of the surrounding code
+        stapling a provenance footer onto prose that never mentioned it.
+
+        `retrieve=False` suppresses the per-question RAG call. The orchestrator
+        has already retrieved against the section's own prompt and restricted
+        the context accordingly; retrieving again here would re-admit document
+        passages to a section whose route excludes them, quietly defeating the
+        restriction that `context_override` was passed to impose.
         """
         prompt_template = template or get_prompt(capability)
         context = context_override if context_override is not None else self.context()
@@ -125,7 +139,17 @@ class ResearchAnalyst:
         #
         # Retrieval runs per question, before the prompt is built, because the
         # relevant passages depend on what was asked. Cached context cannot.
-        retrieved = self._retrieve(question, capability)
+        #
+        # ORCH-001. This unconditionally re-admitted document passages to a
+        # context the caller had already restricted. The report orchestrator
+        # hands in `context_override` precisely to confine a section to its
+        # route's sources — Financial Performance to the financial database,
+        # for instance — and this line then put RAG passages back in front of
+        # the model for every section, because retrieval is keyed on the
+        # question text and every section prompt is question text. The
+        # restriction was real when the context was built and gone by the time
+        # the prompt was assembled.
+        retrieved = self._retrieve(question, capability) if retrieve else []
         if retrieved:
             context = context.with_citations(retrieved)
 
@@ -164,6 +188,7 @@ class ResearchAnalyst:
         built = self.prompts.build(
             prompt_template, context, question=question, memory=memory, style=style,
             include_history=capability == Capability.CHAT.value,
+            extra=extra,
         )
 
         log.info(

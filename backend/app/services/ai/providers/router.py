@@ -20,7 +20,7 @@ import json
 import random
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from app.domain.ai.types import (
     CompletionRequest, CompletionResponse, NoProviderConfigured, ProviderError,
@@ -35,15 +35,22 @@ PROVIDER_MODULES = (openrouter, openai, claude, gemini)
 
 #: Declared fallback order, most preferred first.
 #:
-#: The brief asks for Gemini → OpenRouter. Before this existed the chain was
-#: whatever order `PROVIDER_MODULES` happened to be written in, which put
-#: OpenRouter first by accident rather than by decision. An ordering that
-#: matters commercially should not be a side effect of an import tuple.
+#: An ordering that matters commercially should not be a side effect of an
+#: import tuple, which is what it was before this constant existed.
+#:
+#: **Phase 1 reversal — OpenRouter now leads, Gemini follows.** The earlier
+#: order put Gemini first, and in practice that meant the platform served
+#: template prose: the Gemini free tier's daily generation quota is spent
+#: within a handful of reports, every subsequent call returns 429 with a
+#: QuotaFailure detail, and the chain fell through to the offline provider.
+#: A provider that answers reliably belongs ahead of one that answers for the
+#: first few requests of the day. Gemini is retained immediately behind it, so
+#: an OpenRouter outage still reaches a live model before the template.
 #:
 #: A provider absent from this list still works — it sorts after everything
 #: named here — so adding a vendor module does not require editing the order
 #: unless it needs a specific position.
-FALLBACK_ORDER: tuple[str, ...] = ("Gemini", "OpenRouter", "OpenAI", "Claude")
+FALLBACK_ORDER: tuple[str, ...] = ("OpenRouter", "Gemini", "OpenAI", "Claude")
 
 MAX_ATTEMPTS = 3
 BASE_BACKOFF_SECONDS = 0.5
@@ -206,12 +213,15 @@ class ProviderRouter:
             out.append(mock.DEFAULTS)
         for module in PROVIDER_MODULES:
             base = module.DEFAULTS
-            out.append(ProviderConfig(
-                name=base.name, endpoint=base.endpoint, auth_header=base.auth_header,
-                payload_shape=base.payload_shape, response_path=base.response_path,
-                default_model=base.default_model, api_key=keys.get(base.name),
-                input_cost_per_m=base.input_cost_per_m,
-                output_cost_per_m=base.output_cost_per_m,
+            # A vendor module may declare deployment-supplied fields (model,
+            # attribution headers). Merged here rather than read inside the
+            # module so the router remains the only place a registry row is
+            # assembled, and the API key never leaves this function.
+            overrides = {}
+            if hasattr(module, "overrides"):
+                overrides = module.overrides(settings)
+            out.append(replace(
+                base, api_key=keys.get(base.name), **overrides,
             ))
         return out
 

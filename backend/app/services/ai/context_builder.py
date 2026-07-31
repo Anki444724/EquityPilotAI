@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+import structlog
+
 from app.domain.ai.types import Citation, EvidenceKind
 from app.domain.calc import safe_div
 from app.domain.forecast.assumptions import Scenario
@@ -23,6 +25,8 @@ from app.services.analysis_service import AnalysisService
 from app.services.forecast.service import ForecastService
 from app.services.scoring.service import ScoringService
 from app.services.valuation.service import ValuationService
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -233,7 +237,19 @@ class ContextBuilder:
                 company.id, include_superseded=False,
             )
         except Exception:  # pragma: no cover - the AI layer must never 500
-            context.unavailable.append("Uploaded documents (retrieval failed)")
+            # Logged, not merely recorded as a gap. This branch swallowed a
+            # schema error for an entire session — the documents table was
+            # behind a migration — and the only visible symptom was the line
+            # below appearing in every prompt. A caught exception that leaves
+            # no trace in the logs turns a five-minute fix into an
+            # investigation of the model's behaviour.
+            log.exception(
+                "document context unavailable", company_id=company.id,
+            )
+            context.unavailable.append(
+                "Uploaded documents could not be read (platform error, not an "
+                "absence of documents)"
+            )
             return
 
         # "completed" is the post-redesign terminal status; "ready" is the

@@ -42,6 +42,15 @@ class ProviderConfig:
     input_cost_per_m: float = 0.0
     output_cost_per_m: float = 0.0
     enabled: bool = True
+    #: Non-auth headers a provider requires, as an immutable tuple of pairs.
+    #:
+    #: A tuple rather than a dict because `ProviderConfig` is frozen and
+    #: hashable, and a dict field would break that. Introduced for OpenRouter,
+    #: which attributes usage via `HTTP-Referer` and `X-Title` and rate-limits
+    #: unattributed traffic harder. These could not travel in `auth_header`:
+    #: that string is parsed by partitioning on the first `:`, so a value that
+    #: is itself a URL is truncated at `https`.
+    extra_headers: tuple[tuple[str, str], ...] = ()
 
     @property
     def configured(self) -> bool:
@@ -100,8 +109,10 @@ class LLMProvider(ABC):
     def extract_usage(self, body: dict) -> TokenUsage: ...
 
     def build_headers(self, model: str) -> dict[str, str]:
-        """Headers from the registry's auth column."""
+        """Headers from the registry's auth column, plus any extras."""
         headers = {"Content-Type": "application/json"}
+        for name, value in self.config.extra_headers:
+            headers[name] = self.config.expand(value, model)
         auth = self.config.auth_header or ""
         if "key in URL" in auth:
             return headers
