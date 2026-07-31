@@ -23,7 +23,7 @@ interface AuthState {
   /** True until the initial refresh attempt settles, so the UI can avoid
    *  flashing a sign-in screen at a user who is already signed in. */
   initialising: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (identifier: string, password: string, rememberMe?: boolean) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -65,8 +65,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    await authApi.login(email, password);
+  const signIn = useCallback(async (
+    identifier: string, password: string, rememberMe = false,
+  ) => {
+    await authApi.login(identifier, password, rememberMe);
     setUser(await authApi.me());
     // Every query that ran while the user was anonymous resolved to a 401 and
     // is now cached as an error. React Query will not retry them on its own,

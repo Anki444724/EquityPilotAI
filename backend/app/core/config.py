@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "ierp"
     ACCESS_TOKEN_TTL_SECONDS: int = 900            # 15 minutes
     REFRESH_TOKEN_TTL_SECONDS: int = 2_592_000     # 30 days
+    #: Refresh cookie lifetime when the user ticks "remember me". Applies to
+    #: the cookie only; the access token's TTL is unchanged.
+    REMEMBER_ME_TTL_SECONDS: int = 7_776_000       # 90 days
     #: Native email/OAuth/magic-link authentication. When False the platform
     #: falls back to the labelled development identity, exactly as Modules
     #: 1-9 behaved, so nothing already built stops working.

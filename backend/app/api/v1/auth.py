@@ -33,7 +33,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import (
-    APIRouter, Cookie, Depends, HTTPException, Request, Response, status,
+    APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status,
 )
 from sqlalchemy.orm import Session
 
@@ -50,11 +50,13 @@ from app.schemas.platform import (
     AuthConfig, LoginRequest, MagicLinkRequest, MessageResponse,
     PasswordChangeRequest, PasswordPolicyOut, PasswordResetConfirm,
     PasswordResetRequest, RefreshRequest, RegisterRequest, SessionUser,
-    TokenRequest, TokenResponse,
+    TokenRequest, TokenResponse, UsernameAvailability,
 )
 from app.services.platform import rate_limit
 from app.services.platform.audit_service import AuditService, RequestContext
 from app.services.platform.email import EmailService
+from app.domain.platform.identity import display_name
+from app.domain.platform.limits import normalise_username, username_problems
 from app.services.platform.identity_service import (
     AuthError, AuthOutcome, IdentityService, PendingToken, RegistrationError,
     ReuseDetected,
@@ -115,10 +117,15 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 def _token_response(
     outcome: AuthOutcome, response: Response, *, include_refresh: bool,
+    remember_me: bool = False,
 ) -> TokenResponse:
-    _set_refresh_cookie(
-        response, outcome.tokens.refresh_token, outcome.tokens.refresh_expires_in,
-    )
+    # "Remember me" extends only the refresh cookie. The access token's short
+    # life is deliberately untouched: a month-long bearer token that cannot be
+    # revoked is a far worse trade than asking the browser to refresh.
+    max_age = outcome.tokens.refresh_expires_in
+    if remember_me:
+        max_age = max(max_age, settings.REMEMBER_ME_TTL_SECONDS)
+    _set_refresh_cookie(response, outcome.tokens.refresh_token, max_age)
     return TokenResponse(
         access_token=outcome.tokens.access_token,
         expires_in=outcome.tokens.expires_in,
@@ -208,12 +215,45 @@ def me(
         provider=str(user.provider),
         email_verified=bool(record.email_verified_at) if record else True,
         mfa_enabled=bool(record and record.mfa_method != "none"),
+        username=record.username if record else None,
+        role_display=display_name(user.role.value),
     )
 
 
 # ===========================================================================
 # Registration
 # ===========================================================================
+@router.get(
+    "/username-available", response_model=UsernameAvailability,
+    summary="Is this username free?",
+)
+def username_available(
+    username: str = Query(min_length=1, max_length=64),
+    request: Request = None,  # type: ignore[assignment]
+    db: Session = Depends(get_db),
+) -> UsernameAvailability:
+    """Live check for the signup form.
+
+    Rate limited like any other unauthenticated endpoint: without that, this
+    is a free oracle for enumerating which handles exist. It reveals only
+    whether a *username* is taken — chosen and public, unlike an email — and
+    the signup form is unusable if it cannot say why a name was refused.
+    """
+    if request is not None:
+        _limit(request, "auth.username")
+    problems = username_problems(username)
+    if problems:
+        return UsernameAvailability(
+            username=username, available=False, problems=problems,
+        )
+    taken = IdentityService(db).by_username(username) is not None
+    return UsernameAvailability(
+        username=normalise_username(username),
+        available=not taken,
+        problems=["That username is already taken."] if taken else [],
+    )
+
+
 @router.post(
     "/register", response_model=MessageResponse,
     status_code=status.HTTP_201_CREATED, summary="Create an account",
@@ -238,6 +278,7 @@ def register(
         user, pending = service.register(
             email=payload.email, password=payload.password,
             name=payload.name, organisation=payload.organisation,
+            username=payload.username,
         )
     except RegistrationError as exc:
         if str(exc) == "__exists__":
@@ -331,13 +372,13 @@ def login(
 
     try:
         outcome = service.authenticate(
-            email=payload.email, password=payload.password,
+            email=payload.login_id, password=payload.password,
             ip_address=context.ip_address, user_agent=context.user_agent,
         )
     except AuthError as exc:
         audit.record(
             AuditAction.LOGIN_FAILED, outcome="failure",
-            actor_email=payload.email, summary=str(exc), context=context,
+            actor_email=payload.login_id, summary=str(exc), context=context,
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
@@ -346,7 +387,10 @@ def login(
         principal=outcome.principal, summary="Signed in with password",
         context=context,
     )
-    return _token_response(outcome, response, include_refresh=False)
+    return _token_response(
+        outcome, response, include_refresh=False,
+        remember_me=payload.remember_me,
+    )
 
 
 @router.post("/logout", response_model=MessageResponse, summary="Sign out")

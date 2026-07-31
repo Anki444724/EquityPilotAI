@@ -267,6 +267,50 @@ def normalise_email(email: str) -> str:
     return email.strip().lower()
 
 
+#: Reserved handles. Claiming these lets someone impersonate the platform in
+#: any context that shows a username — a support thread, an audit line, an
+#: @mention — which is a social-engineering foothold rather than a cosmetic
+#: problem.
+RESERVED_USERNAMES = frozenset({
+    "admin", "administrator", "root", "superuser", "super_admin", "superadmin",
+    "system", "support", "help", "security", "billing", "api", "www", "mail",
+    "noreply", "no-reply", "postmaster", "webmaster", "moderator", "staff",
+    "official", "ierp", "equitypilot", "null", "undefined", "me", "self",
+})
+
+_USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{1,62}[a-z0-9])$")
+
+
+def normalise_username(username: str) -> str:
+    """Trimmed and lower-cased, so capitalisation cannot fork an identity."""
+    return (username or "").strip().lower()
+
+
+def username_problems(username: str) -> list[str]:
+    """Why this username is unacceptable. Empty list means it is fine.
+
+    Returns every problem rather than the first, so the signup form can show
+    the user everything to fix in one pass instead of one error per attempt.
+    """
+    handle = normalise_username(username)
+    problems: list[str] = []
+    if len(handle) < 3:
+        problems.append("Username must be at least 3 characters.")
+    if len(handle) > 64:
+        problems.append("Username must be at most 64 characters.")
+    if handle and not _USERNAME_RE.match(handle):
+        problems.append(
+            "Username may contain only letters, numbers, dots, hyphens and "
+            "underscores, and must start and end with a letter or number."
+        )
+    if handle in RESERVED_USERNAMES:
+        problems.append("That username is reserved.")
+    if "@" in handle:
+        # Otherwise a username could shadow someone else's email at login.
+        problems.append("Username may not contain '@'.")
+    return problems
+
+
 def slugify(value: str, *, max_length: int = 48) -> str:
     """Tenant slug: lower-case, alphanumeric and hyphens, no leading or
     trailing hyphen. Used in URLs and subdomains, so the character set is

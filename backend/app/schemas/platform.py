@@ -18,7 +18,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator,
+)
 
 from app.domain.platform.identity import Role, UserStatus
 from app.domain.platform.jobs import JobKind, JobStatus
@@ -57,15 +59,55 @@ class Page(BaseModel, Generic[T]):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=256)
+    #: Repeated by the signup form. Checked server-side as well as in the
+    #: browser: client-side validation is a convenience, never a control, and
+    #: this endpoint is reachable without the form.
+    confirm_password: str | None = Field(default=None, max_length=256)
     name: str = Field(min_length=1, max_length=160)
+    username: str | None = Field(default=None, max_length=64)
     #: Optional organisation name for the self-serve path. Absent means one is
     #: derived from the email domain.
     organisation: str | None = Field(default=None, max_length=160)
 
+    @model_validator(mode="after")
+    def _passwords_match(self) -> "RegisterRequest":
+        if self.confirm_password is not None and self.confirm_password != self.password:
+            raise ValueError("Passwords do not match.")
+        return self
+
+
+class UsernameAvailability(BaseModel):
+    """Whether a username may be claimed, and why not."""
+
+    username: str
+    available: bool
+    problems: list[str] = Field(default_factory=list)
+
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    """Sign in with either identifier.
+
+    `identifier` accepts an email address or a username. `email` is retained
+    so existing clients keep working; exactly one is required.
+    """
+
+    identifier: str | None = Field(default=None, max_length=254)
+    email: EmailStr | None = None
     password: str = Field(min_length=1, max_length=256)
+    #: Extends the refresh cookie's lifetime. The access token's short life is
+    #: unchanged — "remember me" must not mean "hold a valid bearer token for
+    #: a month".
+    remember_me: bool = False
+
+    @model_validator(mode="after")
+    def _one_identifier(self) -> "LoginRequest":
+        if not (self.identifier or self.email):
+            raise ValueError("Provide an email address or a username.")
+        return self
+
+    @property
+    def login_id(self) -> str:
+        return (self.identifier or str(self.email or "")).strip()
 
 
 class MagicLinkRequest(BaseModel):
@@ -123,6 +165,9 @@ class SessionUser(BaseModel):
     provider: str = "dev"
     email_verified: bool = True
     mfa_enabled: bool = False
+    username: str | None = None
+    #: "Premium User" rather than "subscriber" — the product vocabulary.
+    role_display: str | None = None
 
 
 class AuthConfig(BaseModel):

@@ -142,6 +142,13 @@ class User(Base):
     )
 
     email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True, index=True)
+    #: Optional second login identifier. Unique when set, and stored
+    #: lower-cased so "AnkitSingh" and "ankitsingh" cannot both be claimed —
+    #: a case-sensitive unique index invites impersonation. Nullable because
+    #: accounts created by invitation or OAuth may never choose one.
+    username: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True,
+    )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(500))

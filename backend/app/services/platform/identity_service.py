@@ -39,7 +39,7 @@ from app.domain.platform.identity import (
 )
 from app.domain.platform.limits import (
     DEFAULT_PASSWORD_POLICY, is_valid_email, normalise_email,
-    validate_password,
+    normalise_username, username_problems, validate_password,
 )
 from app.models.platform import (
     OneTimeToken, RefreshToken, Tenant, User, UserIdentity,
@@ -134,6 +134,19 @@ class IdentityService:
             select(User).where(User.email == normalise_email(email))
         )
 
+    def by_username(self, username: str) -> User | None:
+        """Look up by username, case-insensitively.
+
+        Usernames are persisted lower-cased, so this normalises the input the
+        same way rather than relying on the database's collation — which
+        differs between SQLite and Postgres and would make the behaviour
+        depend on the deployment.
+        """
+        handle = normalise_username(username)
+        if not handle:
+            return None
+        return self.db.scalar(select(User).where(User.username == handle))
+
     def by_id(self, user_id: str) -> User | None:
         return self.db.get(User, user_id)
 
@@ -174,6 +187,7 @@ class IdentityService:
         password: str,
         name: str,
         organisation: str | None = None,
+        username: str | None = None,
         tenant_id: int | None = None,
         role: Role = Role.ADMIN,
         auto_verify: bool = False,
@@ -198,6 +212,22 @@ class IdentityService:
         if problems:
             raise RegistrationError("Password does not meet the policy.", problems)
 
+        handle = normalise_username(username) if username else None
+        if handle:
+            # Unlike a duplicate email, a taken username *is* reported plainly.
+            # It is chosen, not secret, and a signup form that refuses without
+            # saying why is unusable — the user cannot guess what to change.
+            # Email stays neutral because it is an identifier the visitor may
+            # not own.
+            name_problems = username_problems(handle)
+            if name_problems:
+                raise RegistrationError("Username is not acceptable.", name_problems)
+            if self.by_username(handle) is not None:
+                raise RegistrationError(
+                    "That username is already taken.",
+                    ["Choose a different username."],
+                )
+
         if self.by_email(address) is not None:
             # Deliberately not an error the caller can distinguish. The router
             # returns the same body it returns for a genuine registration.
@@ -213,6 +243,7 @@ class IdentityService:
             id=crypto.new_id(),
             tenant_id=tenant_id,
             email=address,
+            username=handle,
             name=name.strip() or address.split("@")[0],
             role=role.value,
             status=(UserStatus.ACTIVE if auto_verify else UserStatus.PENDING).value,
@@ -286,10 +317,19 @@ class IdentityService:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> AuthOutcome:
-        """Email and password. Raises `AuthError` with a generic message on
-        every failure mode."""
-        address = normalise_email(email)
-        user = self.by_email(address)
+        """Email *or* username, plus password.
+
+        The parameter keeps its name for compatibility with existing callers;
+        the value may be either identifier. Failure is a generic `AuthError`
+        in every case — wrong username, wrong password, locked, suspended —
+        because distinguishing them tells an attacker which half to keep.
+        """
+        identifier = (email or "").strip()
+        user = (
+            self.by_email(normalise_email(identifier))
+            if "@" in identifier
+            else self.by_username(identifier)
+        )
 
         if user is None:
             # Burn comparable time so the absence of a user is not detectable

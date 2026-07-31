@@ -25,6 +25,11 @@ import { SignIn } from "./sign-in";
 //
 // They now resolve against the company the user is currently looking at, and
 // fall back to the company list when there is none.
+/** Roles that may see the tenant administration console. */
+const ADMIN_ROLES = ["super_admin", "admin"] as const;
+/** Cross-tenant operator console. Super admin only. */
+const OPERATOR_ROLES = ["super_admin"] as const;
+
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "d" },
   { href: "/companies", label: "Companies", icon: Building2, key: "c" },
@@ -40,13 +45,17 @@ const NAV = [
   // Module 10. The operator console is a separate entry rather than a tab
   // inside Administration: they answer to different permissions, and putting
   // them together invites someone to assume an org admin can reach both.
-  { href: "/admin", label: "Administration", icon: Settings },
-  { href: "/platform", label: "Platform Ops", icon: ShieldCheck },
+  // Admin-only. Hidden rather than shown-and-refused: the API enforces the
+  // permission regardless, so this is presentation, but offering a link that
+  // always 403s trains users to ignore errors.
+  { href: "/admin", label: "Administration", icon: Settings, roles: ADMIN_ROLES },
+  { href: "/platform", label: "Platform Ops", icon: ShieldCheck, roles: OPERATOR_ROLES },
 ] as const;
 
 /** Remembered across navigations so the research links stay usable after the
  *  user leaves the company pages. Session-scoped, not persisted. */
 const LAST_COMPANY_KEY = "ierp:last-company";
+
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -133,7 +142,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Link>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-          {NAV.map((item) => {
+          {NAV.filter((item) => {
+            const allowed = "roles" in item ? item.roles : null;
+            return !allowed || (sessionUser?.role
+              ? (allowed as readonly string[]).includes(sessionUser.role)
+              : false);
+          }).map((item) => {
             const segment = "perCompany" in item ? item.perCompany : null;
             // A per-company module points at the company in view; with none
             // chosen yet it sends the user to pick one rather than dead-ending.

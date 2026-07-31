@@ -112,6 +112,30 @@ class Role(StrEnum):
     GUEST = "guest"
 
 
+#: Display names for the four tiers the product speaks in. The internal
+#: vocabulary is unchanged — permissions are wired to these seven roles
+#: throughout — so this is a presentation mapping, not a second role system.
+#: Renaming the enum would mean a migration plus re-mapping every guarded
+#: route, for no change in behaviour.
+ROLE_DISPLAY_NAMES: dict[str, str] = {
+    Role.SUPER_ADMIN.value: "Super Admin",
+    Role.ADMIN.value: "Admin",
+    Role.ANALYST.value: "Analyst",
+    Role.RESEARCHER.value: "Researcher",
+    Role.SUBSCRIBER.value: "Premium User",
+    Role.READ_ONLY.value: "Free User",
+    Role.GUEST.value: "Guest",
+}
+
+#: Role assigned to a self-service signup. Free tier by default: an account
+#: that has not paid should not arrive holding a paid entitlement.
+SIGNUP_DEFAULT_ROLE = Role.READ_ONLY
+
+
+def display_name(role: str) -> str:
+    return ROLE_DISPLAY_NAMES.get(role, role.replace("_", " ").title())
+
+
 #: Seniority order, most senior first. Used for the monotonicity test and for
 #: "can this member manage that member" checks — you may not modify a peer or
 #: a senior.

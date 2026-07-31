@@ -839,3 +839,57 @@ class TestQueueDepth:
 
     def test_an_empty_queue_is_healthy(self):
         assert QueueDepth().is_healthy
+
+
+class TestUsernameIdentity:
+    """AUTH-001: username as a second login identifier."""
+
+    def test_reserved_and_malformed_usernames_are_refused(self):
+        from app.domain.platform.limits import username_problems
+
+        assert username_problems("ankitsingh") == []
+        assert username_problems("ok_name-1") == []
+        assert any("reserved" in p for p in username_problems("admin"))
+        assert username_problems("ab")            # too short
+        assert username_problems("has space")
+        assert username_problems("a" * 70)        # too long
+        assert any("@" in p for p in username_problems("looks@email"))
+
+    def test_usernames_are_case_folded(self):
+        """"AnkitSingh" and "ankitsingh" must be one identity, not two.
+
+        A case-sensitive unique index would let both be claimed, which is an
+        impersonation vector rather than a convenience.
+        """
+        from app.domain.platform.limits import normalise_username
+
+        assert normalise_username("  AnkitSingh ") == "ankitsingh"
+        assert normalise_username("ANKITSINGH") == normalise_username("ankitsingh")
+
+    def test_login_accepts_either_identifier(self):
+        from app.schemas.platform import LoginRequest
+
+        assert LoginRequest(identifier="ankitsingh", password="x").login_id == "ankitsingh"
+        assert LoginRequest(email="a@b.com", password="x").login_id == "a@b.com"
+        with pytest.raises(ValueError):
+            LoginRequest(password="x")          # neither supplied
+
+    def test_signup_rejects_mismatched_confirmation(self):
+        from app.schemas.platform import RegisterRequest
+
+        with pytest.raises(ValueError):
+            RegisterRequest(
+                email="a@b.com", password="Str0ng!Passw0rd",
+                confirm_password="different", name="A",
+            )
+
+    def test_admin_password_is_held_to_the_same_policy(self):
+        """The account most worth attacking gets no exemption."""
+        from app.domain.platform.limits import (
+            DEFAULT_PASSWORD_POLICY, validate_password,
+        )
+
+        assert validate_password(
+            "Ankit@987", policy=DEFAULT_PASSWORD_POLICY,
+            email="ankitsingh835141@gmail.com",
+        ), "a 9-character password must not pass a 10-character minimum"

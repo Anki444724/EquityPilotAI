@@ -579,15 +579,25 @@ export const authApi = {
       "/api/v1/auth/password-policy",
     ),
 
-  login: async (email: string, password: string) => {
+  /** `identifier` may be an email address or a username. */
+  login: async (identifier: string, password: string, rememberMe = false) => {
     const tokens = await authed<TokenResponse>("/api/v1/auth/login", {
-      method: "POST", body: JSON.stringify({ email, password }),
+      method: "POST",
+      body: JSON.stringify({ identifier, password, remember_me: rememberMe }),
     });
     setSession(tokens);
     return tokens;
   },
 
-  register: (body: { email: string; password: string; name: string; organisation?: string }) =>
+  usernameAvailable: (username: string) =>
+    request<{ username: string; available: boolean; problems: string[] }>(
+      `/api/v1/auth/username-available?username=${encodeURIComponent(username)}`,
+    ),
+
+  register: (body: {
+    email: string; password: string; name: string;
+    username?: string; confirm_password?: string; organisation?: string;
+  }) =>
     authed<{ message: string; dev_link: string | null }>("/api/v1/auth/register", {
       method: "POST", body: JSON.stringify(body),
     }),

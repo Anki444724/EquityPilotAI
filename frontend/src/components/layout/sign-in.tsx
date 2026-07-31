@@ -11,23 +11,51 @@
  */
 
 import { useAuth } from "./auth-provider";
-import { ApiError } from "@/lib/api";
-import { AlertCircle, LoaderCircle, LockKeyhole } from "lucide-react";
+import { SignUp } from "./sign-up";
+import { ApiError, authApi } from "@/lib/api";
+import { AlertCircle, CheckCircle2, LoaderCircle, LockKeyhole } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 export function SignIn() {
   const { signIn } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+
+  async function onForgot() {
+    if (!email.trim()) {
+      setError("Enter your email address first, then choose Forgot password.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await authApi.requestPasswordReset(email.trim());
+      // Deliberately neutral: the server does not reveal whether the address
+      // is registered, and neither should this screen.
+      setNotice(
+        result.message ??
+          "If that address is registered, we have sent a reset link.",
+      );
+      setMode("signin");
+    } catch {
+      setNotice("If that address is registered, we have sent a reset link.");
+      setMode("signin");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await signIn(email.trim(), password);
+      await signIn(email.trim(), password, rememberMe);
     } catch (err) {
       // Distinguish "wrong password" from "the API is unreachable" — the two
       // demand completely different actions from the user, and conflating
@@ -48,6 +76,15 @@ export function SignIn() {
     }
   }
 
+  if (mode === "signup") {
+    return (
+      <SignUp
+        onSignedUp={(message) => { setNotice(message); setMode("signin"); }}
+        onCancel={() => setMode("signin")}
+      />
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] px-4">
       <div className="w-full max-w-sm">
@@ -65,6 +102,13 @@ export function SignIn() {
           onSubmit={onSubmit}
           className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5"
         >
+          {notice && (
+            <div className="flex items-start gap-2 rounded border border-gain/40 bg-gain/10 p-2.5 text-xs text-gain">
+              <CheckCircle2 size={14} className="mt-px shrink-0" />
+              <span>{notice}</span>
+            </div>
+          )}
+
           {error && (
             <div className="flex items-start gap-2 rounded border border-loss/40 bg-loss/10 p-2.5 text-xs text-loss">
               <AlertCircle size={14} className="mt-px shrink-0" />
@@ -73,15 +117,17 @@ export function SignIn() {
           )}
 
           <label className="block">
-            <span className="mb-1 block text-xs text-[var(--text-muted)]">Email</span>
+            <span className="mb-1 block text-xs text-[var(--text-muted)]">
+              Email or username
+            </span>
             <input
-              type="email"
+              type="text"
               required
               autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2.5 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
-              placeholder="you@firm.com"
+              placeholder="you@firm.com or yourhandle"
             />
           </label>
 
@@ -98,6 +144,25 @@ export function SignIn() {
             />
           </label>
 
+          <div className="flex items-center justify-between">
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-muted)]">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-3 w-3 accent-[var(--accent)]"
+              />
+              Remember me
+            </label>
+            <button
+              type="button"
+              onClick={onForgot}
+              className="text-xs text-[var(--accent)] hover:underline"
+            >
+              Forgot password?
+            </button>
+          </div>
+
           <button
             type="submit"
             disabled={busy}
@@ -105,6 +170,14 @@ export function SignIn() {
           >
             {busy && <LoaderCircle size={14} className="animate-spin" />}
             {busy ? "Signing in…" : "Sign in"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setMode("signup"); setError(null); setNotice(null); }}
+            className="w-full text-center text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+          >
+            No account? Create one
           </button>
         </form>
       </div>
