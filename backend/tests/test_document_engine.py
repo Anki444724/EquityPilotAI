@@ -1484,3 +1484,67 @@ class TestPerformance:
         provider.embed(texts)
         elapsed = time.perf_counter() - started
         assert len(texts) / elapsed > 200
+
+
+class TestExtractionRegressions:
+    """Defects found while verifying the live ingestion pipeline."""
+
+    def test_headcount_is_not_read_from_a_date(self):
+        """DOC-001.
+
+        "Headcount at 31 March 2026 was 612,400" recorded 31 as the headcount:
+        the connective in the rule was optional, so "at" matched the date and
+        the day of the month was stored as a metric with 0.68 confidence — a
+        wrong number presented exactly like a right one.
+        """
+        from app.services.documents.pipeline.financials import PROSE_RULES
+
+        rule = next(r for r in PROSE_RULES if r.field_key == "employee_headcount")
+        cases = [
+            ("Headcount at 31 March 2026 was 612,400 associates.", "612,400"),
+            ("Headcount as on 31 December 2025 was 98,765.", "98,765"),
+            ("Total employees of 612,400 as at year end.", "612,400"),
+            ("Employee headcount stood at 612,400.", "612,400"),
+            ("Total workforce: 45,000", "45,000"),
+        ]
+        for text, expected in cases:
+            match = rule.pattern.search(text)
+            assert match is not None, text
+            assert match.group(rule.value_group) == expected, text
+
+    def test_placeholder_pdf_titles_are_rejected(self):
+        """DOC-002.
+
+        ReportLab and several print-to-PDF drivers stamp "untitled" into the
+        title field. Read literally, every citation drawn from an annual
+        report renders as "untitled p.1".
+        """
+        from app.services.documents.extractors.pdf import _clean_title
+
+        for placeholder in ("untitled", "  Untitled Document ", "unknown",
+                            "n/a", "report.pdf", ""):
+            assert _clean_title(placeholder) is None, placeholder
+        assert _clean_title("Integrated Annual Report FY2026") == (
+            "Integrated Annual Report FY2026"
+        )
+
+    def test_pdf_title_falls_back_to_the_first_line(self):
+        """With no usable metadata, the cover page's opening line is used."""
+        pytest.importorskip("reportlab")
+        pytest.importorskip("fitz")
+        import io
+
+        from reportlab.pdfgen import canvas
+
+        import app.services.documents.extractors.pdf  # noqa: F401  (registers)
+        from app.services.documents.extractors.base import parse_document
+
+        buffer = io.BytesIO()
+        pdf = canvas.Canvas(buffer)
+        pdf.drawString(70, 760, "Acme Industries Limited")
+        pdf.drawString(70, 740, "Annual Report FY2026")
+        pdf.showPage()
+        pdf.save()
+
+        parsed = parse_document(buffer.getvalue(), "acme.pdf")
+        assert parsed.title == "Acme Industries Limited"

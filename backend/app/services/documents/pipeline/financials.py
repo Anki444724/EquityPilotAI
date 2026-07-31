@@ -310,6 +310,15 @@ class ProseRule:
 
 _NUM = r"([\d,]+(?:\.\d+)?)"
 
+# Month names, used to stop a date being read as a figure. An annual report
+# says "Headcount at 31 March 2026 was 612,400", and a rule whose connective
+# is optional happily matches "at 31" and records the day of the month as the
+# headcount — a wrong number presented with the same confidence as a right one.
+_MONTH = (
+    r"january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+)
+
 PROSE_RULES: tuple[ProseRule, ...] = (
     ProseRule("revenue_growth_guidance",
               re.compile(rf"(?:revenue|topline|top-line|sales)\s+growth\s+"
@@ -539,10 +548,17 @@ PROSE_RULES: tuple[ProseRule, ...] = (
               re.compile(rf"total\s+borrowings\s+(?:are|is|were|was|of|stood\s+at|at)?"
                          rf"\s*(?:₹|rs\.?|inr)?\s*{_NUM}\s*(?:cr|crore)", re.I),
               confidence=0.74, value_group=1, unit_override=Unit.INR_CRORE),
+    # The "as at <date>" clause is matched and discarded before the number is
+    # read, and the figure must be a whole token that is not itself followed by
+    # a month. Without both guards "Headcount at 31 March 2026 was 612,400"
+    # extracts 31.
     ProseRule("employee_headcount",
               re.compile(rf"(?:total\s+(?:employees|workforce|headcount)|"
-                         rf"employee\s+headcount|headcount)\s+"
-                         rf"(?:of|is|was|stood\s+at|at)?\s*{_NUM}", re.I),
+                         rf"employee\s+headcount|headcount)"
+                         rf"(?:\s+(?:as\s+)?(?:at|on)\s+\d{{1,2}}\s+"
+                         rf"(?:{_MONTH})\w*\s+\d{{4}})?"
+                         rf"\s*(?:of|is|was|were|stood\s+at|at|:)?\s*"
+                         rf"\b{_NUM}\b(?!\s*(?:{_MONTH}))", re.I),
               confidence=0.68, value_group=1, unit_override=Unit.COUNT),
     ProseRule("capex_spent_to_date",
               re.compile(rf"capex\s+spent\s+to\s+date\s+(?:is|was|of|at)?\s*"

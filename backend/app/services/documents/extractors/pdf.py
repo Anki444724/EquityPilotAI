@@ -46,6 +46,28 @@ _NUMERIC_CELL = re.compile(
 )
 
 
+#: Metadata titles that carry no information. Many generators — ReportLab and
+#: several "print to PDF" drivers among them — stamp a placeholder into the
+#: title field rather than leaving it empty. Taken literally, an annual report
+#: is filed as "untitled" and every citation drawn from it reads
+#: "untitled p.1", which is worse than useless in a research note.
+_PLACEHOLDER_TITLES = frozenset({
+    "untitled", "untitled document", "unknown", "document", "no title",
+    "microsoft word document", "print", "pdf document", "-", "n/a", "none",
+})
+
+
+def _clean_title(raw: str | None) -> str | None:
+    """Return a meaningful title, or None so the caller can fall back."""
+    title = (raw or "").strip()
+    if not title:
+        return None
+    # A filename in the title field is not a title.
+    if title.lower() in _PLACEHOLDER_TITLES or title.lower().endswith(".pdf"):
+        return None
+    return title
+
+
 class PdfParser(DocumentParser):
     """Parses PDFs into pages, blocks and tables."""
 
@@ -76,7 +98,7 @@ class PdfParser(DocumentParser):
 
         parsed = ParsedDocument(file_format=FileFormat.PDF)
         meta = doc.metadata or {}
-        parsed.title = (meta.get("title") or "").strip() or None
+        parsed.title = _clean_title(meta.get("title"))
         parsed.author = (meta.get("author") or "").strip() or None
         parsed.producer = (meta.get("producer") or "").strip() or None
         parsed.metadata = {
@@ -96,6 +118,17 @@ class PdfParser(DocumentParser):
         parsed.used_ocr = bool(ocr_pages)
         if ocr_pages:
             parsed.metadata["ocr_pages"] = ",".join(str(p) for p in ocr_pages)
+
+        # With no usable metadata title, the opening line of the first page is
+        # by far the best available guess: cover pages lead with the company
+        # and the report name. Bounded in length so a page whose first "line"
+        # is a paragraph cannot become the title.
+        if not parsed.title and parsed.pages:
+            for line in (parsed.pages[0].text or "").splitlines():
+                candidate = line.strip()
+                if 3 < len(candidate) <= 120:
+                    parsed.title = candidate
+                    break
 
         if self.extract_tables:
             self._attach_tables(payload, parsed)
