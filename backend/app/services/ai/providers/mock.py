@@ -167,7 +167,14 @@ class OfflineProvider(LLMProvider):
         # responds to what was actually asked.
         words = {w for w in re.findall(r"[a-z]{4,}", question.lower())}
         def overlap(item: tuple[str, str, str, str]) -> int:
-            return sum(1 for w in words if w in item[1].lower())
+            # Label *and* value. For a computed figure the label carries the
+            # meaning ("Revenue (FY26)") and the value is a number, so
+            # matching the label alone was right. For a retrieved passage it
+            # is the reverse: the label is "Report p.3" and every meaningful
+            # word — chairman, dividend, attrition — is in the value. Matching
+            # the label only scored those at zero and refused a question the
+            # passage answered verbatim.
+            return sum(1 for w in words if w in f"{item[1]} {item[2]}".lower())
 
         ranked = sorted(evidence, key=lambda item: -overlap(item))
 

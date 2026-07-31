@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.domain.ai.sourcing import SourceScope
+
 from app.schemas.common import CompanyRef
 
 
@@ -91,6 +93,13 @@ class ChatRequest(BaseModel):
     session_id: str = Field(default="default", max_length=64)
     provider: str | None = None
     stream: bool = False
+    #: Restrict which evidence may answer. Omitted means the scope is read
+    #: from the question, so "use ONLY uploaded documents" typed into a chat
+    #: box is honoured exactly as the explicit parameter would be.
+    source: SourceScope | None = None
+    #: Wording to return verbatim when the requested source has no evidence.
+    #: An integration branching on that string must be able to rely on it.
+    refusal_text: str | None = Field(default=None, max_length=300)
 
 
 class ChatResponse(AnalysisResponse):

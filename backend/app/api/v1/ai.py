@@ -25,6 +25,7 @@ from app.api.v1.analysis import get_analysis
 from app.core.config import settings
 from app.core.security import CurrentUser, get_current_user
 from app.db.base import get_db
+from app.domain.ai.sourcing import SourceDirective, parse_directive
 from app.domain.ai.types import NoProviderConfigured, ProviderError
 from app.schemas.ai import (
     AnalysisRequest, AnalysisResponse, CapabilityListResponse, CapabilityOut,
@@ -324,7 +325,21 @@ async def chat(
 
     analyst = service.analyst_for(analysis)
     try:
-        result = await analyst.chat(body.question, memory, provider=body.provider)
+        # An explicit parameter wins; otherwise the question is parsed, so a
+        # restriction expressed in prose is enforced just as strictly.
+        directive = (
+            SourceDirective(scope=body.source, exact_refusal=body.refusal_text)
+            if body.source is not None
+            else parse_directive(body.question)
+        )
+        if body.refusal_text and body.source is None:
+            directive = SourceDirective(
+                scope=directive.scope, exact_refusal=body.refusal_text,
+                inferred=directive.inferred,
+            )
+        result = await analyst.chat(
+            body.question, memory, provider=body.provider, source=directive,
+        )
     except NoProviderConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except ProviderError as exc:

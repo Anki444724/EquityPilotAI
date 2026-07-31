@@ -61,6 +61,33 @@ class GroundedContext:
             citations=list(extra) + [c for c in self.citations if c.key not in seen],
         )
 
+    def restricted_to(self, kinds: frozenset[EvidenceKind]) -> "GroundedContext":
+        """A copy holding only evidence of the given kinds.
+
+        Used to enforce a source restriction. The inadmissible evidence is
+        removed rather than merely marked, so it never reaches the prompt:
+        instructing a model to disregard text it can see is a request, not a
+        control, and the failure is silent when it is not honoured.
+
+        `documents` is cleared alongside the citations for anything but a
+        document scope, since those excerpts are document evidence too.
+        """
+        allowed = [c for c in self.citations if c.kind in kinds]
+        keep_docs = EvidenceKind.DOCUMENT in kinds
+        return replace(
+            self,
+            citations=allowed,
+            documents=list(self.documents) if keep_docs else [],
+            # The honest report of what was withheld, and why.
+            unavailable=[
+                *self.unavailable,
+                *([] if len(allowed) == len(self.citations) else [
+                    f"{len(self.citations) - len(allowed)} evidence item(s) "
+                    "outside the requested source were excluded."
+                ]),
+            ],
+        )
+
     def by_kind(self, kind: EvidenceKind) -> list[Citation]:
         return [c for c in self.citations if c.kind is kind]
 

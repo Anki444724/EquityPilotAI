@@ -20,6 +20,9 @@ from app.domain.ai.types import (
     Citation, ClaimType, CompletionResponse, EvidenceKind, NoProviderConfigured,
     Role,
 )
+from app.domain.ai.sourcing import (
+    SCOPE_KINDS, SourceDirective, SourceScope, parse_directive,
+)
 from app.services.ai.citation_engine import CitationAudit, annotate, audit
 from app.services.ai.context_builder import ContextBuilder, GroundedContext
 from app.services.ai.guardrails import GuardrailReport, check, enforce
@@ -97,6 +100,7 @@ class ResearchAnalyst:
         style: OutputStyle | None = None,
         provider: str | None = None,
         template: PromptTemplate | None = None,
+        source: SourceDirective | None = None,
     ) -> AnalystResult:
         """Produce one grounded analysis."""
         prompt_template = template or get_prompt(capability)
@@ -117,6 +121,38 @@ class ResearchAnalyst:
         retrieved = self._retrieve(question, capability)
         if retrieved:
             context = context.with_citations(retrieved)
+
+        # --- source routing --------------------------------------------
+        #
+        # A restriction is a claim about provenance, and answering from a
+        # different source is not a partial answer — it is the wrong answer
+        # wearing the right clothes. Because every figure in it is real and
+        # correctly cited, nothing downstream flags it, which is what makes
+        # this failure mode worth a hard control rather than a prompt
+        # instruction.
+        #
+        # Enforced by *removing* inadmissible evidence before the prompt is
+        # built. Asking the model to ignore what it can see is not a control.
+        directive = source or parse_directive(question)
+        if directive.scope.is_restricted:
+            context = context.restricted_to(SCOPE_KINDS[directive.scope])
+            log.info(
+                "source scope applied",
+                scope=directive.scope.value, inferred=directive.inferred,
+                admitted_evidence=len(context.citations),
+                capability=capability,
+            )
+            if not context.citations:
+                # Fail closed. No provider call at all: a model handed an
+                # empty context and told not to invent will usually comply,
+                # and "usually" is not a guarantee worth shipping.
+                log.info(
+                    "source scope unsatisfied — refusing",
+                    scope=directive.scope.value, question=question[:160],
+                )
+                return self._refuse(
+                    capability, directive, context, memory, question,
+                )
 
         built = self.prompts.build(
             prompt_template, context, question=question, memory=memory, style=style,
@@ -220,6 +256,45 @@ class ResearchAnalyst:
             ))
         return citations
 
+    def _refuse(
+        self,
+        capability: str,
+        directive: SourceDirective,
+        context: GroundedContext,
+        memory: ConversationMemory | None,
+        question: str,
+    ) -> AnalystResult:
+        """Decline, in the caller's own words, without calling a provider.
+
+        Returned verbatim when the caller specified exact wording, because an
+        integration that branches on that string must be able to rely on it.
+        No provider is consulted: a model given an empty context and told not
+        to invent will usually comply, and "usually" is the wrong standard for
+        a control whose entire purpose is to prevent invention.
+        """
+        text = directive.refusal_text
+        if memory is not None:
+            memory.add(Role.USER, question)
+            memory.add(Role.ASSISTANT, text)
+        return AnalystResult(
+            capability=capability,
+            content=text,
+            display_content=text,
+            # Named honestly. This did not come from a model, and reporting a
+            # provider that was never called would corrupt the usage figures.
+            provider="source-router",
+            model="none",
+            prompt_key=capability,
+            prompt_version=0,
+            citations=[],
+            citation_audit=None,
+            guardrails=None,
+            warnings=[
+                f"Restricted to {directive.scope.value}; no evidence from that "
+                "source bears on the question. No other source was consulted."
+            ],
+        )
+
     def _finalise(
         self,
         capability: str,
@@ -279,9 +354,11 @@ class ResearchAnalyst:
         memory: ConversationMemory,
         *,
         provider: str | None = None,
+        source: SourceDirective | None = None,
     ) -> AnalystResult:
         return await self.run(
-            Capability.CHAT.value, question=question, memory=memory, provider=provider
+            Capability.CHAT.value, question=question, memory=memory,
+            provider=provider, source=source,
         )
 
     async def stream_chat(self, question: str, memory: ConversationMemory):

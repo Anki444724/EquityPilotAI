@@ -747,3 +747,97 @@ class TestRetrievalAugmentedGeneration:
 
         assert _has_document_evidence([("doc_p1_c1", "AR", "x", "y")])
         assert not _has_document_evidence([("revenue", "Revenue", "x", "y")])
+
+
+class TestSourceRouting:
+    """AI-004: a source restriction was parsed by nobody and enforced nowhere.
+
+    Asked to use only uploaded documents with none ingested, the analyst fell
+    through to financials and market data and produced a confident, fully
+    cited answer to a question about a chairman's statement. Every figure in
+    it was real, so nothing downstream flagged it — which is exactly what
+    makes silent source substitution worth a hard control.
+    """
+
+    def test_directive_is_read_from_the_question(self):
+        from app.domain.ai.sourcing import SourceScope, parse_directive
+
+        cases = [
+            ("Use ONLY uploaded documents.", SourceScope.UPLOADED_DOCUMENTS_ONLY),
+            ("From the uploaded documents only, list the risks.",
+             SourceScope.UPLOADED_DOCUMENTS_ONLY),
+            ("Based solely on the financial database, what is ROE?",
+             SourceScope.FINANCIAL_DATABASE_ONLY),
+            ("Use only market data.", SourceScope.MARKET_DATA_ONLY),
+            ("What is the revenue?", SourceScope.HYBRID),
+        ]
+        for text, expected in cases:
+            assert parse_directive(text).scope is expected, text
+
+    def test_exact_refusal_wording_is_captured(self):
+        from app.domain.ai.sourcing import parse_directive
+
+        directive = parse_directive(
+            "Use ONLY uploaded documents. If no uploaded document exists, "
+            "reply exactly: 'No uploaded annual report is currently indexed.'"
+        )
+        assert directive.refusal_text == (
+            "No uploaded annual report is currently indexed."
+        )
+
+    def test_restriction_removes_inadmissible_evidence(self):
+        """Removed, not merely marked.
+
+        Telling a model to disregard text it can see is a request, not a
+        control, and the failure is silent when it is not honoured.
+        """
+        from app.domain.ai.sourcing import SCOPE_KINDS, SourceScope
+        from app.domain.ai.types import Citation, EvidenceKind
+        from app.services.ai.context_builder import GroundedContext
+
+        context = GroundedContext(company_id="c", ticker="T", name="T Ltd")
+        context.add(Citation("price", "Price", EvidenceKind.MARKET, 100.0))
+        context.add(Citation("revenue", "Revenue", EvidenceKind.STATEMENT, 500.0))
+        context.add(Citation("doc_p1_c1", "AR p.1", EvidenceKind.DOCUMENT, "text"))
+
+        docs_only = context.restricted_to(
+            SCOPE_KINDS[SourceScope.UPLOADED_DOCUMENTS_ONLY]
+        )
+        assert [c.key for c in docs_only.citations] == ["doc_p1_c1"]
+        assert len(context.citations) == 3, "the original must be untouched"
+
+        market_only = context.restricted_to(SCOPE_KINDS[SourceScope.MARKET_DATA_ONLY])
+        assert [c.key for c in market_only.citations] == ["price"]
+        assert market_only.documents == []
+
+    def test_hybrid_admits_every_kind(self):
+        from app.domain.ai.sourcing import SCOPE_KINDS, SourceScope
+        from app.domain.ai.types import EvidenceKind
+
+        assert SCOPE_KINDS[SourceScope.HYBRID] == frozenset(EvidenceKind)
+
+    def test_financial_scope_excludes_market_and_documents(self):
+        from app.domain.ai.sourcing import SCOPE_KINDS, SourceScope
+        from app.domain.ai.types import EvidenceKind
+
+        allowed = SCOPE_KINDS[SourceScope.FINANCIAL_DATABASE_ONLY]
+        assert EvidenceKind.MARKET not in allowed
+        assert EvidenceKind.DOCUMENT not in allowed
+        assert EvidenceKind.STATEMENT in allowed
+
+    def test_passage_relevance_matches_the_value_not_only_the_label(self):
+        """A retrieved passage's meaning is in its value.
+
+        The offline provider ranked evidence by overlap against the label
+        alone. That is right for "Revenue (FY26): 1,055,780" and exactly
+        wrong for "Report p.3: CHAIRMAN'S MESSAGE Dear Shareholders…", which
+        scored zero and was refused despite answering the question verbatim.
+        """
+        import re
+
+        question = "Summarize the Chairman's Message from the annual report."
+        words = {w for w in re.findall(r"[a-z]{4,}", question.lower())}
+        label, value = "Reliance p.1", "CHAIRMAN'S MESSAGE Dear Shareholders"
+
+        assert sum(1 for w in words if w in label.lower()) == 0
+        assert sum(1 for w in words if w in f"{label} {value}".lower()) > 0
