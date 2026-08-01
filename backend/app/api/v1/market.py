@@ -160,6 +160,30 @@ def pipeline_for_ticker(
     return pipeline_for(ticker).as_dict()
 
 
+@router.post("/us/provision/{ticker}", summary="Provision a US company")
+def provision_us_company(
+    ticker: str,
+    refresh: bool = Query(default=False, description="Re-fetch statements"),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Create or refresh a US company's record and canonical facts.
+
+    Rarely needed directly: `AnalysisService.for_ticker` provisions on first
+    request, so asking for a report on an unknown US ticker simply works.
+    Exposed for operators who want to warm a company ahead of a demonstration,
+    or to force a refresh after a new 10-K.
+    """
+    from app.services.us_pipeline.provisioning import (
+        ProvisioningError, USCompanyProvisioner,
+    )
+
+    try:
+        return USCompanyProvisioner(db).provision(ticker, refresh=refresh).as_dict()
+    except ProvisioningError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
 @router.get("/market/cache", summary="Market cache statistics")
 def cache_stats(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
     """Market-tier cache only. See `/platform/cache` for all four namespaces."""

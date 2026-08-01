@@ -203,15 +203,33 @@ class ContextBuilder:
         return context
 
     # -------------------------------------------------------------- sources
+    @property
+    def unit(self):
+        """This company's reporting unit — ₹ cr for NSE, $ M for NASDAQ.
+
+        Phase 3. Every monetary evidence line previously carried a hardcoded
+        "₹ cr", which was correct while every company was Indian and became a
+        fabrication the moment one was not: Apple's revenue would have been
+        presented to the model as "416,161 ₹ cr", and the model would have
+        written it up faithfully, because the figure was real and the citation
+        resolved. The unit is now read from the company.
+        """
+        from app.domain.financials.reporting_unit import INR_CRORE
+
+        company = getattr(self.analysis, "company", None)
+        return getattr(company, "reporting_unit", None) or INR_CRORE
+
     def _add_market(self, context: GroundedContext) -> None:
         company = self.analysis.company
+        unit = self.unit
         context.add(Citation(
             key="price", label="Current market price", kind=EvidenceKind.MARKET,
-            value=company.current_price, unit="₹", source="Market data",
+            value=company.current_price, unit=unit.per_share,
+            source="Market data",
         ))
         context.add(Citation(
             key="market_cap", label="Market capitalisation", kind=EvidenceKind.MARKET,
-            value=company.market_cap, unit="₹ cr", source="Market data",
+            value=company.market_cap, unit=unit.money, source="Market data",
         ))
 
     def _add_documents(self, context: GroundedContext) -> None:
@@ -309,23 +327,24 @@ class ContextBuilder:
         source_is, source_bs, source_cf = (
             "06 Historical IS", "07 Historical BS", "08 Historical CF"
         )
+        money, per_share = self.unit.money, self.unit.per_share
 
         rows = [
-            ("revenue", "Revenue", income.total_revenue, "₹ cr", source_is),
-            ("ebitda", "EBITDA", income.ebitda, "₹ cr", source_is),
+            ("revenue", "Revenue", income.total_revenue, money, source_is),
+            ("ebitda", "EBITDA", income.ebitda, money, source_is),
             ("ebitda_margin", "EBITDA margin", income.ebitda_margin, "%", source_is),
-            ("ebit", "EBIT", income.ebit, "₹ cr", source_is),
-            ("pat", "Profit after tax", income.pat, "₹ cr", source_is),
+            ("ebit", "EBIT", income.ebit, money, source_is),
+            ("pat", "Profit after tax", income.pat, money, source_is),
             ("pat_margin", "Net margin", income.pat_margin, "%", source_is),
-            ("eps", "EPS (basic)", income.eps_basic, "₹", source_is),
+            ("eps", "EPS (basic)", income.eps_basic, per_share, source_is),
             ("tax_rate", "Effective tax rate", income.effective_tax_rate, "%", source_is),
-            ("total_assets", "Total assets", balance.total_assets, "₹ cr", source_bs),
-            ("equity", "Shareholders' equity", balance.shareholders_equity, "₹ cr", source_bs),
-            ("gross_debt", "Gross debt", balance.gross_debt, "₹ cr", source_bs),
-            ("net_debt", "Net debt", balance.net_debt, "₹ cr", source_bs),
-            ("cfo", "Cash flow from operations", cash_flow.cfo, "₹ cr", source_cf),
-            ("capex", "Capital expenditure", abs(cash_flow.capex), "₹ cr", source_cf),
-            ("fcf", "Free cash flow", cash_flow.free_cash_flow, "₹ cr", source_cf),
+            ("total_assets", "Total assets", balance.total_assets, money, source_bs),
+            ("equity", "Shareholders' equity", balance.shareholders_equity, money, source_bs),
+            ("gross_debt", "Gross debt", balance.gross_debt, money, source_bs),
+            ("net_debt", "Net debt", balance.net_debt, money, source_bs),
+            ("cfo", "Cash flow from operations", cash_flow.cfo, money, source_cf),
+            ("capex", "Capital expenditure", abs(cash_flow.capex), money, source_cf),
+            ("fcf", "Free cash flow", cash_flow.free_cash_flow, money, source_cf),
         ]
         for key, label, value, unit, source in rows:
             context.add(Citation(
@@ -342,7 +361,7 @@ class ContextBuilder:
             )
             context.add(Citation(
                 key="revenue_history", label="Revenue history",
-                kind=EvidenceKind.STATEMENT, value=history, unit="₹ cr",
+                kind=EvidenceKind.STATEMENT, value=history, unit=money,
                 source=source_is,
             ))
 
@@ -388,17 +407,18 @@ class ContextBuilder:
             return
 
         terminal = result.terminal_year
+        money, per_share = self.unit.money, self.unit.per_share
         rows = [
             ("forecast_revenue_cagr", "Forecast revenue CAGR", result.revenue_cagr, "%"),
             ("forecast_ebitda_cagr", "Forecast EBITDA CAGR", result.ebitda_cagr, "%"),
             ("terminal_revenue", f"Projected revenue FY+{horizon}",
-             terminal.revenue if terminal else None, "₹ cr"),
+             terminal.revenue if terminal else None, money),
             ("terminal_ebitda", f"Projected EBITDA FY+{horizon}",
-             terminal.ebitda if terminal else None, "₹ cr"),
+             terminal.ebitda if terminal else None, money),
             ("terminal_eps", f"Projected EPS FY+{horizon}",
-             terminal.eps if terminal else None, "₹"),
+             terminal.eps if terminal else None, per_share),
             ("terminal_fcff", f"Projected FCFF FY+{horizon}",
-             terminal.fcff if terminal else None, "₹ cr"),
+             terminal.fcff if terminal else None, money),
         ]
         for key, label, value, unit in rows:
             context.add(Citation(
@@ -418,24 +438,25 @@ class ContextBuilder:
             context.unavailable.append("Valuation outputs")
             return
 
+        per_share = self.unit.per_share
         rows = [
             ("wacc", "WACC", bundle.wacc.wacc, "%", EvidenceKind.VALUATION),
             ("cost_of_equity", "Cost of equity", bundle.wacc.cost_of_equity, "%",
              EvidenceKind.VALUATION),
             ("dcf_value", "DCF intrinsic value per share",
-             bundle.dcf_fcff.intrinsic_value_per_share, "₹", EvidenceKind.VALUATION),
+             bundle.dcf_fcff.intrinsic_value_per_share, per_share, EvidenceKind.VALUATION),
             ("dcf_upside", "DCF upside", bundle.dcf_fcff.upside, "%",
              EvidenceKind.VALUATION),
             ("terminal_value_pct", "Terminal value share of EV",
              bundle.dcf_fcff.terminal_value_pct, "%", EvidenceKind.VALUATION),
             ("relative_target", "Blended relative target price",
-             bundle.relative.blended_target_price, "₹", EvidenceKind.VALUATION),
+             bundle.relative.blended_target_price, per_share, EvidenceKind.VALUATION),
             ("pe_ratio", "Trailing P/E", bundle.relative.current.pe, "x",
              EvidenceKind.VALUATION),
             ("ev_ebitda", "EV/EBITDA", bundle.relative.current.ev_ebitda, "x",
              EvidenceKind.VALUATION),
             ("weighted_value", "Weighted intrinsic value",
-             bundle.summary.weighted_value, "₹", EvidenceKind.VALUATION),
+             bundle.summary.weighted_value, per_share, EvidenceKind.VALUATION),
             ("valuation_upside", "Upside to intrinsic value",
              bundle.summary.upside, "%", EvidenceKind.VALUATION),
         ]

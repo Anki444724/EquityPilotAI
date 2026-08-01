@@ -24,6 +24,8 @@ from app.models.analysis import DebtInstrument, ShareholdingSnapshot
 from app.models.company import Company
 from app.schemas.common import CompanyRef, PeriodMeta, Unit
 from app.services.capex.service import CapexService
+import structlog
+
 from app.services.company_service import CompanyService
 from app.services.debt.service import DebtService
 from app.services.financials.service import FinancialStatementsService
@@ -44,6 +46,8 @@ class AnalysisContext:
     financials: CanonicalFinancials
 
 
+log = structlog.get_logger(__name__)
+
 class AnalysisService:
     """Builds every Module 2 view from a single resolution."""
 
@@ -55,12 +59,58 @@ class AnalysisService:
 
     # ------------------------------------------------------------ factories
     @classmethod
-    def for_ticker(cls, db: Session, ticker: str) -> "AnalysisService | None":
+    def for_ticker(
+        cls, db: Session, ticker: str, *, provision: bool = True,
+    ) -> "AnalysisService | None":
+        """Load a company for analysis, provisioning a US listing if needed.
+
+        Phase 3. Every analysis path starts here, which makes it the one place
+        US support can be added without threading a flag through the API,
+        the AI service and the report orchestrator. A US ticker with no
+        company record is fetched from FMP and written to the database on
+        first request; thereafter it behaves exactly like an Indian one.
+
+        `provision=False` disables that, for callers that must not perform
+        network I/O — the seed scripts and most tests.
+        """
         svc = CompanyService(db)
         company = svc.get_by_ticker(ticker) or svc.get(ticker)
+        if company is None and provision:
+            company = cls._provision_us(db, ticker)
         if company is None:
             return None
         return cls(db, company, svc.load_financials(company.id))
+
+    @staticmethod
+    def _provision_us(db: Session, ticker: str):
+        """Create a US company on first request. Returns None if not US."""
+        from app.data.providers.symbols import resolve
+
+        try:
+            if not resolve(ticker).is_us:
+                return None
+        except Exception:  # noqa: BLE001 — an unresolvable symbol is simply unknown
+            return None
+
+        from app.services.us_pipeline.provisioning import (
+            ProvisioningError, USCompanyProvisioner,
+        )
+
+        try:
+            result = USCompanyProvisioner(db).provision(ticker)
+        except ProvisioningError as exc:
+            # Genuinely unknown to the providers. A 404 is the right answer,
+            # so return None and let the caller raise it.
+            log.info("us provisioning declined", ticker=ticker,
+                     reason=str(exc)[:160])
+            return None
+        except Exception:  # noqa: BLE001 — a provider outage must not 500
+            log.exception("us provisioning failed", ticker=ticker)
+            return None
+
+        from app.models.company import Company
+
+        return db.get(Company, result.company_id)
 
     # ----------------------------------------------- computed once, reused
     @cached_property

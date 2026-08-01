@@ -21,6 +21,11 @@ class Exchange(StrEnum):
     NSE = "NSE"
     BSE = "BSE"
     BOTH = "NSE/BSE"
+    # Phase 3. Stored as a plain String(16) rather than a database enum, so
+    # adding a venue is data rather than a migration.
+    NASDAQ = "NASDAQ"
+    NYSE = "NYSE"
+    AMEX = "AMEX"
 
 
 class Company(Base):
@@ -34,12 +39,30 @@ class Company(Base):
     exchange: Mapped[str] = mapped_column(String(16), default=Exchange.NSE)
     isin: Mapped[str | None] = mapped_column(String(16), unique=True)
 
+    #: How this company's stored figures are denominated (Phase 3).
+    #:
+    #: The platform was built for Indian listings, so "₹ crore" was a constant
+    #: rather than a variable. That is correct for TCS and a fabrication for
+    #: Apple — the same code path would have reported Apple's revenue as
+    #: "416,161 ₹ cr". Currency and scale now travel with the company.
+    #:
+    #: `scale` is part of the stored value's *meaning*, not a display choice:
+    #: Indian statements are stored in crore (1e7), US statements in millions
+    #: (1e6). Defaults preserve the existing Indian corpus exactly.
+    currency: Mapped[str] = mapped_column(String(3), default="INR",
+                                          server_default="INR", nullable=False)
+    reporting_scale: Mapped[str] = mapped_column(
+        String(8), default="crore", server_default="crore", nullable=False,
+    )
+
     sector: Mapped[str | None] = mapped_column(String(120), index=True)
     industry: Mapped[str | None] = mapped_column(String(120), index=True)
 
-    market_cap: Mapped[float | None] = mapped_column(Float)          # ₹ crore
-    current_price: Mapped[float | None] = mapped_column(Float)       # ₹  (workbook CMP)
-    shares_outstanding: Mapped[float | None] = mapped_column(Float)  # crore
+    # Denominated in `currency` at `reporting_scale` — ₹ crore for an Indian
+    # listing, $ millions for a US one.
+    market_cap: Mapped[float | None] = mapped_column(Float)
+    current_price: Mapped[float | None] = mapped_column(Float)       # per share
+    shares_outstanding: Mapped[float | None] = mapped_column(Float)
 
     description: Mapped[str | None] = mapped_column(Text)
     website: Mapped[str | None] = mapped_column(String(300))
@@ -54,8 +77,34 @@ class Company(Base):
 
     __table_args__ = (
         UniqueConstraint("ticker", "exchange", name="uq_company_ticker_exchange"),
+        # Phase 3 note: the constraint is (ticker, exchange), not ticker
+        # alone, which is what allows a US listing to coexist with an Indian
+        # one that happens to share a symbol.
         Index("ix_company_sector_mcap", "sector", "market_cap"),
     )
+
+    @property
+    def reporting_unit(self):
+        """Currency and scale for this company's figures.
+
+        Single source of truth for every label the platform prints. Callers
+        must not infer a unit from the exchange themselves — that inference is
+        exactly what produced twenty-four hardcoded "₹ cr" strings.
+        """
+        from app.domain.financials.reporting_unit import ReportingUnit, Scale
+
+        try:
+            scale = Scale(self.reporting_scale or "crore")
+        except ValueError:
+            # An unrecognised scale written by a future build. Falling back to
+            # crore would silently misstate by a factor of ten, so prefer the
+            # neutral unit scale, which at least does not rescale the number.
+            scale = Scale.UNIT
+        return ReportingUnit(currency=(self.currency or "INR").upper(), scale=scale)
+
+    @property
+    def is_us_listed(self) -> bool:
+        return (self.exchange or "").upper() in {"NASDAQ", "NYSE", "AMEX"}
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Company {self.ticker} {self.name!r}>"
