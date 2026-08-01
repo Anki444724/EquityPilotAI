@@ -49,3 +49,8 @@ matplotlib==3.10.9
 argon2-cffi==25.1.0
 email-validator==2.2.0
 cryptography==49.0.0
+
+# Object storage (Railway Buckets / S3 / R2 / MinIO).
+# Imported lazily by S3CompatibleStorage, so a volume-only deployment never
+# loads it; present here because the production backend is now S3-compatible.
+boto3==1.43.62
