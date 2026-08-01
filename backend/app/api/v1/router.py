@@ -3,7 +3,8 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin, ai, analysis, auth, companies, dashboard, documents, filings_admin,
-    forecast, market, portfolio, reports, scoring, valuation,
+    forecast, market, portfolio, reports, scoring, storage_admin,
+    valuation,
 )
 
 api_router = APIRouter()
@@ -26,4 +27,5 @@ api_router.include_router(reports.router)
 # the endpoints returned 200 with an empty result, which is far worse than a
 # 404 because nothing looks broken.
 api_router.include_router(filings_admin.router)
+api_router.include_router(storage_admin.router)
 api_router.include_router(market.router)

@@ -196,6 +196,19 @@ class DocumentIngestionService:
         self.db.add(job)
         self.db.flush()
 
+        # Hybrid storage: the volume copy above is authoritative and the
+        # upload is already durable. Enrolling the document only records that
+        # a replica is owed; the copy itself runs in the background so a user
+        # is never waiting on S3, and a bucket outage can never become an
+        # upload outage.
+        try:
+            from app.services.documents.replication import ReplicationService
+
+            ReplicationService(self.db).enrol(document)
+        except Exception:  # noqa: BLE001 - replication must never fail an upload
+            log.warning("could not enrol document for replication",
+                        document_id=document.id)
+
         self._set_status(document, DocumentStatus.QUEUED)
         self.db.commit()
 

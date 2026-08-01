@@ -433,12 +433,40 @@ def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str
     return {"processed": len(processed), "results": processed}
 
 
+# ===========================================================================
+# Hybrid storage replication
+# ===========================================================================
+def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Copy unreplicated documents to object storage, then assess health.
+
+    The volume remains authoritative throughout: this only ever reads from it.
+    Alerts are raised from the same pass that produces the numbers, so the
+    dashboard and the notification can never disagree about the state.
+    """
+    from app.services.documents.replication import ReplicationService
+    from app.services.documents.storage_health import StorageHealthService
+
+    service = ReplicationService(db)
+    if not service.enabled:
+        # Expected until Railway provisions the bucket. Reported rather than
+        # treated as a failure, so the job does not dead-letter every ten
+        # minutes on a perfectly healthy system.
+        return {"skipped": True, "reason": "object storage is not configured"}
+
+    run = service.run(limit=int(payload.get("limit", 25)))
+    alerts = StorageHealthService(db).raise_alerts()
+    summary = {k: v for k, v in run.as_dict().items() if k != "outcomes"}
+    summary["alerts_raised"] = alerts
+    return summary
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.REPORT_GENERATION: handle_report_generation,
     JobKind.DOCUMENT_PROCESSING: handle_document_processing,
     JobKind.EMBEDDING: handle_embedding,
     JobKind.NOTIFICATION: handle_notification,
     JobKind.PORTFOLIO_REFRESH: handle_portfolio_refresh,
+    JobKind.STORAGE_REPLICATION: handle_storage_replication,
     JobKind.FILING_CRAWL: handle_filing_crawl,
     JobKind.FILING_POST_PROCESS: handle_filing_post_process,
     JobKind.ALERT_EVALUATION: handle_alert_evaluation,
