@@ -141,3 +141,49 @@ it has been fine.
   durability one, once a bucket exists.
 - `DOCUMENT_STORAGE_BACKEND` remains `local` and must stay that way until the
   readiness report passes.
+
+---
+
+## Production validation — commit `fa08d6f`, deployment `6d594842`
+
+Run against production on 2026-08-01 after deploying and restarting.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Application starts | **PASS** — `ok`, production |
+| 2 | Health endpoint | **PASS** — `ready: true`; only the known SMTP gap |
+| 3 | Storage dashboard live | **PASS** — volume 54.8% used, 236.66 MB of documents |
+| 4 | Upload test | **PASS** — HTTP 202, document 129 created |
+| 5 | Replication enrolment | **PASS** — `pending`, `protected=true` |
+| 6 | Download test | **PASS** — md5 `0fddd6f1…` byte-identical |
+| 7 | SHA256 verification endpoint | **PASS** — volume hash matches the record |
+| 8 | RAG retrieval | **PASS** — new document returned at 0.798 |
+| 9 | AI citations | **PASS** — OpenRouter, cited to page 2 |
+| 10 | Restart persistence | **PASS** — uptime 50.4 s, md5 unchanged, 3,977 chunks intact |
+| 11 | Replication state survives restart | **PASS** |
+| 12 | Volume failover | **PASS** (moto — no bucket in production yet) |
+| 13 | Object-storage failover | **PASS** (moto) |
+| 14 | Promotion refused | **PASS** — 0.0 of 30 days, correctly not ready |
+| 15 | Perimeter regression | **PASS** — 33/33 |
+| 16 | Module regression | **PASS** — 18/19, 1 known warning |
+
+Dashboard as deployed:
+
+```
+level: ok
+architecture: Railway Volume (authoritative) | volume first, replica on failure
+volume:  236.66 MB documents, disk 54.8% used
+object:  not configured
+replication: queue 123, verified 0, mismatches 0, coverage 0.0%
+retention:   6 protected document types
+```
+
+The 123-document queue is correct and expected: every existing document is
+enrolled and awaiting a replication target that does not exist yet. It is
+reported as `ok` rather than as a fault, because nobody can act on it until a
+bucket is provisioned.
+
+Note that items 12 and 13 — the two failover paths — are proven against moto
+rather than against Railway. They are the only requirements in this phase not
+validated on real infrastructure, and they cannot be until the bucket exists.
+
