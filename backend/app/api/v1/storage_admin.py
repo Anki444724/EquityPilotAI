@@ -245,31 +245,51 @@ def verify_document(
         "protected": is_protected(document.doc_type),
     }
 
-    try:
-        primary = service.primary.read(document.storage_key)
-        digest = hashlib.sha256(primary).hexdigest()
-        result["volume"] = {
+    # VERIFY-001. This originally reported `service.primary` as "volume" and
+    # `service.secondary` as "object_storage". That was true before cutover
+    # and inverted after it: with DOCUMENT_STORAGE_BACKEND=r2 the primary IS
+    # R2 and the fallback is the volume, so the endpoint reported freshly
+    # uploaded R2 objects as "R2: not found" while showing them under
+    # "volume". Two probes were spent chasing a defect that did not exist.
+    #
+    # Both backends are now addressed by name rather than by role.
+    from app.core.config import settings
+    from app.services.documents.storage import (
+        LocalFileStorage, S3CompatibleStorage,
+    )
+
+    def _probe(store) -> dict[str, Any]:
+        try:
+            payload = store.read(document.storage_key)
+        except Exception as exc:  # noqa: BLE001
+            return {"readable": False, "error": str(exc)[:200]}
+        digest = hashlib.sha256(payload).hexdigest()
+        return {
             "readable": True, "sha256": digest,
             "matches": digest == document.content_hash,
-            "size_bytes": len(primary),
+            "size_bytes": len(payload),
         }
-    except (StorageError, OSError) as exc:
+
+    try:
+        result["volume"] = _probe(
+            LocalFileStorage(settings.DOCUMENT_STORAGE_PATH)
+        )
+    except Exception as exc:  # noqa: BLE001 - no volume mounted
         result["volume"] = {"readable": False, "error": str(exc)[:200]}
 
-    secondary = service.secondary
-    if secondary is None:
+    if not settings.DOCUMENT_S3_BUCKET:
         result["object_storage"] = {"configured": False}
     else:
-        try:
-            replica = secondary.read(document.storage_key)
-            digest = hashlib.sha256(replica).hexdigest()
-            result["object_storage"] = {
-                "configured": True, "readable": True, "sha256": digest,
-                "matches": digest == document.content_hash,
-                "size_bytes": len(replica),
-            }
-        except Exception as exc:  # noqa: BLE001
-            result["object_storage"] = {
-                "configured": True, "readable": False, "error": str(exc)[:200],
-            }
+        result["object_storage"] = {
+            "configured": True,
+            **_probe(S3CompatibleStorage(
+                settings.DOCUMENT_S3_BUCKET,
+                endpoint_url=settings.DOCUMENT_S3_ENDPOINT,
+                region=settings.DOCUMENT_S3_REGION,
+                access_key=settings.DOCUMENT_S3_ACCESS_KEY,
+                secret_key=settings.DOCUMENT_S3_SECRET_KEY,
+            )),
+        }
+
+    result["active_primary"] = service.primary.backend
     return result
