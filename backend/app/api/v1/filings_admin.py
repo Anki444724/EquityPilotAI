@@ -298,6 +298,49 @@ def run_crawl(
     )
 
 
+@router.post("/filings/drain", summary="Download already-discovered filings")
+def drain_discovered(
+    limit: int = Query(default=25, le=200),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Download filings that discovery already found, without re-listing.
+
+    Discovery and download hit different NSE hosts: listing goes through the
+    rate-limited `/api/corporate-announcements` endpoint, while the PDFs
+    themselves come from the archive CDN, which does not throttle in the same
+    way. Once a filing is known, fetching it therefore costs nothing against
+    the discovery budget.
+
+    That distinction is what makes the universe tractable: a throttled crawl
+    still records what exists, and this drains the backlog afterwards at full
+    speed.
+    """
+    _require_operator(user)
+    from app.domain.filings.collection import CollectionStatus
+    from app.services.filings.collector import FilingCollector
+
+    rows = db.execute(
+        select(DiscoveredFiling)
+        .where(
+            DiscoveredFiling.status == CollectionStatus.DISCOVERED.value,
+            DiscoveredFiling.source_url.is_not(None),
+        )
+        .order_by(DiscoveredFiling.id)
+        .limit(limit)
+    ).scalars().all()
+
+    collector = FilingCollector(db)
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = collector.collect_one(row)
+        counts[status] = counts.get(status, 0) + 1
+        db.flush()
+    db.commit()
+
+    return {"attempted": len(rows), "by_status": counts}
+
+
 @router.post("/filings/{filing_id}/retry", summary="Retry a failed filing")
 def retry_filing(
     filing_id: int,
