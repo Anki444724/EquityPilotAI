@@ -230,6 +230,27 @@ class _StubDownloader:
         )
 
 
+def _make_collector(db, *, nse=None, downloader=None, bse=None, ir=None):
+    """A collector with disk headroom assumed.
+
+    `_has_headroom` inspects the real document volume, which does not exist in
+    a test environment, so it correctly returns False and would suppress every
+    download. The storage tests override it the other way to prove the guard.
+    """
+    from app.services.filings.collector import FilingCollector
+
+    collector = FilingCollector(
+        db, downloader=downloader or _StubDownloader(),
+        nse=nse or _StubProvider("NSE Corporate Filings"),
+        bse=bse or _StubProvider("BSE Corporate Announcements",
+                                 error="No Record Found!"),
+        ir=ir or _StubProvider("Investor Relations", error="no url"),
+        polite_delay=0,
+    )
+    collector._has_headroom = lambda: True  # noqa: SLF001
+    return collector
+
+
 def _filing(title: str, reference: str, url: str) -> Filing:
     return Filing(
         category=SourceCategory.NSE_FILING,
@@ -277,14 +298,7 @@ class TestCollectorDedup:
     """The property that makes a nightly crawl affordable."""
 
     def _collector(self, db, nse, downloader):
-        from app.services.filings.collector import FilingCollector
-
-        return FilingCollector(
-            db, downloader=downloader, nse=nse,
-            bse=_StubProvider("BSE Corporate Announcements", error="No Record Found!"),
-            ir=_StubProvider("Investor Relations", error="no url"),
-            polite_delay=0,
-        )
+        return _make_collector(db, nse=nse, downloader=downloader)
 
     def test_a_second_pass_downloads_nothing(self, collector_env):
         """The single most important behaviour: an unchanged company must
@@ -349,11 +363,10 @@ class TestCollectorResilience:
         good = _StubProvider("NSE Corporate Filings", [
             _filing("Annual Report", "R1", "http://x/a.pdf"),
         ])
-        collector = FilingCollector(
-            db, downloader=_StubDownloader(), nse=good,
+        collector = _make_collector(
+            db, nse=good,
             bse=_StubProvider("BSE Corporate Announcements", explode=True),
             ir=_StubProvider("Investor Relations", explode=True),
-            polite_delay=0,
         )
         result = collector.crawl_company(company, download=True)
         assert result.ingested == 1
@@ -410,6 +423,73 @@ class TestCollectorResilience:
         assert state.consecutive_failures == 0
 
 
+class TestStorageGuard:
+    """STORAGE-001 — the crawler must yield the disk before a user does."""
+
+    def test_a_download_is_deferred_when_storage_is_low(self, collector_env,
+                                                        monkeypatch):
+        """Observed in production: 229 MB of a 500 MB volume consumed within
+        minutes of the first real run. Left unchecked the failure lands on
+        whatever writes next, quite possibly a user's upload."""
+        from app.services.filings.collector import FilingCollector
+
+        db, company = collector_env
+        nse = _StubProvider("NSE Corporate Filings", [
+            _filing("Annual Report", "S1", "http://x/a.pdf"),
+        ])
+        downloader = _StubDownloader()
+        collector = FilingCollector(
+            db, downloader=downloader, nse=nse,
+            bse=_StubProvider("BSE", error="none"),
+            ir=_StubProvider("IR", error="none"), polite_delay=0,
+        )
+        monkeypatch.setattr(collector, "_has_headroom", lambda: False)
+
+        result = collector.crawl_company(company, download=True)
+        assert not downloader.fetched, "downloaded despite low storage"
+        assert result.ingested == 0
+
+    def test_a_deferred_filing_stays_collectable(self, collector_env,
+                                                 monkeypatch):
+        """Deferred, not failed: it must be picked up once space is freed
+        rather than needing a manual retry."""
+        from app.models.filing_collection import DiscoveredFiling
+        from app.services.filings.collector import FilingCollector
+
+        db, company = collector_env
+        nse = _StubProvider("NSE Corporate Filings", [
+            _filing("Annual Report", "S2", "http://x/b.pdf"),
+        ])
+        collector = FilingCollector(
+            db, downloader=_StubDownloader(), nse=nse,
+            bse=_StubProvider("BSE", error="none"),
+            ir=_StubProvider("IR", error="none"), polite_delay=0,
+        )
+        monkeypatch.setattr(collector, "_has_headroom", lambda: False)
+        collector.crawl_company(company, download=True)
+
+        row = db.query(DiscoveredFiling).filter_by(
+            company_id=company.id, source_reference="S2"
+        ).one()
+        assert row.status == CollectionStatus.DISCOVERED.value
+        assert "storage" in (row.error or "").lower()
+
+    def test_the_check_fails_open(self, collector_env, monkeypatch):
+        """A broken telemetry call must not halt collection."""
+        from app.services.filings.collector import FilingCollector
+
+        db, _ = collector_env
+        collector = FilingCollector(db, downloader=_StubDownloader(),
+                                    nse=_StubProvider("NSE"),
+                                    bse=_StubProvider("BSE"),
+                                    ir=_StubProvider("IR"), polite_delay=0)
+        monkeypatch.setattr(
+            "app.services.documents.storage.free_disk_bytes",
+            lambda p: (_ for _ in ()).throw(OSError("boom")),
+        )
+        assert collector._has_headroom() is True
+
+
 class TestDashboard:
     def test_it_reports_counts_and_storage(self, collector_env):
         from app.services.filings.collector import FilingCollector
@@ -418,11 +498,9 @@ class TestDashboard:
         nse = _StubProvider("NSE Corporate Filings", [
             _filing("Annual Report", "D1", "http://x/a.pdf"),
         ])
-        collector = FilingCollector(
-            db, downloader=_StubDownloader(), nse=nse,
-            bse=_StubProvider("BSE", error="none"),
-            ir=_StubProvider("IR", error="none"), polite_delay=0,
-        )
+        collector = _make_collector(db, nse=nse,
+                                    bse=_StubProvider("BSE", error="none"),
+                                    ir=_StubProvider("IR", error="none"))
         collector.crawl_company(company, download=True)
 
         payload = collector.dashboard()

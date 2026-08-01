@@ -38,8 +38,8 @@ from app.data.filings.indian import BSEFilingProvider, NSEFilingProvider
 from app.data.filings.investor_relations import InvestorRelationsProvider
 from app.domain.documents.types import DocumentType
 from app.domain.filings.collection import (
-    CollectionStatus, CollectionTier, classify, due_for_crawl, fiscal_year_for,
-    is_noise, quarter_for,
+    MAX_AUTO_DOWNLOAD_BYTES, CollectionStatus, CollectionTier, classify,
+    due_for_crawl, fiscal_year_for, is_noise, quarter_for,
 )
 from app.models.company import Company
 from app.models.filing_collection import CompanyCrawlState, DiscoveredFiling
@@ -279,6 +279,33 @@ class FilingCollector:
         self.db.add(row)
         return row
 
+    # ------------------------------------------------------------ storage
+    def _has_headroom(self) -> bool:
+        """Is there enough free disk to take another document safely?
+
+        Deliberately stricter than the ingestion service's own floor: that
+        floor protects the *platform* from running out of disk, and by the
+        time it trips a user upload is already failing. The crawler reserves a
+        margin above it so automated collection stops first and leaves the
+        remaining space for interactive work.
+        """
+        try:
+            from app.core.config import settings
+            from app.services.documents.storage import free_disk_bytes
+
+            path = getattr(settings, "DOCUMENT_STORAGE_PATH", None)
+            if not path:
+                return True
+            floor_mb = int(getattr(settings, "DOCUMENT_MIN_FREE_DISK_MB", 512))
+            # Reserve the platform floor plus one maximum-sized download, so
+            # the check cannot pass and then be invalidated by the very file
+            # it just authorised.
+            required = floor_mb * 1024 * 1024 + MAX_AUTO_DOWNLOAD_BYTES
+            return free_disk_bytes(path) > required
+        except Exception:  # noqa: BLE001 - never block collection on telemetry
+            log.debug("storage headroom check unavailable")
+            return True
+
     # ----------------------------------------------------------- download
     def collect_one(self, row: DiscoveredFiling) -> str:
         """Download and ingest one discovered filing. Returns its status."""
@@ -289,6 +316,23 @@ class FilingCollector:
         if not row.source_url:
             row.status = CollectionStatus.FAILED.value
             row.error = "no download url"
+            return row.status
+
+        # STORAGE-001. Stop before the volume fills.
+        #
+        # Observed in production on the first real run: 229 MB of a 500 MB
+        # volume consumed within minutes, with individual shareholder-meeting
+        # PDFs above 20 MB. Left unchecked the crawler exhausts the disk, and
+        # the failure lands on whatever writes next — quite possibly a user's
+        # upload rather than the crawl that caused it. Automated collection is
+        # the lowest-priority consumer of shared storage, so it is the thing
+        # that must yield.
+        if not self._has_headroom():
+            row.status = CollectionStatus.DISCOVERED.value
+            row.error = (
+                "deferred: insufficient free storage for automatic download"
+            )
+            log.warning("collection deferred, low storage", filing_id=row.id)
             return row.status
 
         row.status = CollectionStatus.DOWNLOADING.value
