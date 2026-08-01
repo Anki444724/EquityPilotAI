@@ -12,6 +12,13 @@ exchanges. `company_crawl_state` holds per-company scheduling and health.
 
 Additive only: no existing table is touched, so the migration is safe to apply
 to production with the collector switched off.
+
+Note the `created_at`/`updated_at` columns on both tables. `Base` declares
+them for *every* model, so they are not optional bookkeeping — they are part
+of each table's contract. Omitting them from a hand-written migration is
+invisible on SQLite, where the test suite builds the schema with
+`create_all()` from the models, and fails only on Postgres where the migration
+is the schema. That is exactly how this shipped broken to production once.
 """
 from __future__ import annotations
 
@@ -50,6 +57,10 @@ def upgrade() -> None:
                   server_default=sa.func.now(), nullable=False),
         sa.Column("downloaded_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["company_id"], ["companies.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
@@ -88,6 +99,10 @@ def upgrade() -> None:
         sa.Column("consecutive_failures", sa.Integer(), server_default="0", nullable=False),
         sa.Column("documents_found", sa.Integer(), server_default="0", nullable=False),
         sa.Column("documents_ingested", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["company_id"], ["companies.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("company_id"),
