@@ -24,6 +24,14 @@ from app.models.filing_collection import CompanyCrawlState, DiscoveredFiling
 
 router = APIRouter(tags=["filings"])
 
+#: Companies a single synchronous crawl may attempt.
+#:
+#: Railway's HTTP edge closes a request at 5 minutes. At ~20 s per company
+#: against a rate-limited exchange, anything above this returns a 502 to the
+#: caller while the server keeps working — the worst combination, because the
+#: operator cannot tell what happened.
+MAX_SYNCHRONOUS_COMPANIES = 8
+
 
 def _require_operator(user: CurrentUser) -> None:
     """Only an operator may spend the crawl budget."""
@@ -239,6 +247,10 @@ def run_crawl(
     max_companies: int = Query(default=5, le=50),
     max_downloads: int = Query(default=5, le=25),
     download: bool = Query(default=True),
+    delay: float = Query(
+        default=1.5, ge=0.0, le=15.0,
+        description="Seconds between companies; NSE rate-limits bursts",
+    ),
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -252,7 +264,21 @@ def run_crawl(
     _require_operator(user)
     from app.services.filings.collector import FilingCollector
 
-    collector = FilingCollector(db, polite_delay=0.5)
+    # GATEWAY-001. Railway's HTTP edge closes a request at 5 minutes with a
+    # 502, and a crawl runs at roughly 20 s per company against a rate-limited
+    # exchange — so 20 companies exceeded the deadline and the client saw a
+    # bare 502 while the server carried on working. Batches are capped here so
+    # the request cannot outlive the gateway; the nightly scheduler is the
+    # right vehicle for the full universe.
+    if max_companies > MAX_SYNCHRONOUS_COMPANIES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"max_companies must be <= {MAX_SYNCHRONOUS_COMPANIES} for a "
+            f"synchronous crawl; Railway closes the connection at 5 minutes. "
+            f"Use the scheduler for the full universe.",
+        )
+
+    collector = FilingCollector(db, polite_delay=delay)
     if tickers:
         wanted = [t.strip().upper() for t in tickers.split(",") if t.strip()]
         results = []

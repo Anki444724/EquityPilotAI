@@ -174,7 +174,13 @@ class BSEFilingProvider(FilingProvider):
     ) -> FilingResult:
         started = time.perf_counter()
         symbol = (ticker or "").strip().upper().split(".")[0]
-        scrip = self.SCRIP_CODES.get(symbol)
+        # BSE-002. The caller supplies the scrip code from the company record —
+        # 498 of them arrived with the Nifty 500 import — and this ignored it
+        # in favour of a hardcoded fifteen-entry table, so every other company
+        # reported "no BSE scrip code mapped" however well populated the
+        # database was. The passed value wins; the table is the fallback for
+        # callers that have none.
+        scrip = kwargs.get("scrip_code") or self.SCRIP_CODES.get(symbol)
         if scrip is None:
             return FilingResult(
                 filings=[], source=self.name, category=self.category,
