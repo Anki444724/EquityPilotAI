@@ -38,6 +38,9 @@ class JobKind(StrEnum):
     EMBEDDING = "embedding"
     NOTIFICATION = "notification"
     PORTFOLIO_REFRESH = "portfolio_refresh"
+    # Automated Indian filing collection.
+    FILING_CRAWL = "filing_crawl"
+    FILING_POST_PROCESS = "filing_post_process"
     # housekeeping
     ALERT_EVALUATION = "alert_evaluation"
     USAGE_ROLLUP = "usage_rollup"
@@ -51,6 +54,8 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.EMBEDDING: "Embedding",
     JobKind.NOTIFICATION: "Notification",
     JobKind.PORTFOLIO_REFRESH: "Scheduled portfolio update",
+    JobKind.FILING_CRAWL: "Filing collection crawl",
+    JobKind.FILING_POST_PROCESS: "Filing post-processing",
     JobKind.ALERT_EVALUATION: "Alert evaluation",
     JobKind.USAGE_ROLLUP: "Usage roll-up",
     JobKind.BACKUP: "Backup",
@@ -124,6 +129,12 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.EMBEDDING: JobPriority.NORMAL,
     JobKind.NOTIFICATION: JobPriority.HIGH,
     JobKind.PORTFOLIO_REFRESH: JobPriority.LOW,
+    # The nightly crawl is long-running and nobody is waiting on it, so it
+    # must never sit ahead of a user's report in the queue.
+    JobKind.FILING_CRAWL: JobPriority.BACKGROUND,
+    # Post-processing is closer to interactive: a user who sees a new filing
+    # listed expects its scores to follow shortly.
+    JobKind.FILING_POST_PROCESS: JobPriority.LOW,
     JobKind.ALERT_EVALUATION: JobPriority.NORMAL,
     JobKind.USAGE_ROLLUP: JobPriority.BACKGROUND,
     JobKind.BACKUP: JobPriority.BACKGROUND,
@@ -180,6 +191,10 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     JobKind.EMBEDDING: RetryPolicy(max_attempts=3, base_seconds=5),
     JobKind.NOTIFICATION: RetryPolicy(max_attempts=5, base_seconds=2, factor=3),
     JobKind.PORTFOLIO_REFRESH: RetryPolicy(max_attempts=3, base_seconds=30),
+    # A crawl that fails is usually the exchange rate-limiting us, and the
+    # right response is to back off substantially rather than hammer it.
+    JobKind.FILING_CRAWL: RetryPolicy(max_attempts=2, base_seconds=300),
+    JobKind.FILING_POST_PROCESS: RetryPolicy(max_attempts=3, base_seconds=30),
     JobKind.ALERT_EVALUATION: RetryPolicy(max_attempts=2, base_seconds=30),
     JobKind.USAGE_ROLLUP: RetryPolicy(max_attempts=3, base_seconds=60),
     JobKind.BACKUP: RetryPolicy(max_attempts=2, base_seconds=120),
@@ -257,6 +272,19 @@ class ScheduleSpec:
 
 #: The platform's standing schedule.
 SCHEDULES: tuple[ScheduleSpec, ...] = (
+    ScheduleSpec(
+        JobKind.FILING_CRAWL, 24 * 3600,
+        "Crawl investor-relations sites, NSE and BSE for new filings and "
+        "ingest anything not already held.",
+    ),
+    ScheduleSpec(
+        # Runs far more often than the crawl: ingestion is asynchronous, so
+        # documents finish indexing minutes to hours after they are collected
+        # and the rescore must follow them rather than the crawl.
+        JobKind.FILING_POST_PROCESS, 900,
+        "Rescore and notify for filings whose documents have finished "
+        "indexing.",
+    ),
     ScheduleSpec(
         JobKind.PORTFOLIO_REFRESH, 24 * 3600,
         "Revalue every portfolio and write a dated snapshot.",

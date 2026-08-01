@@ -356,12 +356,91 @@ def handle_retention_sweep(db: Session, payload: dict[str, Any]) -> dict[str, An
 # ===========================================================================
 # Registry
 # ===========================================================================
+# ===========================================================================
+# Automated Indian filing collection
+# ===========================================================================
+def handle_filing_crawl(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Crawl due companies for new filings and ingest what is new.
+
+    Bounded per run. The nightly budget exists because exchanges rate-limit
+    and because an unbounded crawl would hold a worker for the better part of
+    an hour; companies not reached tonight are simply the longest-waiting
+    tomorrow, which is why `due_companies` sorts by staleness.
+    """
+    from app.services.filings.collector import FilingCollector
+
+    max_companies = int(payload.get("max_companies", 25))
+    max_downloads = int(payload.get("max_downloads_per_company", 5))
+    download = bool(payload.get("download", True))
+    tickers = payload.get("tickers") or None
+
+    collector = FilingCollector(db, polite_delay=float(payload.get("delay", 1.0)))
+
+    if tickers:
+        # Targeted run, used by the admin panel and by verification.
+        from app.models.company import Company
+
+        results = []
+        for ticker in tickers:
+            company = db.scalar(
+                select(Company).where(Company.ticker == str(ticker).upper())
+            )
+            if company is None:
+                continue
+            results.append(collector.crawl_company(
+                company, download=download, max_downloads=max_downloads,
+            ).as_dict())
+        return {"companies": len(results), "results": results}
+
+    return collector.crawl_due(
+        max_companies=max_companies, download=download,
+        max_downloads_per_company=max_downloads,
+    )
+
+
+def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Rescore and notify for filings that have finished indexing.
+
+    Separate from the crawl because ingestion is asynchronous: a document
+    collected at 02:00 may not finish OCR and embedding until 02:20, and the
+    rescore has to follow the document rather than the crawl that fetched it.
+    """
+    from app.domain.filings.collection import CollectionStatus
+    from app.services.filings.post_filing import (
+        PostFilingProcessor, documents_awaiting_post_processing,
+    )
+
+    limit = int(payload.get("limit", 20))
+    rows = documents_awaiting_post_processing(db, limit=limit)
+    processor = PostFilingProcessor(db)
+
+    processed: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            # The 'before' snapshot is computed from the database as it stands
+            # with the new document already indexed, so it is not a true
+            # pre-filing baseline. Recorded honestly as such: the delta this
+            # produces is against the last stored score, which is what the
+            # notification claims.
+            outcome = processor.run(row.company_id, document_id=row.document_id)
+            row.status = CollectionStatus.COMPLETED.value
+            processed.append(outcome.as_dict())
+        except Exception as exc:  # noqa: BLE001 - one filing must not stop the batch
+            row.status = CollectionStatus.FAILED.value
+            row.error = f"post-processing failed: {exc}"[:500]
+            log.exception("post-filing processing failed", filing_id=row.id)
+    db.commit()
+    return {"processed": len(processed), "results": processed}
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.REPORT_GENERATION: handle_report_generation,
     JobKind.DOCUMENT_PROCESSING: handle_document_processing,
     JobKind.EMBEDDING: handle_embedding,
     JobKind.NOTIFICATION: handle_notification,
     JobKind.PORTFOLIO_REFRESH: handle_portfolio_refresh,
+    JobKind.FILING_CRAWL: handle_filing_crawl,
+    JobKind.FILING_POST_PROCESS: handle_filing_post_process,
     JobKind.ALERT_EVALUATION: handle_alert_evaluation,
     JobKind.USAGE_ROLLUP: handle_usage_rollup,
     JobKind.BACKUP: handle_backup,
