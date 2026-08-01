@@ -42,6 +42,11 @@ class EvidenceKind(StrEnum):
     VALUATION = "valuation"        # DCF / relative output
     SCORING = "scoring"            # institutional score
     DOCUMENT = "document"          # uploaded filing or transcript
+    #: A durable assertion from the Knowledge Vault, or a stored AI summary.
+    #: Distinct from DOCUMENT because it is knowledge the platform has already
+    #: distilled and versioned rather than a raw passage — it is read first,
+    #: and a reader should be able to tell the two apart.
+    KNOWLEDGE = "knowledge"
     MARKET = "market"              # price, market cap
 
 

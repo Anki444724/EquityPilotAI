@@ -198,6 +198,12 @@ class ContextBuilder:
         if include_scoring:
             self._add_scoring(context)
         if include_documents:
+            # Vault first, then raw document evidence. The order is the whole
+            # point of the knowledge engine: a durable, versioned assertion
+            # the platform has already distilled is better evidence than the
+            # paragraph it came from, and reading it first is what stops every
+            # question re-deriving the same conclusions from raw text.
+            self._add_knowledge(context)
             self._add_documents(context)
 
         return context
@@ -231,6 +237,91 @@ class ContextBuilder:
             key="market_cap", label="Market capitalisation", kind=EvidenceKind.MARKET,
             value=company.market_cap, unit=unit.money, source="Market data",
         ))
+
+    #: Vault entries admitted to the prompt, highest confidence first.
+    #: Enough to carry the company's shape without crowding out the computed
+    #: financials, which remain the authority on any figure.
+    VAULT_TOP_N = 14
+    #: Stored summaries admitted. Two is a brief and an institutional note —
+    #: the fastest way to give the model the filing's substance.
+    SUMMARY_TOP_N = 2
+
+    def _add_knowledge(self, context: GroundedContext) -> None:
+        """Durable knowledge: vault assertions and stored AI summaries.
+
+        This is the read-first memory. Without it every question re-reads the
+        corpus; with it the model receives what the platform already concluded,
+        each entry still carrying its document, page and confidence so the
+        answer remains as auditable as one drawn from raw text.
+        """
+        company = self.analysis.company
+        try:
+            from app.domain.knowledge.vault import SummaryKind
+            from app.services.knowledge.summaries import SummaryService
+            from app.services.knowledge.vault import KnowledgeVault
+        except Exception:  # noqa: BLE001 - the vault is optional
+            return
+
+        # The builder has no session of its own; the document service carries
+        # the one this request is running in.
+        session = getattr(getattr(self, "document_service", None), "db", None)
+        if session is None:
+            return
+
+        try:
+            entries = KnowledgeVault(session).read_vault(
+                company.id, per_section=4,
+            )
+        except Exception:  # noqa: BLE001 - never break an answer on the vault
+            log.exception("vault read failed", company_id=company.id)
+            entries = {}
+
+        flat = [e for section in entries.values() for e in section]
+        flat.sort(key=lambda e: -(e.get("confidence") or 0.0))
+        for item in flat[:self.VAULT_TOP_N]:
+            citation = item.get("citation") or {}
+            page = citation.get("page")
+            context.add(Citation(
+                key=f"vault_{item['section']}_{item['key']}"[:60],
+                label=f"[Vault/{item['section']}] {item['label']}",
+                kind=EvidenceKind.KNOWLEDGE,
+                value=str(item.get("value"))[:600],
+                unit=item.get("unit") or "",
+                source=(
+                    f"Knowledge Vault v{item.get('version')} — "
+                    f"{citation.get('doc_type') or 'filing'}"
+                    + (f" p.{page}" if page else "")
+                ),
+                fiscal_year=citation.get("fiscal_year"),
+                document_id=citation.get("document_id"),
+                page=page,
+                confidence=item.get("confidence"),
+                snippet=item.get("evidence"),
+            ))
+
+        try:
+            summaries = SummaryService(session).for_company(
+                company.id,
+                kinds=[SummaryKind.INSTITUTIONAL, SummaryKind.BRIEF_100],
+                limit=self.SUMMARY_TOP_N,
+            )
+        except Exception:  # noqa: BLE001
+            summaries = []
+
+        for summary in summaries:
+            context.add(Citation(
+                key=f"summary_{summary.kind}_{summary.document_id}"[:60],
+                label=f"[Memory/{summary.kind}] "
+                      f"FY{summary.fiscal_year or '?'} {summary.doc_type or ''}",
+                kind=EvidenceKind.KNOWLEDGE,
+                # Whitespace collapsed: the evidence block is parsed line by
+                # line, and a multi-line passage is silently dropped. AI-003.
+                value=" ".join((summary.content or "").split())[:1200],
+                source=f"Stored summary (document {summary.document_id})",
+                fiscal_year=summary.fiscal_year,
+                document_id=summary.document_id,
+                confidence=0.5 if summary.is_fallback else 0.85,
+            ))
 
     def _add_documents(self, context: GroundedContext) -> None:
         """Harvest evidence from uploaded filings — Module 7's contribution.

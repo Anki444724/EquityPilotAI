@@ -3,7 +3,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin, ai, analysis, auth, companies, dashboard, documents, filings_admin,
-    forecast, market, portfolio, reports, scoring, storage_admin,
+    forecast, knowledge, market, portfolio, reports, scoring, storage_admin,
     valuation,
 )
 
@@ -28,4 +28,5 @@ api_router.include_router(reports.router)
 # 404 because nothing looks broken.
 api_router.include_router(filings_admin.router)
 api_router.include_router(storage_admin.router)
+api_router.include_router(knowledge.router)
 api_router.include_router(market.router)

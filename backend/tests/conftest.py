@@ -142,6 +142,18 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from app.db.base import Base, get_db  # noqa: E402
+# `create_all` below builds the schema from whatever models have been
+# imported, so a model module that nothing else happens to import is silently
+# missing its table and every test touching it fails with "no such table".
+# Importing the package's modules explicitly makes the test schema match the
+# real one rather than depending on import side effects elsewhere.
+import importlib as _importlib  # noqa: E402
+import pkgutil as _pkgutil  # noqa: E402
+
+import app.models as _models  # noqa: E402
+
+for _module in _pkgutil.iter_modules(_models.__path__):
+    _importlib.import_module(f"app.models.{_module.name}")
 from app.db.seed import (  # noqa: E402
     seed, seed_module2, seed_reference_company,
 )
