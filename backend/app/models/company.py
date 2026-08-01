@@ -39,6 +39,33 @@ class Company(Base):
     exchange: Mapped[str] = mapped_column(String(16), default=Exchange.NSE)
     isin: Mapped[str | None] = mapped_column(String(16), unique=True)
 
+    #: BSE scrip code, where the company is also listed there.
+    #:
+    #: Stored as a string, not an integer: it is an identifier rather than a
+    #: quantity, several are zero-padded, and arithmetic on it is always a
+    #: bug. Nullable because a genuine NSE-only listing has none — BSE Ltd
+    #: and CDSL are the two in the Nifty 500.
+    bse_code: Mapped[str | None] = mapped_column(String(16), index=True)
+
+    #: "largecap" | "midcap" | "smallcap", from NSE's own constituent indices
+    #: (Nifty 100 / Midcap 150 / Smallcap 250) rather than a threshold we
+    #: invented. Those three partition the Nifty 500 exactly, so the
+    #: classification is the exchange's, not ours, and it stays correct when
+    #: NSE rebalances.
+    market_cap_category: Mapped[str | None] = mapped_column(String(12), index=True)
+
+    #: Whether the company is currently an active, tradeable listing.
+    #: Kept explicit so a delisted or suspended company can be retained for
+    #: its history without being swept into daily collection.
+    listing_status: Mapped[str] = mapped_column(
+        String(12), default="active", server_default="active", nullable=False,
+        index=True,
+    )
+
+    #: Index membership, e.g. "NIFTY500". Records why the company is in the
+    #: universe at all, which is what makes a later universe change auditable.
+    index_membership: Mapped[str | None] = mapped_column(String(64), index=True)
+
     #: How this company's stored figures are denominated (Phase 3).
     #:
     #: The platform was built for Indian listings, so "₹ crore" was a constant
