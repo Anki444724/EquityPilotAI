@@ -124,6 +124,59 @@ def run_replication(
     return service.run(limit=limit).as_dict()
 
 
+@router.post("/storage/migrate", summary="Migrate volume documents to R2")
+def migrate_to_object_storage(
+    limit: int = Query(default=25, le=500),
+    dry_run: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Copy documents from the volume to object storage, verifying each.
+
+    Runs inside the container because that is the only place the Railway
+    Volume is mounted — the bytes cannot be reached from anywhere else.
+
+    Nothing is deleted and no document row is repointed: `StorageMigrator`
+    copies, reads back, and compares the SHA256 against the value recorded at
+    upload. Bounded per call so a request cannot hold a worker for the length
+    of a 236 MB transfer.
+    """
+    _require_operator(user)
+    from app.core.config import settings
+    from app.services.documents.migrate_storage import StorageMigrator
+    from app.services.documents.storage import (
+        LocalFileStorage, S3CompatibleStorage,
+    )
+
+    if not settings.DOCUMENT_S3_BUCKET:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "object storage is not configured",
+        )
+
+    # Explicit endpoints rather than `get_storage()`: this must copy volume
+    # -> object storage regardless of which one is currently primary, so that
+    # the same endpoint works before and after cutover.
+    source = LocalFileStorage(settings.DOCUMENT_STORAGE_PATH)
+    destination = S3CompatibleStorage(
+        settings.DOCUMENT_S3_BUCKET,
+        endpoint_url=settings.DOCUMENT_S3_ENDPOINT,
+        region=settings.DOCUMENT_S3_REGION,
+        access_key=settings.DOCUMENT_S3_ACCESS_KEY,
+        secret_key=settings.DOCUMENT_S3_SECRET_KEY,
+    )
+    report = StorageMigrator(
+        db, source, destination, dry_run=dry_run,
+    ).run(limit=limit)
+    payload = report.as_dict()
+    # The per-document list is large and mostly uninteresting; keep only the
+    # entries an operator must act on.
+    payload["outcomes"] = [
+        o for o in payload["outcomes"]
+        if o["status"] in ("failed", "missing_source")
+    ]
+    return payload
+
+
 @router.get("/storage/promotion-readiness",
             summary="Is object storage ready to become primary?")
 def promotion_readiness(

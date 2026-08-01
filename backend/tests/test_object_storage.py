@@ -278,3 +278,80 @@ class TestBackendSelection:
             pathlib.Path(__file__).resolve().parent.parent / "requirements.txt"
         ).read_text()
         assert "boto3" in requirements
+
+
+class TestCloudflareR2Compatibility:
+    """R2 is S3-compatible but not S3, and its differences fail silently.
+
+    Each of these was a real risk when pointing the existing backend at R2:
+    a wrong region produces signature mismatches, virtual-host addressing
+    resolves a hostname that does not exist, and botocore's default CRC32
+    trailers are rejected by R2 on some paths.
+    """
+
+    def _client(self, **kwargs):
+        return S3CompatibleStorage(
+            "b", endpoint_url="https://acct.r2.cloudflarestorage.com",
+            access_key="k", secret_key="s", **kwargs,
+        )
+
+    def test_path_style_addressing_is_forced(self):
+        """Virtual-host style resolves bucket.<account>.r2... which does not
+        exist, so requests fail DNS rather than returning an S3 error."""
+        with mock_aws():
+            storage = self._client(region="auto")
+            assert storage._config.s3["addressing_style"] == "path"
+
+    def test_a_missing_region_defaults_to_auto(self):
+        """R2 has no regions; a real one causes signature mismatches."""
+        with mock_aws():
+            storage = self._client()
+            assert storage._client.meta.region_name == "auto"
+
+    def test_checksum_trailers_are_not_sent_unless_required(self):
+        """R2 rejects x-amz-checksum trailers on some paths. The platform
+        verifies with SHA256 by read-back, which is strictly stronger."""
+        with mock_aws():
+            storage = self._client(region="auto")
+            mode = getattr(
+                storage._config, "request_checksum_calculation", None,
+            )
+            if mode is None:
+                pytest.skip("botocore too old to express this setting")
+            assert mode == "when_required"
+
+    def test_the_endpoint_is_preserved(self):
+        with mock_aws():
+            assert "r2.cloudflarestorage.com" in self._client()._endpoint
+
+
+class TestFallbackDirection:
+    """REPL-002 — the secondary must be whichever backend the primary is not."""
+
+    def test_a_volume_primary_pairs_with_object_storage(self, monkeypatch):
+        from app.core.config import settings
+        from app.services.documents.replication import ReplicationService
+        from tests.conftest import TestingSession
+
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_BACKEND", "local")
+        monkeypatch.setattr(settings, "DOCUMENT_S3_BUCKET", "b")
+        monkeypatch.setattr(settings, "DOCUMENT_S3_ENDPOINT",
+                            "https://acct.r2.cloudflarestorage.com")
+        monkeypatch.setattr(settings, "DOCUMENT_S3_ACCESS_KEY", "k")
+        monkeypatch.setattr(settings, "DOCUMENT_S3_SECRET_KEY", "s")
+        with mock_aws():
+            secondary = ReplicationService(TestingSession()).secondary
+            assert isinstance(secondary, S3CompatibleStorage)
+
+    def test_an_object_primary_pairs_with_the_volume(self, monkeypatch, tmp_path):
+        """Without this the fallback retries the backend that just failed."""
+        from app.core.config import settings
+        from app.services.documents.replication import ReplicationService
+        from tests.conftest import TestingSession
+
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_BACKEND", "r2")
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_PATH", str(tmp_path))
+        monkeypatch.setattr(settings, "DOCUMENT_S3_BUCKET", "b")
+        with mock_aws():
+            secondary = ReplicationService(TestingSession()).secondary
+            assert isinstance(secondary, LocalFileStorage)

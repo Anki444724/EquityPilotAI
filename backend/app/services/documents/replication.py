@@ -118,17 +118,41 @@ class ReplicationService:
 
     @property
     def secondary(self) -> DocumentStorage | None:
-        """The replica target, or None when object storage is unconfigured.
+        """The *other* backend — whichever one the primary is not.
 
-        Returning None rather than raising is deliberate: the platform must
-        run perfectly well with no bucket at all, which is exactly its state
-        until Railway provisions one. Every caller treats None as "nothing to
-        replicate to" and carries on.
+        REPL-002. This originally always built the S3 client, which was
+        correct while the volume was primary and became a silent no-op the
+        moment `DOCUMENT_STORAGE_BACKEND=r2`: primary and secondary both
+        resolved to R2, so the "fallback" read retried the backend that had
+        just failed, and replication would have copied R2 onto itself.
+
+        The pairing is therefore derived from the configured primary:
+
+        * volume primary  -> secondary is object storage (the pre-cutover
+          arrangement: replicate outwards to R2);
+        * object primary  -> secondary is the volume (the post-cutover
+          arrangement: the volume is the read fallback the brief requires
+          until migration is fully verified).
+
+        Returning None is still valid and means "no second backend", which is
+        how the platform runs with no bucket configured at all.
         """
         if self._secondary is not None:
             return self._secondary
         from app.core.config import settings
-        from app.services.documents.storage import S3CompatibleStorage
+        from app.services.documents.storage import (
+            LocalFileStorage, S3CompatibleStorage,
+        )
+
+        backend = (settings.DOCUMENT_STORAGE_BACKEND or "local").lower()
+        if backend in {"s3", "r2", "minio"}:
+            # Object storage is primary; the volume is the fallback copy.
+            try:
+                self._secondary = LocalFileStorage(settings.DOCUMENT_STORAGE_PATH)
+            except Exception as exc:  # noqa: BLE001 - no volume mounted
+                log.warning("volume fallback unavailable", error=str(exc)[:160])
+                return None
+            return self._secondary
 
         if not settings.DOCUMENT_S3_BUCKET:
             return None
@@ -356,8 +380,9 @@ class ReplicationService:
                 payload = secondary.read(key)
             except Exception as exc:  # noqa: BLE001
                 raise StorageError(
-                    f"document {document.id} unreadable from both the volume "
-                    f"({primary_error}) and object storage ({exc})"
+                    f"document {document.id} unreadable from both the "
+                    f"primary backend ({primary_error}) and the fallback "
+                    f"({exc})"
                 ) from exc
 
             # A fallback read is still a read of a financial document, so it

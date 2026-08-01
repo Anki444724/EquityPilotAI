@@ -234,6 +234,7 @@ class S3CompatibleStorage(DocumentStorage):
     ) -> None:
         try:
             import boto3  # noqa: PLC0415
+            from botocore.config import Config  # noqa: PLC0415
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise StorageError(
                 "S3 storage selected but boto3 is not installed. "
@@ -242,9 +243,41 @@ class S3CompatibleStorage(DocumentStorage):
 
         self.bucket = bucket
         self._endpoint = endpoint_url
+
+        # Cloudflare R2 is S3-compatible but not S3, and three of its
+        # differences bite silently rather than loudly:
+        #
+        # * **Region must be "auto".** R2 has no regions; sending a real one
+        #   produces signature mismatches on some operations.
+        # * **Path-style addressing.** Virtual-host style resolves
+        #   `bucket.<account>.r2.cloudflarestorage.com`, which does not exist,
+        #   so requests fail DNS rather than returning an S3 error.
+        # * **No `x-amz-checksum-*` trailers.** Recent botocore releases send
+        #   CRC32 checksums by default; R2 rejects the trailer with a 501 or,
+        #   worse, silently stores a corrupted object on some paths. Both are
+        #   pinned off here — the platform verifies with SHA256 by read-back,
+        #   which is strictly stronger than a transport-level CRC.
+        config_kwargs: dict[str, object] = {
+            "signature_version": "s3v4",
+            "s3": {"addressing_style": "path"},
+            "retries": {"max_attempts": 3, "mode": "standard"},
+        }
+        try:
+            # botocore >= 1.36 only. Guarded so an older pin does not break
+            # start-up on a TypeError for an unknown Config field.
+            self._config = Config(
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+                **config_kwargs,
+            )
+        except TypeError:  # pragma: no cover - depends on the installed pin
+            self._config = Config(**config_kwargs)
+
         self._client = boto3.client(
-            "s3", endpoint_url=endpoint_url, region_name=region,
+            "s3", endpoint_url=endpoint_url,
+            region_name=(region or "auto"),
             aws_access_key_id=access_key, aws_secret_access_key=secret_key,
+            config=self._config,
         )
 
     def put(self, key: str, source: BinaryIO | bytes) -> StoredObject:
