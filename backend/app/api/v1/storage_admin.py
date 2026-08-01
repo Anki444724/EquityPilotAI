@@ -206,6 +206,99 @@ def migrate_to_object_storage(
     return payload
 
 
+@router.post("/storage/reclaim-volume",
+             summary="Delete volume copies that are verified in object storage")
+def reclaim_volume(
+    limit: int = Query(default=50, le=500),
+    dry_run: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Free volume space by removing copies R2 already holds.
+
+    Only ever deletes a volume object when, in this same call, R2 is read and
+    its SHA256 matches the hash recorded at upload. A copy that cannot be
+    verified is left alone — the whole point of the volume during this phase
+    is to be the thing that survives when the new backend does not.
+
+    Defaults to a dry run. This is the only endpoint in the platform that
+    deletes document bytes, so it does not act unless asked explicitly.
+    """
+    _require_operator(user)
+    import hashlib
+
+    from app.core.config import settings
+    from app.services.documents.storage import (
+        LocalFileStorage, S3CompatibleStorage,
+    )
+
+    if (settings.DOCUMENT_STORAGE_BACKEND or "local").lower() not in (
+        "s3", "r2", "minio"
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "object storage is not primary; the volume is authoritative and "
+            "nothing may be reclaimed",
+        )
+
+    volume = LocalFileStorage(settings.DOCUMENT_STORAGE_PATH)
+    bucket = S3CompatibleStorage(
+        settings.DOCUMENT_S3_BUCKET,
+        endpoint_url=settings.DOCUMENT_S3_ENDPOINT,
+        region=settings.DOCUMENT_S3_REGION,
+        access_key=settings.DOCUMENT_S3_ACCESS_KEY,
+        secret_key=settings.DOCUMENT_S3_SECRET_KEY,
+    )
+
+    reclaimed = verified = skipped = 0
+    freed = 0
+    notes: list[dict[str, Any]] = []
+    documents = db.execute(
+        select(Document).where(Document.storage_key.is_not(None))
+        .order_by(Document.id).limit(limit)
+    ).scalars().all()
+
+    for document in documents:
+        key = document.storage_key
+        if not volume.exists(key):
+            skipped += 1
+            continue
+        try:
+            replica = bucket.read(key)
+        except Exception as exc:  # noqa: BLE001
+            skipped += 1
+            notes.append({"document_id": document.id,
+                          "reason": f"not readable in object storage: {exc}"[:160]})
+            continue
+
+        digest = hashlib.sha256(replica).hexdigest()
+        if document.content_hash and digest != document.content_hash:
+            skipped += 1
+            notes.append({"document_id": document.id,
+                          "reason": "checksum mismatch — volume copy retained"})
+            continue
+
+        verified += 1
+        size = len(replica)
+        if not dry_run:
+            volume.delete(key)
+            reclaimed += 1
+            freed += size
+        else:
+            freed += size
+
+    return {
+        "dry_run": dry_run,
+        "examined": len(documents),
+        "verified_in_object_storage": verified,
+        "reclaimed": reclaimed,
+        "skipped": skipped,
+        "freed_bytes": freed,
+        "freed_mb": round(freed / (1024 * 1024), 2),
+        "notes": notes[:20],
+    }
+
+
 @router.get("/storage/promotion-readiness",
             summary="Is object storage ready to become primary?")
 def promotion_readiness(

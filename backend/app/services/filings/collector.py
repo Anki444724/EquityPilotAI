@@ -47,6 +47,13 @@ from app.services.filings.downloader import DownloadError, FilingDownloader
 
 log = structlog.get_logger(__name__)
 
+#: Free space the volume must retain when it is only transit/scratch space.
+#:
+#: Enough for one maximum-sized download plus room for OCR to rasterise it,
+#: which is the largest transient the pipeline creates. Far below the durable
+#: floor because nothing is being retained here.
+TRANSIT_HEADROOM_BYTES = 150 * 1024 * 1024
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -139,6 +146,15 @@ class FilingCollector:
             )
             self.db.add(state)
             self.db.flush()
+
+        # BSE-001. The scrip code lives on the company after the Nifty 500
+        # import, but crawl state was only ever populated by hand — so 498
+        # freshly imported codes sat unused and every BSE fetch reported "no
+        # scrip code mapped". Copy it across on first sight, without ever
+        # overwriting a value an operator set deliberately.
+        if not state.bse_scrip_code and getattr(company, "bse_code", None):
+            state.bse_scrip_code = company.bse_code
+            self.db.flush()
         return state
 
     def due_companies(self, *, limit: int | None = None) -> list[Company]:
@@ -147,7 +163,16 @@ class FilingCollector:
             select(Company, CompanyCrawlState)
             .outerjoin(CompanyCrawlState,
                        CompanyCrawlState.company_id == Company.id)
-            .where(Company.exchange.in_(("NSE", "BSE", "NSE/BSE")))
+            .where(
+                Company.exchange.in_(("NSE", "BSE", "NSE/BSE")),
+                # DELIST-001. A company marked delisted still had a row and
+                # was therefore still crawled every night. Tata Motors has
+                # demerged and Zomato has renamed; their old symbols resolve
+                # to nothing at NSE, so each one burned a request and a
+                # failure counter on every pass. History is retained, but the
+                # active universe is what gets collected.
+                Company.listing_status == "active",
+            )
         ).all()
 
         now = _utcnow()
@@ -296,11 +321,28 @@ class FilingCollector:
             path = getattr(settings, "DOCUMENT_STORAGE_PATH", None)
             if not path:
                 return True
-            floor_mb = int(getattr(settings, "DOCUMENT_MIN_FREE_DISK_MB", 512))
-            # Reserve the platform floor plus one maximum-sized download, so
-            # the check cannot pass and then be invalidated by the very file
-            # it just authorised.
-            required = floor_mb * 1024 * 1024 + MAX_AUTO_DOWNLOAD_BYTES
+
+            # STORAGE-002. With object storage primary, a collected document
+            # does not stay on the volume — it is streamed through and the
+            # durable copy lives in R2. The original reservation (512 MB floor
+            # plus a 60 MB download) was sized for a volume that had to *hold*
+            # the corpus, and against a 500 MB volume already 56% full by
+            # migrated copies it refuses every download forever: collection
+            # would report "deferred: insufficient free storage" for all 500
+            # companies and never recover.
+            #
+            # The volume is still scratch space during parsing and OCR, so a
+            # working margin is kept — just one sized for transit rather than
+            # for permanent residency.
+            backend = (settings.DOCUMENT_STORAGE_BACKEND or "local").lower()
+            if backend in {"s3", "r2", "minio"}:
+                required = TRANSIT_HEADROOM_BYTES
+            else:
+                # Volume is the durable store: reserve the platform floor plus
+                # one maximum-sized download, so the check cannot pass and then
+                # be invalidated by the very file it just authorised.
+                floor_mb = int(getattr(settings, "DOCUMENT_MIN_FREE_DISK_MB", 512))
+                required = floor_mb * 1024 * 1024 + MAX_AUTO_DOWNLOAD_BYTES
             return free_disk_bytes(path) > required
         except Exception:  # noqa: BLE001 - never block collection on telemetry
             log.debug("storage headroom check unavailable")

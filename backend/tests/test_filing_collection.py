@@ -605,3 +605,86 @@ class TestNotificationDiscipline:
 
         dims = PostFilingProcessor._dimensions(_Result())
         assert dims["financial_quality"] == pytest.approx(84.35, abs=0.01)
+
+
+class TestUniverseScaleFixes:
+    """Defects that only appear at 500 companies rather than 26."""
+
+    def test_delisted_companies_are_not_crawled(self, collector_env):
+        """DELIST-001. Tata Motors has demerged and Zomato has renamed; their
+        old symbols resolve to nothing at NSE, so each burned a request and a
+        failure counter on every nightly pass."""
+        db, company = collector_env
+        collector = _make_collector(db)
+        assert company.id in {c.id for c in collector.due_companies()}
+
+        company.listing_status = "delisted"
+        db.commit()
+        assert company.id not in {c.id for c in collector.due_companies()}
+
+    def test_the_bse_code_is_adopted_from_the_company(self, collector_env):
+        """BSE-001. The Nifty 500 import populated 498 BSE codes on the
+        company, but crawl state was only ever set by hand, so every BSE fetch
+        reported 'no scrip code mapped'."""
+        db, company = collector_env
+        company.bse_code = "500325"
+        db.commit()
+
+        state = _make_collector(db).state_for(company)
+        assert state.bse_scrip_code == "500325"
+
+    def test_an_operator_set_scrip_code_is_never_overwritten(self,
+                                                             collector_env):
+        from app.models.filing_collection import CompanyCrawlState
+
+        db, company = collector_env
+        db.add(CompanyCrawlState(company_id=company.id, tier="weekly",
+                                 bse_scrip_code="999999"))
+        db.commit()
+        company.bse_code = "500325"
+        db.commit()
+
+        assert _make_collector(db).state_for(company).bse_scrip_code == "999999"
+
+    def test_object_primary_uses_the_transit_headroom(self, monkeypatch,
+                                                      collector_env):
+        """STORAGE-002. With R2 primary a document does not stay on the
+        volume, so reserving 512 MB against an already-full 500 MB volume
+        refused every download forever."""
+        from app.core.config import settings
+        from app.services.filings.collector import TRANSIT_HEADROOM_BYTES
+
+        db, _ = collector_env
+        collector = _make_collector(db)
+        del collector._has_headroom      # restore the real implementation
+
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_BACKEND", "r2")
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_PATH", "/tmp")
+        monkeypatch.setattr(
+            "app.services.documents.storage.free_disk_bytes",
+            lambda p: TRANSIT_HEADROOM_BYTES + 1,
+        )
+        assert collector._has_headroom(), (
+            "object-primary collection blocked despite adequate transit space"
+        )
+
+    def test_volume_primary_still_reserves_the_durable_floor(self, monkeypatch,
+                                                             collector_env):
+        """The stricter reservation must survive for volume-primary
+        deployments, where the volume really does hold the corpus."""
+        from app.core.config import settings
+        from app.services.filings.collector import TRANSIT_HEADROOM_BYTES
+
+        db, _ = collector_env
+        collector = _make_collector(db)
+        del collector._has_headroom
+
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_BACKEND", "local")
+        monkeypatch.setattr(settings, "DOCUMENT_STORAGE_PATH", "/tmp")
+        monkeypatch.setattr(
+            "app.services.documents.storage.free_disk_bytes",
+            lambda p: TRANSIT_HEADROOM_BYTES + 1,
+        )
+        assert not collector._has_headroom(), (
+            "volume-primary accepted a download below the durable floor"
+        )

@@ -163,6 +163,74 @@ def crawl_states(
 
 
 # ----------------------------------------------------------------- controls
+@router.post("/filings/enable-universe",
+             summary="Register every active Indian company for collection")
+def enable_universe(
+    tier: str = Query(default="weekly"),
+    index: str | None = Query(default="NIFTY500"),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Create crawl state for the whole universe in one pass.
+
+    Without this, a company is only registered the first time it happens to be
+    crawled, so `due_companies` cannot see it and the scheduler never reaches
+    it — a chicken-and-egg that leaves 368 freshly imported companies
+    invisible to collection.
+
+    Also backfills `bse_scrip_code` from the company record, which the
+    Nifty 500 import populated for 498 of 500.
+    """
+    _require_operator(user)
+
+    try:
+        wanted_tier = CollectionTier(tier).value
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"tier must be one of {[t.value for t in CollectionTier]}",
+        ) from exc
+
+    query = select(Company).where(
+        Company.exchange.in_(("NSE", "BSE", "NSE/BSE")),
+        Company.listing_status == "active",
+    )
+    if index:
+        query = query.where(Company.index_membership == index)
+    companies = db.execute(query).scalars().all()
+
+    created = updated = unchanged = 0
+    for company in companies:
+        state = db.scalar(
+            select(CompanyCrawlState).where(
+                CompanyCrawlState.company_id == company.id
+            )
+        )
+        if state is None:
+            db.add(CompanyCrawlState(
+                company_id=company.id, tier=wanted_tier, enabled=True,
+                bse_scrip_code=company.bse_code,
+            ))
+            created += 1
+            continue
+        changed = False
+        if not state.bse_scrip_code and company.bse_code:
+            state.bse_scrip_code = company.bse_code
+            changed = True
+        if not state.enabled:
+            state.enabled = True
+            state.consecutive_failures = 0
+            changed = True
+        updated += 1 if changed else 0
+        unchanged += 0 if changed else 1
+
+    db.commit()
+    return {
+        "companies": len(companies), "created": created,
+        "updated": updated, "unchanged": unchanged, "tier": wanted_tier,
+    }
+
+
 @router.post("/filings/crawl", summary="Run a collection pass now")
 def run_crawl(
     tickers: str | None = Query(
