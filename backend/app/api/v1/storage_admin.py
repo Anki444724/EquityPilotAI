@@ -55,6 +55,35 @@ def storage_health(
     return payload
 
 
+@router.get("/storage/backend", summary="Which backend is actually live")
+def active_backend(
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """What `get_storage()` resolved to in *this* process.
+
+    Added while diagnosing uploads that continued to land on the volume after
+    DOCUMENT_STORAGE_BACKEND was set to r2. Reading the setting is not enough:
+    `get_storage()` memoises into a module-level `_STORAGE`, so what matters is
+    what the running process built, not what the configuration says now.
+    """
+    from app.core.config import settings
+    from app.services.documents.storage import get_storage
+
+    live = get_storage()
+    return {
+        "configured_backend": settings.DOCUMENT_STORAGE_BACKEND,
+        "active_backend": live.backend,
+        "active_class": type(live).__name__,
+        "target": getattr(live, "bucket", None) or str(getattr(live, "root", "")),
+        "bucket_configured": bool(settings.DOCUMENT_S3_BUCKET),
+        "endpoint": settings.DOCUMENT_S3_ENDPOINT,
+        "matches": live.backend == (
+            "s3" if settings.DOCUMENT_STORAGE_BACKEND in ("s3", "r2", "minio")
+            else "local"
+        ),
+    }
+
+
 @router.get("/storage/replication", summary="Per-document replication state")
 def replication_state(
     state: str | None = Query(default=None),
