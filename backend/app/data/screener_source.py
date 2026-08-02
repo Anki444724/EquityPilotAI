@@ -161,6 +161,14 @@ class ScreenerFinancials:
     balance_sheet: dict[str, dict[int, float]] = field(default_factory=dict)
     cash_flow: dict[str, dict[int, float]] = field(default_factory=dict)
     ratios: dict[str, dict[int, float]] = field(default_factory=dict)
+    #: Quarterly results, keyed by (fiscal_year, quarter) rather than year —
+    #: see `_fiscal_period` for why the annual key would lose twelve of
+    #: thirteen columns.
+    quarters: dict[str, dict[tuple[int, int], float]] = field(default_factory=dict)
+    #: Shareholding pattern, same quarterly keying. Screener publishes the
+    #: promoter/FII/DII/government/public split, not the finer SEBI
+    #: categories, so only those are populated.
+    shareholding: dict[str, dict[tuple[int, int], float]] = field(default_factory=dict)
     #: Headline figures from the company banner — used for cross-checking.
     summary: dict[str, float] = field(default_factory=dict)
     price: float | None = None
@@ -177,6 +185,70 @@ class ScreenerFinancials:
     @property
     def latest_year(self) -> int | None:
         return max(self.fiscal_years) if self.fiscal_years else None
+
+
+#: A calendar quarter-end month → the Indian fiscal quarter it closes.
+#: Indian fiscal years run April–March, so June is Q1 and March is Q4.
+_QUARTER_OF_MONTH = {"Jun": 1, "Sep": 2, "Dec": 3, "Mar": 4}
+
+
+def _fiscal_period(header: str) -> tuple[int, int] | None:
+    """`Sep 2024` → (fiscal_year 2025, quarter 2). `TTM`/blank → None.
+
+    Distinct from `_fiscal_year`, and the distinction is the whole point.
+    `_fiscal_year` collapses a column to a year, which is correct for the
+    annual tables and silently destructive for the quarterly one: thirteen
+    quarterly columns map onto four year keys, so `Jun 2023`, `Sep 2023` and
+    `Dec 2023` overwrite one another and only the last survives. The quarterly
+    section needs the quarter as well as the year, so it gets its own reader.
+    """
+    match = re.search(r"(Mar|Jun|Sep|Dec)\s+(\d{4})", header)
+    if not match:
+        return None
+    month, calendar_year = match.group(1), int(match.group(2))
+    quarter = _QUARTER_OF_MONTH[month]
+    # Apr–Mar fiscal year: Jun/Sep/Dec 2024 all sit in FY2025, and Mar 2025
+    # closes that same FY2025.
+    fiscal_year = calendar_year if month == "Mar" else calendar_year + 1
+    return fiscal_year, quarter
+
+
+def _parse_period_section(
+    html: str, section_id: str,
+) -> dict[str, dict[tuple[int, int], float]]:
+    """Parse a quarter-columned section, keyed by (fiscal_year, quarter)."""
+    match = re.search(
+        rf'<section id="{section_id}".*?(?=<section id=|\Z)', html, re.S,
+    )
+    if not match:
+        return {}
+
+    parser = _TableParser()
+    parser.feed(match.group(0))
+    if not parser.rows:
+        return {}
+
+    header = parser.rows[0]
+    periods = [(index, _fiscal_period(cell)) for index, cell in enumerate(header)]
+    valid = [(index, period) for index, period in periods if period is not None]
+    if not valid:
+        return {}
+
+    table: dict[str, dict[tuple[int, int], float]] = {}
+    for row in parser.rows[1:]:
+        label = row[0].strip()
+        if not label or label.endswith(":") or "Compounded" in label:
+            continue
+        series: dict[tuple[int, int], float] = {}
+        for index, period in valid:
+            if index < len(row):
+                value = _number(row[index])
+                if value is not None:
+                    series[period] = value
+        if series:
+            table[label] = series
+
+    return table
 
 
 def _parse_section(html: str, section_id: str) -> tuple[dict[str, dict[int, float]], list[int]]:
@@ -258,7 +330,34 @@ def fetch_screener(ticker: str, *, consolidated: bool = True) -> ScreenerFinanci
             table, section_years = _parse_section(html, section_id)
             tables[attribute] = table
             all_years.update(section_years)
+        # Quarter-columned sections. Absent for a recent listing with no
+        # published quarters yet, which is a legitimate empty rather than a
+        # failure, so a missing section yields {} and no warning.
+        tables["quarters"] = _parse_period_section(html, "quarters")
+        tables["shareholding"] = _parse_period_section(html, "shareholding")
         return tables, all_years, html
+
+    def _quarters_from_standalone(slug_: str) -> dict:
+        """Quarters from the standalone page.
+
+        Some companies — Colgate Palmolive India, AU Small Finance Bank,
+        Five-Star Business Finance — serve a consolidated `quarters` section
+        that is a STUB: a table with two `<th>` cells, no date columns, and a
+        "View Standalone" link where the data should be. The annual
+        consolidated tables on the same page are complete, so the page is not
+        stale and the existing fallbacks correctly leave it alone; only the
+        quarterly block is empty.
+
+        Parsing it yielded zero periods and the company silently showed no
+        quarterly results at all. Fetching the standalone page for the
+        quarterly block specifically is the narrowest fix: the annual
+        statements stay consolidated, which is the correct basis for a group.
+        """
+        try:
+            standalone_html = _fetch(f"{_BASE}/{slug_}/")
+        except ScreenerError:
+            return {}
+        return _parse_period_section(standalone_html, "quarters")
 
     out = ScreenerFinancials(ticker=ticker)
     if slug != ticker:
@@ -277,17 +376,59 @@ def fetch_screener(ticker: str, *, consolidated: bool = True) -> ScreenerFinanci
     # 404, so PAGEIND, SBILIFE, BDL and ICICIGI were all recorded as "no
     # profit & loss table" when in fact they simply file standalone.
     # Emptiness, not the status code, is the signal to fall back.
+    #
+    # A THIRD case exists, and emptiness does not catch it either: a
+    # consolidated page that is non-empty but stale. GE Vernova T&D India
+    # (GVT&D) serves a consolidated page carrying a single `Dec 2010` column —
+    # left over from a corporate history several renames ago — while its
+    # standalone page carries the full Mar 2015…Mar 2026 series. The old test
+    # saw a populated table, accepted it, and stored one fiscal year from
+    # sixteen years ago: worse than a failure, because it looks like coverage.
+    #
+    # So the consolidated page must be not merely present but *competitive*.
+    # A standalone series more than one year longer wins. The threshold is not
+    # zero because a company genuinely reporting both will often have one
+    # extra standalone year, and that is not a reason to abandon consolidated
+    # accounts — which remain the correct basis for a group.
+    consolidated_years = len(years) if years else 0
     if tables is None or not tables.get("profit_loss"):
         tables, years, html = _load(f"{_BASE}/{slug}/")
         if consolidated:
             out.warnings.append(
                 "standalone statements — company files no consolidated accounts"
             )
+    elif consolidated and consolidated_years <= 2:
+        standalone_tables, standalone_years, standalone_html = _load(
+            f"{_BASE}/{slug}/"
+        )
+        if len(standalone_years) > consolidated_years + 1:
+            tables, years, html = (
+                standalone_tables, standalone_years, standalone_html,
+            )
+            out.warnings.append(
+                f"standalone statements — the consolidated page carried only "
+                f"{consolidated_years} fiscal year(s) against "
+                f"{len(standalone_years)} standalone (stale consolidated page)"
+            )
 
     out.profit_loss = tables["profit_loss"]
     out.balance_sheet = tables["balance_sheet"]
     out.cash_flow = tables["cash_flow"]
     out.ratios = tables["ratios"]
+    out.quarters = tables.get("quarters", {})
+    out.shareholding = tables.get("shareholding", {})
+
+    # A consolidated page whose quarterly block is a stub. Only worth the
+    # extra request when the annual tables DID come from the consolidated
+    # page — if we already fell back to standalone, `out.quarters` came from
+    # there too and is either populated or genuinely absent.
+    if consolidated and not out.quarters and not out.warnings:
+        out.quarters = _quarters_from_standalone(slug)
+        if out.quarters:
+            out.warnings.append(
+                "quarterly results taken from the standalone page — the "
+                "consolidated quarterly block is a stub with no periods"
+            )
 
     if not out.profit_loss:
         raise ScreenerError(f"no profit & loss table for {ticker}")

@@ -89,6 +89,48 @@ class ShareholdingResponse(AnalysisResponse):
     flags: list[Flag] = Field(default_factory=list)
 
 
+class QuarterRowOut(BaseModel):
+    """One reported quarter. All money in ₹ crore; all rates are fractions."""
+
+    fiscal_year: int
+    quarter: int = Field(ge=1, le=4)
+    label: str = Field(description='e.g. "Q2 FY26"')
+    revenue: float | None = None
+    expenses: float | None = None
+    operating_profit: float | None = None
+    operating_margin: float | None = Field(
+        None, description="Fraction, not percent (0.145 == 14.5%)")
+    other_income: float | None = None
+    interest: float | None = None
+    depreciation: float | None = None
+    profit_before_tax: float | None = None
+    tax_rate: float | None = Field(None, description="Fraction, not percent")
+    net_profit: float | None = None
+    eps: float | None = Field(None, description="₹ per share")
+    revenue_qoq: float | None = None
+    profit_qoq: float | None = None
+    revenue_yoy: float | None = None
+    profit_yoy: float | None = None
+    source: str | None = None
+
+
+class QuarterlyResponse(BaseModel):
+    """Quarterly results as filed.
+
+    `has_data=False` means the source genuinely publishes no quarters for this
+    company — a recent listing, or a company screener does not cover. It never
+    means the platform declined to store them: a period with no reported
+    figure is not written at all, so an empty list here is a fact about the
+    filing history, not about the pipeline.
+    """
+
+    company: CompanyRef
+    quarters: list[QuarterRowOut] = Field(default_factory=list)
+    has_data: bool = False
+    #: Why the list is empty, when it is. Null when data is present.
+    unavailable_reason: str | None = None
+
+
 class StatementSummary(BaseModel):
     """Compact headline block used by the financials overview tab."""
 

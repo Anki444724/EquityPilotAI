@@ -10,6 +10,7 @@ URL scheme is ticker-based per the specification:
     GET /api/v1/company/{ticker}/debt
     GET /api/v1/company/{ticker}/capex
     GET /api/v1/company/{ticker}/shareholding
+    GET /api/v1/company/{ticker}/quarterly
 
 Every handler is a thin adapter: resolve → delegate to a service → serialise.
 No financial logic lives in this layer.
@@ -24,11 +25,12 @@ from app.db.base import get_db
 from app.schemas.analysis import (
     CapexResponse, CovenantRow, DebtInstrumentRow, DebtReconciliation,
     DebtResponse, FinancialsOverview, MaturityBucket, OwnershipSignal,
-    RatioResponse, ShareholdingResponse, StatementResponse, StatementSummary,
-    WorkingCapitalResponse,
+    QuarterlyResponse, QuarterRowOut, RatioResponse, ShareholdingResponse,
+    StatementResponse, StatementSummary, WorkingCapitalResponse,
 )
 from app.schemas.common import Unit
 from app.services.analysis_service import AnalysisService
+from app.services.quarterly.service import QuarterlyService
 from app.services.ratios.service import RatioService
 
 router = APIRouter(prefix="/company", tags=["analysis"])
@@ -212,4 +214,32 @@ def shareholding(svc: AnalysisService = Depends(get_analysis)) -> ShareholdingRe
         has_data=bool(sh.snaps),
         signal=OwnershipSignal(**sh.ownership_signal()) if sh.snaps else None,
         flags=sh.flags(),
+    )
+
+
+# ---------------------------------------------------------------- quarterly
+@router.get("/{ticker}/quarterly", response_model=QuarterlyResponse,
+            summary="Quarterly results as filed, with QoQ and YoY")
+def quarterly(
+    svc: AnalysisService = Depends(get_analysis),
+    db: Session = Depends(get_db),
+) -> QuarterlyResponse:
+    """Reported quarters for one company.
+
+    Quarters are stored rather than derived: four Indian quarters do not
+    reconcile to the audited annual figure, because Q4 absorbs audit
+    adjustments, so decomposing the annual statement would invent numbers.
+    """
+    service = QuarterlyService(db)
+    rows = service.rows(svc.company.id)
+
+    return QuarterlyResponse(
+        company=svc.company_ref(),
+        quarters=[QuarterRowOut(**row.__dict__) for row in rows],
+        has_data=bool(rows),
+        unavailable_reason=(
+            None if rows else
+            "No quarterly results published for this company by the "
+            "configured sources."
+        ),
     )

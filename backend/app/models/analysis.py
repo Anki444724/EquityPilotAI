@@ -120,3 +120,77 @@ class ShareholdingSnapshot(Base):
     @property
     def period_label(self) -> str:
         return f"Q{self.quarter} FY{str(self.fiscal_year)[-2:]}"
+
+
+class QuarterlyResult(Base):
+    """One reported quarter of results, as filed.
+
+    Stored rather than derived, for the same reason `ShareholdingSnapshot` is:
+    a quarterly result is a **separately disclosed fact**, not something the
+    annual statements can be decomposed into. Four quarters do not reconcile
+    to the annual figure in Indian reporting — the Q4 column is routinely a
+    balancing figure that absorbs audit adjustments — so deriving quarters
+    from an annual series would be inventing numbers.
+
+    Values are in ₹ crore, consistent with every other stored figure, and
+    margins are fractions (0.145 == 14.5%) so no layer converts units.
+
+    Deliberately narrow: this holds what an Indian quarterly filing actually
+    reports at the summary level. It is not a second income statement, and it
+    does not attempt a balance sheet or cash flow, because Indian companies do
+    not publish those quarterly in a comparable form.
+    """
+
+    __tablename__ = "quarterly_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    #: April–March fiscal year the quarter closes within, so Sep 2024 is
+    #: FY2025 Q2 — matching how the rest of the platform counts years.
+    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    quarter: Mapped[int] = mapped_column(Integer, nullable=False)  # 1..4
+
+    revenue: Mapped[float | None] = mapped_column(Float)
+    expenses: Mapped[float | None] = mapped_column(Float)
+    operating_profit: Mapped[float | None] = mapped_column(Float)
+    #: Fraction, not percent.
+    operating_margin: Mapped[float | None] = mapped_column(Float)
+    other_income: Mapped[float | None] = mapped_column(Float)
+    interest: Mapped[float | None] = mapped_column(Float)
+    depreciation: Mapped[float | None] = mapped_column(Float)
+    profit_before_tax: Mapped[float | None] = mapped_column(Float)
+    #: Fraction, not percent.
+    tax_rate: Mapped[float | None] = mapped_column(Float)
+    net_profit: Mapped[float | None] = mapped_column(Float)
+    eps: Mapped[float | None] = mapped_column(Float)
+
+    #: Provenance travels with the number, as everywhere else.
+    source: Mapped[str | None] = mapped_column(String(120))
+
+    company: Mapped[Company] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "fiscal_year", "quarter", name="uq_quarterly_period",
+        ),
+        Index("ix_quarterly_company_period", "company_id", "fiscal_year", "quarter"),
+    )
+
+    @property
+    def period_label(self) -> str:
+        return f"Q{self.quarter} FY{str(self.fiscal_year)[-2:]}"
+
+    @property
+    def has_data(self) -> bool:
+        """True when the quarter carries at least one reported figure.
+
+        Guards the no-placeholder rule: a row that would answer False here
+        should never have been written.
+        """
+        return any(
+            value is not None
+            for value in (self.revenue, self.operating_profit,
+                          self.profit_before_tax, self.net_profit)
+        )
