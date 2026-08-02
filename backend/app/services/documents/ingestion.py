@@ -395,12 +395,76 @@ class DocumentIngestionService:
         # a long TTL safely.
         cache.invalidate(Namespace.RAG)
 
+        # The document is now retrievable. Make it MEMORABLE too.
+        #
+        # This single call is what separates a retrieval system from a memory
+        # system. Until it existed the vault, summaries and observations were
+        # reachable only through manual endpoints, and an audit found 163
+        # documents ingested since the vault was last built that had produced
+        # no vault entry at all.
+        #
+        # Enqueued rather than executed: this runs inside the document worker,
+        # which has crashed production three times in a 1 GB container while
+        # holding a large PDF. The enrichment pass calls an LLM and must not
+        # share that process.
+        self._enqueue_enrichment(document)
+
         log.info(
             "ingestion complete", document_id=document.id, job_id=job.id,
             pages=document.page_count, chunks=document.chunk_count,
             facts=document.fact_count, ms=round(elapsed, 1),
         )
         return document
+
+    def _enqueue_enrichment(self, document: Document) -> None:
+        """Schedule the memory pass for this document's company.
+
+        Debounced and deduplicated. A filing crawl delivers documents in
+        bursts — twenty for one company inside a minute is normal — and each
+        one would otherwise trigger a full vault rebuild and observation
+        regeneration. `deduplicate=True` on an identical (kind, resource)
+        collapses the burst into one queued job, and `run_after` lets the
+        burst finish before that job becomes eligible.
+
+        Failure here is logged and swallowed. A document that is parsed,
+        chunked and searchable is a success; being unable to schedule its
+        enrichment must not mark it failed and trigger a reprocessing loop.
+        """
+        if not document.company_id:
+            return
+        try:
+            from datetime import timedelta
+
+            from app.domain.knowledge.enrichment import DEBOUNCE_SECONDS
+            from app.domain.platform.jobs import JobKind
+            from app.services.platform.jobs.queue import JobQueue
+
+            # The payload carries ONLY the company id.
+            #
+            # `deduplicate` keys on (kind, tenant, payload), so including the
+            # triggering document id would make every document in a burst a
+            # distinct job — twenty filings for one company would schedule
+            # twenty full vault rebuilds. Caught by a test that asserted one
+            # job and observed five.
+            #
+            # The document id is recorded on the job's resource fields for
+            # traceability instead, where it does not affect the key.
+            JobQueue(self.db).enqueue(
+                JobKind.MEMORY_ENRICHMENT,
+                payload={"company_id": document.company_id},
+                resource_type="document",
+                resource_id=document.id,
+                run_after=_utcnow() + timedelta(seconds=DEBOUNCE_SECONDS),
+                deduplicate=True,
+            )
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001 — never fail an ingested document
+            self.db.rollback()
+            log.warning(
+                "could not enqueue memory enrichment",
+                document_id=document.id, company_id=document.company_id,
+                error=str(exc)[:200],
+            )
 
     def _run_pipeline(self, document: Document, payload: bytes, company: Company | None):
         """Run the pipeline, advancing status as each milestone is reached."""

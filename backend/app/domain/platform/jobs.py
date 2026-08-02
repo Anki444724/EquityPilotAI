@@ -47,6 +47,11 @@ class JobKind(StrEnum):
     USAGE_ROLLUP = "usage_rollup"
     BACKUP = "backup"
     RETENTION_SWEEP = "retention_sweep"
+    #: Automatic memory enrichment after a document is ingested. Runs OUTSIDE
+    #: the document worker: production has crashed three times in a 1 GB
+    #: container while that worker held a large PDF, and adding LLM work to
+    #: the same loop would guarantee a fourth.
+    MEMORY_ENRICHMENT = "memory_enrichment"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -62,6 +67,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.USAGE_ROLLUP: "Usage roll-up",
     JobKind.BACKUP: "Backup",
     JobKind.RETENTION_SWEEP: "Retention sweep",
+    JobKind.MEMORY_ENRICHMENT: "Memory enrichment",
 }
 
 
@@ -144,6 +150,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.USAGE_ROLLUP: JobPriority.BACKGROUND,
     JobKind.BACKUP: JobPriority.BACKGROUND,
     JobKind.RETENTION_SWEEP: JobPriority.BACKGROUND,
+    JobKind.MEMORY_ENRICHMENT: JobPriority.LOW,
 }
 
 
@@ -207,6 +214,9 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     JobKind.USAGE_ROLLUP: RetryPolicy(max_attempts=3, base_seconds=60),
     JobKind.BACKUP: RetryPolicy(max_attempts=2, base_seconds=120),
     JobKind.RETENTION_SWEEP: RetryPolicy(max_attempts=2, base_seconds=120),
+    # Long backoff: the usual failure is an LLM rate limit, and retrying in
+    # five seconds simply burns the remaining quota.
+    JobKind.MEMORY_ENRICHMENT: RetryPolicy(max_attempts=3, base_seconds=180),
 }
 
 

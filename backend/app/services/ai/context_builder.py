@@ -111,8 +111,40 @@ class GroundedContext:
         for citation in selected:
             grouped.setdefault(citation.kind.value, []).append(citation)
 
+        # Structured memory first, raw retrieval last, with the precedence
+        # stated rather than implied by position.
+        #
+        # The brief requires the AI to answer PRIMARILY from the Company Vault
+        # and Temporal Memory, falling back to RAG only where knowledge is not
+        # yet structured. Ordering alone does not achieve that: a model given
+        # eight vault entries and ten raw chunks will happily quote whichever
+        # passage reads best. The instruction below is what makes the
+        # preference operative, and the ordering is what makes it easy to
+        # follow.
+        order = {
+            EvidenceKind.KNOWLEDGE.value: 0,
+            EvidenceKind.STATEMENT.value: 1,
+            EvidenceKind.RATIO.value: 2,
+            EvidenceKind.FORECAST.value: 3,
+            EvidenceKind.MARKET.value: 4,
+            EvidenceKind.DOCUMENT.value: 9,      # RAG — the fallback tier
+        }
+        ordered = sorted(grouped.items(), key=lambda kv: order.get(kv[0], 5))
+
         blocks: list[str] = []
-        for kind, items in grouped.items():
+        has_knowledge = EvidenceKind.KNOWLEDGE.value in grouped
+        has_documents = EvidenceKind.DOCUMENT.value in grouped
+        if has_knowledge and has_documents:
+            blocks.append(
+                "EVIDENCE PRECEDENCE — the KNOWLEDGE block is the platform's "
+                "permanent, versioned memory of this company: assertions it "
+                "has already verified, with their sources and confidence. "
+                "Answer from it wherever it settles the question. The "
+                "DOCUMENT block is unstructured text retrieved for this "
+                "question only; use it to fill what memory does not yet "
+                "cover, and prefer memory where the two overlap."
+            )
+        for kind, items in ordered:
             blocks.append(f"--- {kind.upper()} ---")
             blocks.extend(item.render() for item in items)
         return "\n".join(blocks)

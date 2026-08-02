@@ -434,6 +434,55 @@ def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str
 
 
 # ===========================================================================
+# Automatic memory enrichment
+# ===========================================================================
+def handle_memory_enrichment(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Turn a newly ingested document into permanent company memory.
+
+    This is the job that makes the platform a memory system rather than a
+    retrieval system. Before it existed, every memory service had to be
+    triggered by hand, and the audit found 163 documents that had been
+    ingested since the vault was last built without producing a single vault
+    entry.
+
+    Runs here, in the background worker, rather than in the document worker.
+    That worker has crashed production three times in a 1 GB container while
+    holding a large PDF; LLM summarisation and observation generation on the
+    same loop would guarantee a fourth.
+
+    With no `company_id` the job sweeps companies whose documents have outrun
+    their memory — the same comparison the audit used — so a lost enqueue is
+    self-healing rather than a permanent hole.
+    """
+    from app.services.knowledge.enrichment import (
+        MemoryEnrichmentService, companies_needing_enrichment,
+    )
+
+    company_id = payload.get("company_id")
+    document_id = payload.get("document_id")
+    allow_llm = bool(payload.get("allow_llm", True))
+
+    service = MemoryEnrichmentService(db, allow_llm=allow_llm)
+
+    if company_id:
+        result = service.run(company_id, trigger_document_id=document_id)
+        return {"companies": 1, "results": [result.as_dict()]}
+
+    limit = int(payload.get("limit", 5))
+    targets = companies_needing_enrichment(db, limit=limit)
+    results = []
+    for target in targets:
+        try:
+            results.append(service.run(target).as_dict())
+        except Exception as exc:  # noqa: BLE001 — one company must not stop the sweep
+            db.rollback()
+            log.warning("enrichment sweep entry failed",
+                        company_id=target, error=str(exc)[:200])
+            results.append({"company_id": target, "error": str(exc)[:200]})
+    return {"companies": len(results), "results": results}
+
+
+# ===========================================================================
 # Hybrid storage replication
 # ===========================================================================
 def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -473,6 +522,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.USAGE_ROLLUP: handle_usage_rollup,
     JobKind.BACKUP: handle_backup,
     JobKind.RETENTION_SWEEP: handle_retention_sweep,
+    JobKind.MEMORY_ENRICHMENT: handle_memory_enrichment,
 }
 
 
