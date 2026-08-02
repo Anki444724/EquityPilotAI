@@ -202,7 +202,18 @@ class DocumentChunk(Base):
     #: SHA-1 of the normalised text — the deduplication key.
     fingerprint: Mapped[str] = mapped_column(String(40), index=True)
     #: The vector, as JSON. Portable across SQLite and Postgres alike.
+    #: Legacy: 384-dimension hashed n-grams. Retained during migration so
+    #: retrieval keeps working while the corpus re-embeds, and so the
+    #: benchmark can compare both engines on identical data.
     embedding: Mapped[list | None] = mapped_column(JSON)
+
+    #: Semantic vector, 1024 dimensions (bge-m3). A real `vector` column on
+    #: Postgres, JSON on SQLite so the test suite runs without pgvector.
+    #: A DIFFERENT space from `embedding` — a cosine between the two is
+    #: arithmetically valid and meaningless, which is why they coexist rather
+    #: than one overwriting the other.
+    embedding_v2: Mapped[list | None] = mapped_column(JSON)
+    embedding_spec_v2: Mapped[str | None] = mapped_column(String(80))
 
     document: Mapped[Document] = relationship(back_populates="chunks")
 

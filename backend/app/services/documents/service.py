@@ -517,6 +517,11 @@ class DocumentService:
         newly uploaded report is visible immediately rather than after the TTL.
         """
         def compute() -> SearchAnswer:
+            hybrid = self._hybrid_answer(
+                query, company_id, top_k, document_ids,
+            )
+            if hybrid is not None:
+                return hybrid
             store = self.build_index(company_id)
             engine = DocumentSearch(
                 store, self.embedder, SearchConfig(top_k=top_k),
@@ -536,6 +541,56 @@ class DocumentService:
             # The embedding model is part of the identity of a result: change
             # it and every cached answer is from a different index.
             self.embedder.spec,
+        )
+
+    def _hybrid_answer(
+        self, query: str, company_id: str | None, top_k: int,
+        document_ids: list[int] | None,
+    ) -> SearchAnswer | None:
+        """Answer via the pgvector hybrid engine, or None to fall back.
+
+        Returns None rather than an empty answer whenever the new engine
+        cannot serve the query — disabled, no semantic vectors yet, or no
+        pgvector. The caller then uses the legacy in-memory index, so the
+        migration is invisible to every consumer and a half-embedded corpus
+        still answers questions.
+        """
+        from app.core.config import settings
+
+        if not getattr(settings, "HYBRID_RETRIEVAL_ENABLED", True):
+            return None
+
+        try:
+            from app.services.retrieval.engine import HybridRetrievalEngine
+
+            engine = HybridRetrievalEngine(self.db)
+            results = engine.retrieve(
+                query, company_id=company_id, top_k=top_k,
+                document_ids=document_ids,
+            )
+        except Exception:  # noqa: BLE001 — never lose an answer to the new path
+            log.exception("hybrid retrieval failed; using legacy index")
+            return None
+
+        if not results:
+            return None
+
+        hits = [
+            SearchHit(
+                chunk_id=r.chunk_id, document_id=r.document_id,
+                document_title=r.document_title, text=r.text,
+                page=r.page, paragraph=r.paragraph,
+                section=_section_or_unknown(r.section),
+                score=r.score,
+                lexical_score=r.raw.get("lexical", 0.0),
+                semantic_score=r.raw.get("semantic", 0.0),
+            )
+            for r in results
+        ]
+        return SearchAnswer(
+            query=query, hits=hits,
+            answer=hits[0].text[:1200] if hits else "",
+            confidence=results[0].confidence if results else 0.0,
         )
 
     def citations_for(self, answer: SearchAnswer, limit: int = 8) -> list[DocumentCitation]:

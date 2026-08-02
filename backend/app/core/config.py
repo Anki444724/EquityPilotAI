@@ -169,6 +169,21 @@ class Settings(BaseSettings):
     #: the account's provider entitlements, and pinning that in code would
     #: turn a supplier change into a release.
     OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+
+    # --- Retrieval Engine 2.0 -------------------------------------------
+    #: Semantic embedding provider. Empty selects the first configured one in
+    #: the brief's preference order: bge-m3, jina-v3, then openai-small.
+    EMBEDDING_PROVIDER: str | None = None
+    #: jina-embeddings-v3 (second preference) needs its own key.
+    JINA_API_KEY: str | None = None
+    #: Cross-encoder reranker. All three must be set or the local
+    #: lexical-coverage reranker is used instead.
+    RERANKER_ENDPOINT: str | None = None
+    RERANKER_MODEL: str | None = None
+    RERANKER_API_KEY: str | None = None
+    #: Master switch. The hybrid engine falls back to the legacy in-memory
+    #: index when off, or when no chunk carries a semantic vector.
+    HYBRID_RETRIEVAL_ENABLED: bool = True
     #: Sent as HTTP-Referer / X-Title. OpenRouter attributes usage with these
     #: and rate-limits anonymous traffic more aggressively.
     OPENROUTER_SITE_URL: str = "https://frontend-production-1a313.up.railway.app"
