@@ -319,6 +319,13 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         "Evaluate the alert rule set across every portfolio and watchlist.",
     ),
     ScheduleSpec(
+        JobKind.MEMORY_ENRICHMENT, 3600,
+        "Safety net: enrich any company whose documents have outrun its "
+        "memory. The per-document enqueue is the primary path; this catches "
+        "an enqueue lost to a crash, and drains the LLM-backed stages that "
+        "were skipped when a provider was rate-limited.",
+    ),
+    ScheduleSpec(
         JobKind.USAGE_ROLLUP, 900,
         "Aggregate raw usage events into the per-period counters.",
     ),
