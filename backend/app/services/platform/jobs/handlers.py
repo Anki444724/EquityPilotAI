@@ -447,6 +447,26 @@ def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str
 
 
 # ===========================================================================
+# Embedding backfill
+# ===========================================================================
+def handle_embedding_backfill(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Embed chunks lacking a semantic vector.
+
+    Scheduled rather than triggered because the event it waits for — a
+    provider becoming reachable — produces no signal. A key is added, or an
+    exhausted quota resets overnight, and nothing tells the application.
+    Polling costs one indexed COUNT and removes the manual step: the corpus
+    starts embedding itself within half an hour of credentials appearing.
+    """
+    from app.services.retrieval.backfill import (
+        DEFAULT_LIMIT, EmbeddingBackfillService,
+    )
+
+    limit = int(payload.get("limit", DEFAULT_LIMIT))
+    return EmbeddingBackfillService(db).run(limit=limit).as_dict()
+
+
+# ===========================================================================
 # Data quality refresh
 # ===========================================================================
 def handle_quality_refresh(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -580,6 +600,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.MEMORY_ENRICHMENT: handle_memory_enrichment,
     JobKind.IR_DISCOVERY: handle_ir_discovery,
     JobKind.QUALITY_REFRESH: handle_quality_refresh,
+    JobKind.EMBEDDING_BACKFILL: handle_embedding_backfill,
 }
 
 

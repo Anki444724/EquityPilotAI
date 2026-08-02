@@ -67,6 +67,24 @@ RRF_K = 60
 #: another — the entire point of fusing.
 CANDIDATE_POOL = 40
 
+#: A lexical hit this far above the runner-up is treated as a known-item
+#: match and pinned to rank 1.
+#:
+#: Requirement 5 — never regress lexical retrieval — cannot be met by tuning
+#: fusion weights alone. Rank fusion is deliberately consensus-seeking: it
+#: exists to stop one signal dominating, which is right for an ambiguous
+#: question and wrong for a verbatim quotation, where one signal SHOULD
+#: dominate because it is certain.
+#:
+#: Measured on a real probe: the target chunk ranked #1 lexically with
+#: ts_rank_cd 1.80 against a runner-up at 1.20, and fusion still placed three
+#: other chunks above it because they appeared in more signals.
+#:
+#: The ratio is deliberately high. At 1.5x this fires only when the top hit
+#: carries substantially rarer terms than anything else, which is the
+#: signature of a quoted phrase rather than a topical question.
+LEXICAL_DOMINANCE_RATIO = 1.5
+
 #: How many fused candidates are reranked. Reranking is the most expensive
 #: stage, and a passage outside the top 20 after fusion is not going to be
 #: promoted to the top 5 by reordering.

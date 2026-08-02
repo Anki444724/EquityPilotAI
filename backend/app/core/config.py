@@ -181,6 +181,13 @@ class Settings(BaseSettings):
     RERANKER_ENDPOINT: str | None = None
     RERANKER_MODEL: str | None = None
     RERANKER_API_KEY: str | None = None
+    #: Retrieval 2.1 — reranking by provider name alone.
+    #: One of: jina | cohere | openai | local | none.
+    RERANK_PROVIDER: str | None = None
+    RERANK_API_KEY: str | None = None
+    RERANK_MODEL: str | None = None
+    #: Override the provider's default endpoint (self-hosted, proxy, region).
+    RERANK_ENDPOINT: str | None = None
     #: Master switch. The hybrid engine falls back to the legacy in-memory
     #: index when off, or when no chunk carries a semantic vector.
     HYBRID_RETRIEVAL_ENABLED: bool = True

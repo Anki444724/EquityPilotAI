@@ -33,10 +33,11 @@ import structlog
 from sqlalchemy import text
 
 from app.domain.retrieval.types import (
-    CANDIDATE_POOL, RERANK_POOL, RetrievalResult, RetrievalSignal,
-    confidence_of, reciprocal_rank_fusion,
+    CANDIDATE_POOL, LEXICAL_DOMINANCE_RATIO, RERANK_POOL, RetrievalResult,
+    RetrievalSignal, confidence_of, reciprocal_rank_fusion,
 )
-from app.services.retrieval.rerank import RerankCandidate, build_reranker
+from app.services.retrieval.rerank import RerankCandidate
+from app.services.retrieval.rerank_providers import build_rerank_provider
 
 log = structlog.get_logger(__name__)
 
@@ -144,7 +145,9 @@ class HybridRetrievalEngine:
             )
             embedder = build_semantic_embedder()
         self.embedder = embedder
-        self.reranker = reranker if reranker is not None else build_reranker()
+        self.reranker = (
+            reranker if reranker is not None else build_rerank_provider()
+        )
 
     @property
     def available(self) -> bool:
@@ -201,6 +204,20 @@ class HybridRetrievalEngine:
 
         fused = reciprocal_rank_fusion(rankings)
         ordered = sorted(fused.items(), key=lambda kv: -kv[1][0])
+
+        # Requirement 5: never regress lexical retrieval.
+        #
+        # Rank fusion is consensus-seeking by design — right for an ambiguous
+        # question, wrong for a verbatim quotation where one signal is simply
+        # certain. When the top lexical hit is decisively ahead of the
+        # runner-up, it is promoted to rank 1 rather than being averaged
+        # against signals that know less.
+        dominant = self._dominant_lexical(lexical)
+        if dominant is not None:
+            ordered = (
+                [(dominant, fused[dominant])]
+                + [item for item in ordered if item[0] != dominant]
+            ) if dominant in fused else ordered
         shortlist = [chunk_id for chunk_id, _ in ordered[:max(top_k, RERANK_POOL)]]
         if not shortlist:
             return []
@@ -317,6 +334,18 @@ class HybridRetrievalEngine:
         params: dict[str, Any] = {
             "q": " | ".join(terms), "limit": CANDIDATE_POOL,
         }
+        # RETR-003. The RETR-001 rewrite replaced the block that appended
+        # these filters and did not restore them, so the lexical signal
+        # searched the ENTIRE corpus. The company's own best match ranked #1
+        # in raw SQL and still fell outside the 40-candidate pool, because the
+        # pool filled with chunks from other companies. That is the whole of
+        # the known-item regression: 0.78 against the legacy engine's 0.94.
+        if company_id:
+            where.append("d.company_id = :company_id")
+            params["company_id"] = company_id
+        if document_ids:
+            where.append("c.document_id = ANY(:doc_ids)")
+            params["doc_ids"] = list(document_ids)
         sql = text(f"""
             SELECT c.id, ts_rank_cd(c.text_search, {tsquery}) AS rank
             FROM document_chunks c
@@ -391,6 +420,25 @@ class HybridRetrievalEngine:
             return [(r[0], 1.0) for r in self.db.execute(sql, params)]
         except Exception:  # noqa: BLE001
             return []
+
+    @staticmethod
+    def _dominant_lexical(
+        lexical: list[tuple[int, float]],
+    ) -> int | None:
+        """The chunk id of a decisive lexical winner, or None.
+
+        "Decisive" means the top score exceeds the runner-up by
+        `LEXICAL_DOMINANCE_RATIO`. A single result is not decisive on its own
+        — with nothing to compare against, the score carries no information
+        about how distinctive the match is.
+        """
+        if len(lexical) < 2:
+            return None
+        top_id, top_score = lexical[0]
+        _, second = lexical[1]
+        if second <= 0:
+            return top_id if top_score > 0 else None
+        return top_id if top_score >= second * LEXICAL_DOMINANCE_RATIO else None
 
     # -------------------------------------------------------- hydration
     def _hydrate(self, chunk_ids: Sequence[int]) -> dict[int, dict[str, Any]]:

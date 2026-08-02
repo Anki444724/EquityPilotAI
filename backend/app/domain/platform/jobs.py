@@ -61,6 +61,10 @@ class JobKind(StrEnum):
     #: through the passage of time alone — a filing ageing past its freshness
     #: horizon lowers the score with no new data arriving.
     QUALITY_REFRESH = "quality_refresh"
+    #: Embed chunks that have no semantic vector. Self-arming: it costs one
+    #: cheap COUNT when no provider is configured, and starts backfilling on
+    #: its own the moment one is.
+    EMBEDDING_BACKFILL = "embedding_backfill"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -79,6 +83,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.MEMORY_ENRICHMENT: "Memory enrichment",
     JobKind.IR_DISCOVERY: "IR URL discovery",
     JobKind.QUALITY_REFRESH: "Data quality refresh",
+    JobKind.EMBEDDING_BACKFILL: "Embedding backfill",
 }
 
 
@@ -164,6 +169,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.MEMORY_ENRICHMENT: JobPriority.LOW,
     JobKind.IR_DISCOVERY: JobPriority.BACKGROUND,
     JobKind.QUALITY_REFRESH: JobPriority.BACKGROUND,
+    JobKind.EMBEDDING_BACKFILL: JobPriority.BACKGROUND,
 }
 
 
@@ -234,6 +240,9 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # by being probed again in five minutes.
     JobKind.IR_DISCOVERY: RetryPolicy(max_attempts=2, base_seconds=600),
     JobKind.QUALITY_REFRESH: RetryPolicy(max_attempts=2, base_seconds=300),
+    # Long backoff: the usual failure is an exhausted quota, and retrying in
+    # thirty seconds simply burns what is left.
+    JobKind.EMBEDDING_BACKFILL: RetryPolicy(max_attempts=2, base_seconds=900),
 }
 
 
@@ -354,6 +363,14 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         "memory. The per-document enqueue is the primary path; this catches "
         "an enqueue lost to a crash, and drains the LLM-backed stages that "
         "were skipped when a provider was rate-limited.",
+    ),
+    ScheduleSpec(
+        # Every 30 minutes. Cheap when idle — one COUNT against an indexed
+        # column — and it means a corpus starts embedding itself within half
+        # an hour of a key being added, with no deploy and no manual step.
+        JobKind.EMBEDDING_BACKFILL, 1800,
+        "Embed any chunk lacking a semantic vector, so the corpus backfills "
+        "itself automatically once an embedding provider is configured.",
     ),
     ScheduleSpec(
         # Daily. Scores change continuously through enrichment; this exists
