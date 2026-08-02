@@ -189,7 +189,18 @@ class Scheduler:
         self._stop.set()
 
     def sync_schedules(self, db: Session) -> int:
-        """Ensure a state row exists for every declared schedule."""
+        """Reconcile the stored schedule with the declared one.
+
+        SCHED-001. This previously only INSERTED missing rows, so changing an
+        interval in code had no effect on a database that already had the row:
+        the filing crawl was moved from 24h to 12h in `SCHEDULES` and
+        production kept running it at 86400s, because `sync_schedules` never
+        looked at the existing value. The declared schedule is the source of
+        truth, so a drifted interval is corrected here.
+
+        An operator's `enabled` flag is deliberately NOT overwritten — pausing
+        a schedule from the admin console must survive a deploy.
+        """
         written = 0
         for spec in SCHEDULES:
             row = db.scalar(
@@ -202,6 +213,17 @@ class Scheduler:
                     every_seconds=spec.every_seconds,
                     next_run_at=_utcnow(),
                 ))
+                written += 1
+            elif row.every_seconds != spec.every_seconds:
+                log.info("schedule interval reconciled", kind=spec.kind.value,
+                         was=row.every_seconds, now=spec.every_seconds)
+                row.every_seconds = spec.every_seconds
+                # Re-base the next run so a shortened interval takes effect on
+                # this tick rather than after the old, longer wait.
+                row.next_run_at = (
+                    (row.last_run_at or _utcnow())
+                    + timedelta(seconds=spec.every_seconds)
+                )
                 written += 1
         if written:
             db.commit()

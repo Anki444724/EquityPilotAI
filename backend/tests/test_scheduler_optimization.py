@@ -450,3 +450,45 @@ def test_a_real_path_still_beats_the_root_fallback(db):
     ).run(limit=5).outcomes[0]
     assert outcome.method == "probe:200"
     assert outcome.url.endswith("/investors")
+
+
+def test_sched_001_a_changed_interval_is_reconciled(db):
+    """Regression for SCHED-001, found on live production data.
+
+    `sync_schedules` only INSERTED missing rows, so moving the filing crawl
+    from 24h to 12h in code had no effect on a database that already held the
+    row — production kept running at 86400s and the dashboard showed it.
+    """
+    from app.models.platform import ScheduleState
+    from app.services.platform.jobs.worker import Scheduler
+
+    db.add(ScheduleState(
+        kind=JobKind.FILING_CRAWL.value, enabled=True,
+        every_seconds=24 * 3600, next_run_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+    Scheduler(lambda: db).sync_schedules(db)
+
+    row = db.scalar(select(ScheduleState).where(
+        ScheduleState.kind == JobKind.FILING_CRAWL.value))
+    declared = next(s for s in SCHEDULES if s.kind is JobKind.FILING_CRAWL)
+    assert row.every_seconds == declared.every_seconds
+
+
+def test_an_operator_pause_survives_reconciliation(db):
+    """Correcting a drifted interval must not re-enable a paused schedule."""
+    from app.models.platform import ScheduleState
+    from app.services.platform.jobs.worker import Scheduler
+
+    db.add(ScheduleState(
+        kind=JobKind.FILING_CRAWL.value, enabled=False,
+        every_seconds=99, next_run_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+    Scheduler(lambda: db).sync_schedules(db)
+
+    row = db.scalar(select(ScheduleState).where(
+        ScheduleState.kind == JobKind.FILING_CRAWL.value))
+    assert row.enabled is False, "a paused schedule was silently re-enabled"
