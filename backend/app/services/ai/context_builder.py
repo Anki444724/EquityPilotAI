@@ -323,6 +323,72 @@ class ContextBuilder:
                 confidence=0.5 if summary.is_fallback else 0.85,
             ))
 
+        self._add_temporal(context, session, company)
+
+    def _add_temporal(self, context: GroundedContext, session, company) -> None:
+        """The yearly observation series — the company's temporal memory.
+
+        This is what makes "how has management guidance changed over the last
+        ten years?" answerable without re-reading a decade of filings. The
+        whole series is added as ONE citation rather than one per year: the
+        value of the timeline is the comparison across years, and splitting it
+        into ten fragments invites the model to quote a single year and call
+        that a trend.
+
+        Fallback observations are excluded. Template prose describing a year
+        the model could not actually read would be indistinguishable, in the
+        prompt, from analysis — and it would be cited as if it were.
+        """
+        try:
+            from app.services.knowledge.temporal import TemporalMemoryService
+        except Exception:  # noqa: BLE001 - temporal memory is optional
+            return
+
+        try:
+            service = TemporalMemoryService(session)
+            rows = [r for r in service.timeline(company.id, limit=12)
+                    if not r.is_fallback]
+        except Exception:  # noqa: BLE001 - never break an answer on this
+            log.exception("temporal memory read failed", company_id=company.id)
+            return
+
+        if not rows:
+            return
+
+        rendered = service.render_timeline(company.id, limit=12)
+        years = [r.fiscal_year for r in rows]
+        # Whitespace is collapsed for the same reason as the summaries above:
+        # the evidence block is parsed line by line and a multi-line passage
+        # is otherwise silently dropped (AI-003).
+        context.add(Citation(
+            key="temporal_timeline",
+            label=f"[Memory/Timeline] FY{min(years)}-FY{max(years)} "
+                  f"yearly observations",
+            kind=EvidenceKind.KNOWLEDGE,
+            value=" ".join(rendered.split())[:2400],
+            source=f"Temporal memory — {len(rows)} verified fiscal years",
+            fiscal_year=max(years),
+            confidence=round(
+                sum(r.confidence or 0 for r in rows) / len(rows), 3,
+            ),
+        ))
+
+        credibility = service.credibility(company.id)
+        if credibility.get("score") is not None:
+            context.add(Citation(
+                key="management_credibility",
+                label="[Memory/Credibility] Management delivery record",
+                kind=EvidenceKind.KNOWLEDGE,
+                value=(
+                    f"{credibility['score']:.0%} of guidance delivered across "
+                    f"{credibility['years_assessed']} assessable years "
+                    f"({credibility['verdicts']})"
+                ),
+                source="Temporal memory — prior-year guidance verified "
+                       "against subsequent filings",
+                confidence=0.9,
+            ))
+
     def _add_documents(self, context: GroundedContext) -> None:
         """Harvest evidence from uploaded filings — Module 7's contribution.
 

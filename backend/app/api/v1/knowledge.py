@@ -243,3 +243,156 @@ def vault_stats(
         select(func.count(func.distinct(DocumentSummary.company_id)))
     ) or 0
     return payload
+
+
+# ------------------------------------------------- temporal memory (§8, §12)
+def _render_observation(row: Any) -> dict[str, Any]:
+    """Serialise one stored observation.
+
+    `findings` is split back into a list and `dimensions` parsed from JSON so
+    a client never has to know how the row is stored. `contradicts_metric` is
+    surfaced rather than hidden: a narrative claim that disagrees with the
+    audited accounts is exactly what a reader should be told about.
+    """
+    import json as _json
+
+    dimensions: list[dict[str, Any]] = []
+    if row.dimensions:
+        try:
+            dimensions = _json.loads(row.dimensions)
+        except ValueError:
+            dimensions = []
+
+    return {
+        "fiscal_year": row.fiscal_year,
+        "findings": [f for f in (row.findings or "").split("\n") if f.strip()],
+        "dimensions": dimensions,
+        "confidence": row.confidence,
+        "confidence_pct": round((row.confidence or 0) * 100),
+        "guidance": row.guidance,
+        "prior_year_verdict": row.prior_verdict,
+        "verdict_reasoning": row.verdict_reasoning,
+        "version": row.version,
+        "status": row.status,
+        "generated_by": row.generated_by,
+        # Template prose must never be mistaken for analysis.
+        "is_fallback": row.is_fallback,
+        "source_document_ids": (
+            _json.loads(row.source_document_ids)
+            if row.source_document_ids else []
+        ),
+        "created_at": row.created_at,
+    }
+
+
+@router.get("/company/{ticker}/observations",
+            summary="Yearly AI observations — the company's temporal memory")
+def observations(
+    ticker: str,
+    limit: int = Query(default=20, le=50),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """One dated observation per fiscal year, oldest first.
+
+    This is what lets the platform answer "how has management guidance changed
+    over the last ten years?" from memory rather than by re-reading a decade
+    of annual reports.
+    """
+    from app.services.knowledge.temporal import TemporalMemoryService
+
+    company = _company(db, ticker)
+    service = TemporalMemoryService(db)
+    rows = service.timeline(company.id, limit=limit)
+
+    return {
+        "ticker": company.ticker,
+        "company": company.name,
+        "years": len(rows),
+        "observations": [_render_observation(r) for r in rows],
+        "credibility": service.credibility(company.id),
+        "rendered": service.render_timeline(company.id, limit=limit),
+        "unavailable_reason": (
+            None if rows else
+            "No yearly observations recorded. Build them with POST "
+            "/company/{ticker}/observations/build once the company has "
+            "filings for at least one fiscal year."
+        ),
+    }
+
+
+@router.get("/company/{ticker}/observations/{fiscal_year}/history",
+            summary="Every version ever recorded for one fiscal year")
+def observation_history(
+    ticker: str,
+    fiscal_year: int,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Nothing is overwritten: regenerating a year adds a version.
+
+    Matters here more than elsewhere, because a year's observation is the
+    yardstick the NEXT year was graded against. Silently rewriting it would
+    change a judgement that has already been made.
+    """
+    from app.services.knowledge.temporal import TemporalMemoryService
+
+    company = _company(db, ticker)
+    rows = TemporalMemoryService(db).history(company.id, fiscal_year)
+    if not rows:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"no observation recorded for {company.ticker} FY{fiscal_year}",
+        )
+    return {
+        "ticker": company.ticker,
+        "fiscal_year": fiscal_year,
+        "versions": len(rows),
+        "history": [_render_observation(r) for r in rows],
+    }
+
+
+@router.get("/company/{ticker}/credibility",
+            summary="Management credibility from the verified track record")
+def credibility(
+    ticker: str,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Scored from stored verdicts, not from opinion.
+
+    Years with no guidance specific enough to judge are excluded from the
+    denominator rather than counted as average — a company nobody can grade
+    is not an average company.
+    """
+    from app.services.knowledge.temporal import TemporalMemoryService
+
+    company = _company(db, ticker)
+    result = TemporalMemoryService(db).credibility(company.id)
+    result["ticker"] = company.ticker
+    return result
+
+
+@router.post("/company/{ticker}/observations/build",
+             summary="Build or refresh the yearly observation series")
+def build_observations(
+    ticker: str,
+    overwrite: bool = Query(default=False),
+    limit_years: int | None = Query(default=None, le=30),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Generate the series chronologically, oldest year first.
+
+    Order is not an implementation detail: each year is generated with the
+    previous year's recorded guidance in hand so it can judge whether that
+    guidance was met. Building out of order would lose the verification.
+    """
+    _require_operator(user)
+    from app.services.knowledge.temporal import TemporalMemoryService
+
+    company = _company(db, ticker)
+    run = TemporalMemoryService(db).build_company(
+        company.id, overwrite=overwrite, limit_years=limit_years,
+    )
+    return {"ticker": company.ticker, **run.as_dict()}

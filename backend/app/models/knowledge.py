@@ -187,3 +187,87 @@ class DocumentSummary(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<DocumentSummary doc={self.document_id} {self.kind}>"
+
+
+class YearlyObservation(Base):
+    """What the platform concluded about one company in one fiscal year.
+
+    The temporal spine of the knowledge engine (§8, §12). One row per company
+    per fiscal year, so a ten-year narrative is ten rows rather than a
+    re-reading of ten annual reports.
+
+    Versioned like the vault rather than updated in place: regenerating
+    FY2025's observation with a better model inserts a new version and marks
+    the old one superseded. "What did we think in FY2025, and what did we
+    think we thought?" both stay answerable, which matters because these rows
+    are the input to next year's verdict — silently rewriting history would
+    change a judgement that has already been made.
+    """
+
+    __tablename__ = "yearly_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    #: The year the observation is ABOUT. Never the year it was written.
+    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    #: Newline-separated findings, in the brief's compact form.
+    findings: Mapped[str | None] = mapped_column(Text)
+    #: JSON array of DimensionReading, so the eight tracked axes stay
+    #: comparable across a decade without eight nullable columns.
+    dimensions: Mapped[str | None] = mapped_column(Text)
+
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+    #: Forward-looking statements this year made — next year's yardstick.
+    guidance: Mapped[str | None] = mapped_column(Text)
+    #: How the PREVIOUS year's guidance turned out. One of GuidanceVerdict.
+    prior_verdict: Mapped[str] = mapped_column(
+        String(24), default="not_assessable", nullable=False, index=True,
+    )
+    verdict_reasoning: Mapped[str | None] = mapped_column(Text)
+
+    #: Documents the observation was drawn from, so every statement remains
+    #: traceable to a filing (§11).
+    citations: Mapped[str | None] = mapped_column(Text)
+    source_document_ids: Mapped[str | None] = mapped_column(Text)
+
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(12), default="current", nullable=False, index=True,
+    )
+    superseded_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("yearly_observations.id", ondelete="SET NULL"),
+    )
+
+    generated_by: Mapped[str | None] = mapped_column(String(64))
+    #: Template prose rather than model output. Recorded so a fallback is
+    #: never mistaken for analysis.
+    is_fallback: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+    )
+    prompt_version: Mapped[str] = mapped_column(
+        String(16), default="v1", nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "fiscal_year", "version",
+                         name="uq_observation_version"),
+        # The read behind every timeline: current observations for a company,
+        # in year order.
+        Index("ix_observation_timeline", "company_id", "fiscal_year", "status"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (f"<YearlyObservation {self.company_id[:8]} FY{self.fiscal_year} "
+                f"v{self.version} {self.status}>")
