@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -43,6 +45,8 @@ from app.services.analysis_service import AnalysisService
 router = APIRouter(tags=["ai"])
 
 #: Default report layout when the caller does not specify sections.
+log = structlog.get_logger(__name__)
+
 DEFAULT_REPORT = [
     "business_summary", "investment_thesis", "moat_analysis",
     "risk_analysis", "valuation_commentary", "scoring_explanation",
@@ -53,13 +57,58 @@ def _service(db: Session = Depends(get_db)) -> AIService:
     return AIService(db)
 
 
+def _quality_out(analysis: AnalysisService) -> tuple[Any, str | None]:
+    """Data-quality context for the company being analysed.
+
+    Returns (payload, warning). The warning is also prepended to the
+    displayed answer by the caller: the brief requires the AI to TELL the
+    user when its analysis rests on incomplete data, and a structured field
+    alone is only seen by a client that thought to look.
+
+    Failure here degrades to no context rather than a failed answer. A
+    research response is still worth returning if the scorer had a bad day.
+    """
+    from app.schemas.ai import DataQualityOut
+    from app.services.quality.service import DataQualityService
+
+    try:
+        score = DataQualityService(analysis.db).score_company(analysis.company)
+    except Exception:  # noqa: BLE001 — never fail an answer over its own metadata
+        log.exception("data quality scoring failed",
+                      ticker=getattr(analysis.company, "ticker", None))
+        return None, None
+
+    warning = None
+    if score.needs_warning:
+        missing = ", ".join(score.missing_items[:4]) or "several dimensions"
+        warning = (
+            f"Data quality for {score.ticker} is {score.score:.0f}/100 "
+            f"(grade {score.grade.value}). This analysis is based on "
+            f"INCOMPLETE data. Missing: {missing}."
+        )
+
+    return DataQualityOut(
+        score=score.score,
+        grade=score.grade.value,
+        knowledge_freshness_days=score.knowledge_freshness_days,
+        warning=warning,
+        missing_items=score.missing_items,
+    ), warning
+
+
 def _result_out(analysis: AnalysisService, result: AnalystResult) -> AnalysisResponse:
     audit = result.citation_audit
     guardrails = result.guardrails
+    quality, warning = _quality_out(analysis)
+    display = result.display_content
+    if warning:
+        # Prepended, not appended: a reader who stops halfway through a long
+        # answer must still have seen the caveat.
+        display = f"> **Data quality warning.** {warning}\n\n{display}"
     return AnalysisResponse(
         company=analysis.company_ref(),
         capability=result.capability, content=result.content,
-        display_content=result.display_content,
+        display_content=display,
         provider=result.provider, model=result.model,
         prompt_key=result.prompt_key, prompt_version=result.prompt_version,
         citations=[
@@ -90,7 +139,9 @@ def _result_out(analysis: AnalysisService, result: AnalystResult) -> AnalysisRes
         completion_tokens=result.completion_tokens,
         total_tokens=result.total_tokens, cost_usd=result.cost_usd,
         latency_ms=result.latency_ms, cached=result.cached,
-        fell_back_from=result.fell_back_from, warnings=result.warnings,
+        fell_back_from=result.fell_back_from,
+        warnings=(result.warnings + [warning]) if warning else result.warnings,
+        data_quality=quality,
     )
 
 

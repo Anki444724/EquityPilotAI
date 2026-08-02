@@ -16,8 +16,11 @@ would add joins without buying anything.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import (
-    Date, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint,
+    Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
+    UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -81,3 +84,68 @@ class ScoreSnapshot(Base):
                          name="uq_snapshot_company_date_profile"),
         Index("ix_snapshot_company_date", "company_id", "as_of"),
     )
+
+
+class DataQualitySnapshot(Base):
+    """The Data Quality Score for one company, as last computed.
+
+    Stored so the dashboard can aggregate across 500 companies in one query
+    rather than scoring each on request — a full sweep is ~0.7s per company,
+    which is fine on demand and far too slow for a leaderboard.
+
+    One row per company, updated in place. Deliberately NOT versioned, unlike
+    the knowledge vault: this is a derived measurement of current state, not
+    an assertion about the company, and a history of it would grow without
+    ever being read. The score is always recomputable from the underlying
+    rows, which are themselves versioned.
+    """
+
+    __tablename__ = "data_quality_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False, unique=True, index=True,
+    )
+
+    score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False,
+                                         index=True)
+    grade: Mapped[str] = mapped_column(String(2), default="F", nullable=False,
+                                       index=True)
+
+    #: Points earned per dimension, so the dashboard can report where the
+    #: universe is weak without recomputing every company.
+    identity_points: Mapped[float] = mapped_column(Float, default=0.0)
+    financials_points: Mapped[float] = mapped_column(Float, default=0.0)
+    documents_points: Mapped[float] = mapped_column(Float, default=0.0)
+    vault_points: Mapped[float] = mapped_column(Float, default=0.0)
+    ai_points: Mapped[float] = mapped_column(Float, default=0.0)
+    freshness_points: Mapped[float] = mapped_column(Float, default=0.0)
+    source_points: Mapped[float] = mapped_column(Float, default=0.0)
+    health_points: Mapped[float] = mapped_column(Float, default=0.0)
+
+    missing_count: Mapped[int] = mapped_column(Integer, default=0,
+                                               nullable=False)
+    #: JSON array of human-readable missing items, so the panel renders
+    #: without a second pass over the scorer.
+    missing_items: Mapped[list | None] = mapped_column(JSON)
+
+    last_updated_days: Mapped[int | None] = mapped_column(Integer)
+    knowledge_freshness_days: Mapped[int | None] = mapped_column(Integer)
+
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_quality_leaderboard", "score", "grade"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<DataQualitySnapshot {self.company_id[:8]} {self.score}>"

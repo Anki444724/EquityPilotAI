@@ -51,6 +51,25 @@ class CitationAuditOut(BaseModel):
     summary: str
 
 
+class DataQualityOut(BaseModel):
+    """Data-quality context attached to every AI response.
+
+    Present on every answer, not only poor ones. A reader who sees the score
+    only when it is bad learns to treat its absence as reassurance, which is
+    exactly the inference the field exists to prevent.
+    """
+
+    score: float = Field(description="0-100")
+    grade: str
+    #: Days since the newest evidence of any kind for this company.
+    knowledge_freshness_days: int | None = None
+    #: Set when the score is below the warning threshold. The AI layer also
+    #: prepends the warning to `display_content`, so a client that ignores
+    #: this field still shows it to the user.
+    warning: str | None = None
+    missing_items: list[str] = Field(default_factory=list)
+
+
 class AnalysisResponse(BaseModel):
     company: CompanyRef
     capability: str
@@ -71,6 +90,9 @@ class AnalysisResponse(BaseModel):
     cached: bool = False
     fell_back_from: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    #: Never optional in practice — populated for every response so a client
+    #: can always state how good the underlying data is.
+    data_quality: DataQualityOut | None = None
 
 
 class CapabilityOut(BaseModel):

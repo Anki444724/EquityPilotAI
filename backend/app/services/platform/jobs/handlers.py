@@ -447,6 +447,26 @@ def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str
 
 
 # ===========================================================================
+# Data quality refresh
+# ===========================================================================
+def handle_quality_refresh(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Rescore data quality across the universe.
+
+    The per-company refresh runs inside memory enrichment, so a document
+    arriving updates its company's score immediately. This sweep exists for
+    the other direction: a score falls through the passage of time alone as a
+    filing ages past its freshness horizon, and nothing would otherwise
+    notice.
+    """
+    from app.services.quality.service import QualitySnapshotService
+
+    limit = payload.get("limit")
+    return QualitySnapshotService(db).refresh_all(
+        limit=int(limit) if limit else None,
+    )
+
+
+# ===========================================================================
 # Investor-relations URL discovery
 # ===========================================================================
 def handle_ir_discovery(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -559,6 +579,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.RETENTION_SWEEP: handle_retention_sweep,
     JobKind.MEMORY_ENRICHMENT: handle_memory_enrichment,
     JobKind.IR_DISCOVERY: handle_ir_discovery,
+    JobKind.QUALITY_REFRESH: handle_quality_refresh,
 }
 
 

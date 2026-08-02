@@ -2,9 +2,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
-    admin, ai, analysis, auth, companies, dashboard, documents, filings_admin,
-    forecast, knowledge, market, portfolio, reports, scoring, storage_admin,
-    valuation,
+    admin, ai, analysis, auth, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
 )
 
 api_router = APIRouter()
@@ -29,4 +27,8 @@ api_router.include_router(reports.router)
 api_router.include_router(filings_admin.router)
 api_router.include_router(storage_admin.router)
 api_router.include_router(knowledge.router)
+# Before `market.router`: that router declares `/filings/{ticker}` and other
+# greedy path parameters, and a static sibling registered after it is
+# captured as a parameter value (ROUTE-001).
+api_router.include_router(quality.router)
 api_router.include_router(market.router)

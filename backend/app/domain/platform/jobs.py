@@ -56,6 +56,11 @@ class JobKind(StrEnum):
     #: is a different failure mode: a crawl failure means a source was down,
     #: an IR-discovery failure means a company has no findable page.
     IR_DISCOVERY = "ir_discovery"
+    #: Rescore data quality across the universe. The per-company refresh runs
+    #: inside memory enrichment; this catches companies whose score changed
+    #: through the passage of time alone — a filing ageing past its freshness
+    #: horizon lowers the score with no new data arriving.
+    QUALITY_REFRESH = "quality_refresh"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -73,6 +78,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.RETENTION_SWEEP: "Retention sweep",
     JobKind.MEMORY_ENRICHMENT: "Memory enrichment",
     JobKind.IR_DISCOVERY: "IR URL discovery",
+    JobKind.QUALITY_REFRESH: "Data quality refresh",
 }
 
 
@@ -157,6 +163,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.RETENTION_SWEEP: JobPriority.BACKGROUND,
     JobKind.MEMORY_ENRICHMENT: JobPriority.LOW,
     JobKind.IR_DISCOVERY: JobPriority.BACKGROUND,
+    JobKind.QUALITY_REFRESH: JobPriority.BACKGROUND,
 }
 
 
@@ -226,6 +233,7 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # One retry only: a company with no findable IR page will not acquire one
     # by being probed again in five minutes.
     JobKind.IR_DISCOVERY: RetryPolicy(max_attempts=2, base_seconds=600),
+    JobKind.QUALITY_REFRESH: RetryPolicy(max_attempts=2, base_seconds=300),
 }
 
 
@@ -346,6 +354,13 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         "memory. The per-document enqueue is the primary path; this catches "
         "an enqueue lost to a crash, and drains the LLM-backed stages that "
         "were skipped when a provider was rate-limited.",
+    ),
+    ScheduleSpec(
+        # Daily. Scores change continuously through enrichment; this exists
+        # for the decay that happens when nothing arrives at all.
+        JobKind.QUALITY_REFRESH, 24 * 3600,
+        "Recompute the Data Quality Score for every company, so freshness "
+        "decay is reflected even when no new data has arrived.",
     ),
     ScheduleSpec(
         JobKind.USAGE_ROLLUP, 900,

@@ -96,6 +96,25 @@ class MemoryEnrichmentService:
             outcome.ms = (time.perf_counter() - stage_started) * 1000
             result.stages.append(outcome)
 
+        # The Data Quality Score is a function of everything above, so it is
+        # recomputed here rather than on a separate schedule. This is what
+        # makes the brief's "no manual updates" true: a document arriving
+        # raises the score without anyone asking it to.
+        #
+        # Guarded and last. A scoring failure must not undo a successful
+        # enrichment pass, and the score is always recomputable on read.
+        try:
+            from app.models.company import Company
+            from app.services.quality.service import QualitySnapshotService
+
+            company = self.db.get(Company, company_id)
+            if company is not None:
+                QualitySnapshotService(self.db).refresh(company)
+        except Exception as exc:  # noqa: BLE001
+            self.db.rollback()
+            log.warning("quality refresh after enrichment failed",
+                        company_id=company_id, error=str(exc)[:200])
+
         result.total_ms = (time.perf_counter() - started) * 1000
         log.info("memory enrichment complete", company_id=company_id,
                  written=result.written, ms=round(result.total_ms, 1),
