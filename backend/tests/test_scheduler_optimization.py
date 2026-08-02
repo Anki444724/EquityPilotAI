@@ -124,9 +124,13 @@ def test_an_unresolvable_domain_abandons_that_domain_immediately(db):
 
     IRDiscoveryService(db, polite_delay=0, probe=probe).run(limit=5)
 
-    # One probe per candidate domain, not one per path.
-    assert len(calls) <= len(candidate_domains(_company(db, "X2", "Deadco Ltd.")))
-    assert len(calls) < len(IR_PATHS)
+    # The invariant is that a dead host costs ONE probe per domain, not one
+    # per path. The root fallback then probes each domain once more, so the
+    # ceiling is 2 x domains — still far below domains x paths, which is what
+    # the guard exists to prevent.
+    domains = len(candidate_domains(_company(db, "X2", "Deadco Ltd.")))
+    assert len(calls) <= 2 * domains
+    assert len(calls) < domains * len(IR_PATHS)
 
 
 def test_discovery_persists_url_confidence_and_method(db):
@@ -205,8 +209,17 @@ def test_backoff_grows_exponentially():
     delays = [provider._backoff_seconds(i) for i in (1, 2, 3)]  # noqa: SLF001
     assert delays[0] < delays[1] < delays[2]
     # Jitter is applied, so assert the band rather than an exact value.
-    assert 1.0 <= delays[0] <= 2.5
-    assert 10.0 <= delays[2] <= 25.0
+    # Bands, not exact values, because jitter is +/-30%. The bounds are
+    # computed from the schedule rather than hard-coded: an earlier version
+    # asserted `>= 10.0` and flaked when jitter produced 9.71.
+    base, factor, jitter = (
+        NSEFilingProvider._RETRY_BASE_SECONDS,      # noqa: SLF001
+        NSEFilingProvider._RETRY_FACTOR,            # noqa: SLF001
+        NSEFilingProvider._RETRY_JITTER,            # noqa: SLF001
+    )
+    for attempt, delay in enumerate(delays, start=1):
+        nominal = base * (factor ** (attempt - 1))
+        assert nominal * (1 - jitter) <= delay <= nominal * (1 + jitter)
 
 
 def test_jitter_prevents_synchronised_retries():
@@ -397,3 +410,43 @@ def test_dashboard_reports_classification_quality(db):
     classification = SchedulerDashboard(db).snapshot()["classification"]
     assert classification["total"] == 4
     assert classification["classified_pct"] == pytest.approx(50.0)
+
+
+def test_dot_in_domains_are_tried(db):
+    """`.in` is not interchangeable with `.co.in`.
+
+    Measured: aavas.in resolves and aavas.com does not. Omitting the bare
+    `.in` silently loses every issuer that uses it.
+    """
+    company = _company(db, "AAVAS", "Aavas Financiers Ltd.")
+    domains = candidate_domains(company)
+    assert any(d.endswith(".in") and not d.endswith(".co.in") for d in domains)
+
+
+def test_a_reachable_root_is_a_low_confidence_fallback(db):
+    """ABB and ABFRL answer 200 at the corporate root while every
+    conventional IR path misses. Without the fallback they were recorded as
+    having no IR presence at all; the crawler follows one hop from a landing
+    page, so the root is usable — at the weakest confidence."""
+    _company(db, "ROOTY", "Rootyco Ltd.")
+
+    def probe(url):
+        # Only the bare domain answers; every path 404s.
+        return 200 if url.count("/") == 2 else 404
+
+    outcome = IRDiscoveryService(
+        db, polite_delay=0, probe=probe,
+    ).run(limit=5).outcomes[0]
+
+    assert outcome.found is True
+    assert outcome.method == "probe:root"
+    assert outcome.confidence <= 0.45, "a root guess must rank below a real path"
+
+
+def test_a_real_path_still_beats_the_root_fallback(db):
+    _company(db, "PATHY", "Pathyco Ltd.")
+    outcome = IRDiscoveryService(
+        db, polite_delay=0, probe=lambda url: 200,
+    ).run(limit=5).outcomes[0]
+    assert outcome.method == "probe:200"
+    assert outcome.url.endswith("/investors")

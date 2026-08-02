@@ -54,7 +54,9 @@ _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
 #: hit is tried before the long tail; probing stops at the first success.
 IR_PATHS: tuple[str, ...] = (
     "/investors",
+    "/investors/",
     "/investor-relations",
+    "/investor-relations/",
     "/investors.html",
     "/en/investors",
     "/investor",
@@ -78,6 +80,9 @@ _EXISTS = frozenset({200, 301, 302, 403, 405})
 CONFIDENCE_VERIFIED = 0.90     # 200: fetched and confirmed
 CONFIDENCE_BLOCKED = 0.60      # 403/405: exists, refused a bot
 CONFIDENCE_SEEDED = 0.95       # from the curated map — checked by hand
+#: Corporate root only, no IR path matched. The crawler follows one hop from
+#: here, so it is usable — but it is the weakest signal and says so.
+CONFIDENCE_ROOT = 0.40
 
 #: Companies whose IR domain cannot be derived from the name. Kept short and
 #: only for cases confirmed by probe; this is a correction list, not a
@@ -152,8 +157,12 @@ def candidate_domains(company: Company) -> list[str]:
     if not slug:
         return []
 
+    # `.in` is included because it is not interchangeable with `.co.in`:
+    # aavas.in resolves and aavas.com does not. Ordered by observed frequency
+    # among Nifty 500 issuers.
     return [
         f"https://www.{slug}.com",
+        f"https://www.{slug}.in",
         f"https://www.{slug}.co.in",
         f"https://{slug}.com",
     ]
@@ -220,6 +229,21 @@ class IRDiscoveryService:
                     return outcome
                 if self.polite_delay:
                     time.sleep(self.polite_delay)
+
+        # Fallback: a reachable corporate root is still useful. The IR
+        # provider follows one hop from whatever URL it is given, and its
+        # _FOLLOW_HINTS already include "investor" and "financial", so a
+        # landing page reaches the same documents a guessed path would.
+        # Measured: ABB and ABFRL answer 200 at the root while every
+        # conventional path misses, so without this they were recorded as
+        # having no IR presence at all.
+        for domain in candidate_domains(company):
+            outcome.attempts += 1
+            if self._probe(domain) in (200, 301, 302):
+                outcome.url = domain
+                outcome.confidence = CONFIDENCE_ROOT
+                outcome.method = "probe:root"
+                return outcome
 
         outcome.error = f"no IR page found in {outcome.attempts} probes"
         return outcome
