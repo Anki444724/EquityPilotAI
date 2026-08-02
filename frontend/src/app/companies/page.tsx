@@ -80,7 +80,7 @@ export default function CompaniesPage() {
             description={searching ? `Nothing matches “${query}”.` : "Adjust the sector filter."}
           />
         ) : (
-          <div className="overflow-x-auto">
+          <div className="scroll-x">
             <table className="grid-table">
               <thead>
                 <tr>

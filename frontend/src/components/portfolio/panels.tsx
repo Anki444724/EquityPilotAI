@@ -439,8 +439,8 @@ export function HoldingsTable({ holdings }: { holdings: Holding[] }) {
     return <p className="p-4 text-sm text-[var(--text-muted)]">No open positions.</p>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="scroll-x">
+      <table className="w-full text-sm pin-first">
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
             <th className="px-3 py-2 font-medium">Holding</th>
@@ -634,8 +634,8 @@ export function RebalanceTable({ trades }: { trades: RebalanceTrade[] }) {
     );
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="scroll-x">
+      <table className="w-full text-sm pin-first">
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
             <th className="px-3 py-2 font-medium">Action</th>
@@ -683,8 +683,8 @@ export function AttributionTable({ rows }: { rows: AttributionRow[] }) {
     return <p className="p-4 text-sm text-[var(--text-muted)]">No attribution data.</p>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="scroll-x">
+      <table className="w-full text-sm pin-first">
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
             <th className="px-3 py-2 font-medium">Segment</th>
@@ -734,8 +734,8 @@ export function WatchlistTable({
     triggered: "gain", approaching: "warn", watching: "neutral", expensive: "loss",
   };
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="scroll-x">
+      <table className="w-full text-sm pin-first">
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
             <th className="px-3 py-2 font-medium">Company</th>

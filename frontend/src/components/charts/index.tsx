@@ -2,7 +2,7 @@
 
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * Polar (radar) support lives in `highcharts-more`, which touches browser
@@ -43,6 +43,13 @@ function baseOptions(dark: boolean): Highcharts.Options {
       style: { fontFamily: "inherit" },
       spacing: [12, 8, 8, 8],
       animation: { duration: 300 },
+      // Highcharts only re-measures on a window resize event. Inside a CSS
+      // grid that collapses from four columns to one, the container width
+      // changes without the window changing at all — on rotation, when the
+      // nav drawer opens, or when a lazy panel above reflows. `reflow` on a
+      // ResizeObserver (wired up in `Chart`) is what actually keeps them
+      // sized; this flag stops Highcharts fighting it.
+      reflow: true,
     },
     credits: { enabled: false },
     title: { text: undefined },
@@ -51,6 +58,28 @@ function baseOptions(dark: boolean): Highcharts.Options {
       itemHoverStyle: { color: dark ? "#e8eef7" : "#0f172a" },
       symbolRadius: 2,
       margin: 12,
+    },
+    // Below 520px the default layout gives the plot area almost no room:
+    // the legend sits beside the chart and axis titles consume the rest.
+    // These rules apply ONLY under that width, so desktop is untouched.
+    responsive: {
+      rules: [{
+        condition: { maxWidth: 520 },
+        chartOptions: {
+          chart: { spacing: [8, 2, 4, 2] },
+          legend: {
+            align: "center",
+            verticalAlign: "bottom",
+            layout: "horizontal",
+            margin: 6,
+            itemStyle: { fontSize: "10px" },
+            itemDistance: 10,
+          },
+          yAxis: { title: { text: undefined }, labels: { style: { fontSize: "9px" } } },
+          xAxis: { labels: { style: { fontSize: "9px" }, autoRotation: [0, -45] } },
+          plotOptions: { series: { marker: { radius: 2 } } },
+        },
+      }],
     },
     xAxis: {
       lineColor: grid,
@@ -103,6 +132,8 @@ function Chart({
 }) {
   const { theme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<HighchartsReact.RefObject>(null);
 
   useEffect(() => {
     if (!needsMore) { setMounted(true); return; }
@@ -110,6 +141,41 @@ function Chart({
     loadHighchartsMore().then(() => { if (live) setMounted(true); });
     return () => { live = false; };
   }, [needsMore]);
+
+  /**
+   * Resize the chart when its CONTAINER changes width, not when the window
+   * does.
+   *
+   * Highcharts listens for `window.resize` only. That is sufficient on a
+   * desktop page whose columns track the window, and insufficient here: the
+   * dashboard grid collapses from `lg:grid-cols-3` to one column at a
+   * breakpoint, panels mount asynchronously as their queries resolve, and the
+   * mobile nav drawer changes the main column's width without touching the
+   * window. In all three cases the chart keeps its stale pixel width and
+   * either overflows the card or leaves a gap.
+   *
+   * `requestAnimationFrame` coalesces the callback to one reflow per frame;
+   * ResizeObserver can otherwise fire several times during a single layout
+   * pass and each `reflow()` is a full redraw.
+   */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !mounted) return;
+    if (typeof ResizeObserver === "undefined") return;
+
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const chart = chartRef.current?.chart;
+        // `container` is undefined once the chart has been destroyed, which
+        // happens on unmount before the observer disconnects.
+        if (chart?.container?.isConnected) chart.reflow();
+      });
+    });
+    observer.observe(host);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, [mounted]);
 
   const merged = useMemo(
     () => merge(baseOptions(theme === "dark"), merge(options, { chart: { height } })),
@@ -119,7 +185,13 @@ function Chart({
   if (!mounted) {
     return <div style={{ height }} className="animate-pulse rounded bg-[var(--bg-subtle)]" />;
   }
-  return <HighchartsReact highcharts={Highcharts} options={merged} />;
+  // `min-w-0` lets the host shrink inside a flex/grid parent; without it the
+  // chart's own width becomes the parent's floor and the card overflows.
+  return (
+    <div ref={hostRef} className="w-full min-w-0">
+      <HighchartsReact ref={chartRef} highcharts={Highcharts} options={merged} />
+    </div>
+  );
 }
 
 /* ------------------------------------------------------- history vs forecast */

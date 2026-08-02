@@ -72,6 +72,45 @@ body {
   letter-spacing: -0.01em;
 }
 
+/* ============================================================
+   Responsive scroll containers
+   ============================================================
+
+   A wide financial table is not an overflow bug — it is the correct
+   presentation of twelve fiscal years. The bug is when that width escapes
+   onto the document and scrolls the whole page sideways.
+
+   `.scroll-x` is the one place that distinction is enforced. Every table on
+   the platform is wrapped in it, so the behaviour cannot drift between the
+   thirty-odd tables that exist.
+
+   `min-width: 0` matters more than it looks. A flex or grid child defaults to
+   `min-width: auto`, which means it refuses to shrink below its content —
+   so an `overflow-x: auto` div holding a 640px table still reports 640px to
+   its parent, the grid track widens, and the document scrolls. The overflow
+   property alone does nothing. This is what made the dashboard 644px wide
+   inside a 320px viewport.
+*/
+.scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  max-width: 100%;
+  /* Momentum scrolling on iOS Safari. Default in modern WebKit but still
+     required by older iOS, which a meaningful share of Indian users run. */
+  -webkit-overflow-scrolling: touch;
+  /* Stop a sideways swipe that reaches the end of a table from being handed
+     to the page — on Android Chrome that triggers back-navigation, so a user
+     scrolling a balance sheet leaves the company. */
+  overscroll-behavior-x: contain;
+  /* Keeps a column edge under the thumb rather than stopping mid-figure. */
+  scroll-snap-type: none;
+}
+
+/* Every direct flex/grid child that may contain a scroller needs to be
+   allowed to shrink, for the same `min-width: auto` reason. */
+.min-w-0-all > * { min-width: 0; }
+
 /* Excel-like data grid */
 .grid-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .grid-table thead th {
@@ -100,6 +139,157 @@ body {
   background: var(--bg); z-index: 5;
 }
 .grid-table tbody tr:hover .sticky-col { background: var(--bg-subtle); }
+
+/* The header's own first cell sits at the intersection of two sticky axes and
+   must outrank both, or the row labels scroll over the corner. */
+.grid-table thead th:first-child {
+  position: sticky; left: 0; z-index: 15;
+  background: var(--bg-subtle);
+}
+
+/* ============================================================
+   Mobile — 1024px and below
+   ------------------------------------------------------------
+   Everything below this line is inside a max-width query, so the desktop
+   layout is untouched by construction rather than by inspection.
+   ============================================================ */
+@media (max-width: 1023px) {
+  /* Density: an institutional grid is intentionally tight on desktop. On a
+     360px phone that same padding leaves no room for the figures, so it is
+     reduced — but the numerals stay tabular and aligned, because a financial
+     table that loses column alignment stops being readable at any size. */
+  .grid-table thead th { padding: 0.4375rem 0.5rem; font-size: 0.625rem; }
+  .grid-table tbody td { padding: 0.375rem 0.5rem; height: 30px; }
+  .num { font-size: 0.75rem; }
+
+  /* A sticky column needs a visible edge once the body scrolls under it,
+     otherwise the label and the first figure appear to merge. */
+  .grid-table .sticky-col,
+  .grid-table thead th:first-child {
+    box-shadow: 1px 0 0 0 var(--border);
+  }
+
+  /* Row labels are the widest cells and the reason the first column is
+     sticky at all. Capping them keeps the figures on screen; the full text
+     stays available via the title attribute the component already sets. */
+  .grid-table .sticky-col { max-width: 11.5rem; }
+
+  /* Scrollbars are overlay-drawn on touch platforms; a 10px reserved track
+     wastes scarce width. */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { border-width: 1px; }
+}
+
+@media (max-width: 400px) {
+  /* The 320–400px band is where labels and figures genuinely compete. */
+  .grid-table thead th { padding: 0.375rem 0.4375rem; }
+  .grid-table tbody td { padding: 0.3125rem 0.4375rem; }
+  .grid-table .sticky-col { max-width: 9rem; }
+  .num { font-size: 0.6875rem; }
+}
+
+/* ============================================================
+   Horizontally scrollable tab strips
+   ============================================================
+   Wrapping a seven-item tab strip onto three lines pushes the content below
+   the fold and makes the active tab hard to find. A single scrolling row
+   keeps the strip a fixed, predictable height at every width.
+*/
+.tab-strip {
+  display: flex;
+  flex-wrap: nowrap;          /* the whole point — never wrap */
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;      /* Firefox */
+  scroll-snap-type: x proximity;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+.tab-strip > * {
+  flex: 0 0 auto;             /* tabs keep their natural width */
+  white-space: nowrap;
+  scroll-snap-align: start;
+}
+
+/* Touch targets. WCAG asks for 44px; institutional density argues for less.
+   36px is the compromise applied to mobile only. */
+@media (max-width: 1023px) {
+  .tab-strip > * { min-height: 2.25rem; display: inline-flex; align-items: center; }
+
+  /* Standalone controls — pagination, filter chips, export buttons, small
+     row actions. These measured 26–30px, which is below the threshold at
+     which a thumb hits reliably; several sat next to each other, so a
+     mis-tap ran the wrong action rather than doing nothing.
+     
+     Scoped to buttons that are NOT inside a table cell or a line of running
+     text: an inline link in a sentence cannot be given a 36px box without
+     wrecking the leading, and its correct treatment is spacing, not height.
+     Desktop is untouched — this whole block is inside the media query. */
+  button:not([data-inline]):not(.tab-strip > *) {
+    min-height: 2.25rem;
+  }
+  td button, th button, p button, h1 button, h2 button, h3 button, label button {
+    min-height: 0;
+  }
+}
+
+/* Charts must never dictate their container's width. Highcharts sets an
+   inline pixel width on its own container, which is exactly the thing that
+   escapes a narrow viewport. */
+.highcharts-container,
+.highcharts-container svg { max-width: 100% !important; }
+
+/* ============================================================
+   Sticky first column for the plain (non-.grid-table) tables
+   ------------------------------------------------------------
+   Portfolio, Documents, Administration and Reports use ordinary
+   `<table className="w-full text-sm">` markup rather than the institutional
+   grid. They still scroll horizontally on a phone, and without a pinned
+   first column the ticker or filename scrolls away and the remaining figures
+   become anonymous.
+
+   Applied via a class on the <table> so the behaviour is opt-in and cannot
+   accidentally pin a layout table.
+   ============================================================ */
+.pin-first thead th:first-child,
+.pin-first tbody td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: var(--bg-elevated);
+}
+.pin-first thead th:first-child { z-index: 15; }
+.pin-first tbody tr:hover td:first-child { background: var(--bg-subtle); }
+
+@media (max-width: 1023px) {
+  .pin-first thead th:first-child,
+  .pin-first tbody td:first-child {
+    box-shadow: 1px 0 0 0 var(--border);
+    max-width: 11rem;
+  }
+  /* Long filenames and company names must not force the pinned column wide. */
+  .pin-first tbody td:first-child { overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ============================================================
+   Unbreakable strings
+   ------------------------------------------------------------
+   Registered addresses, ISINs, document filenames and URLs arrive from
+   filings as single tokens with no spaces. A 404-pixel address string
+   ("9th Floor Nirmal Building Nariman Point Mumbai 400021") is what pushed
+   the company Documents page to 432px inside a 320px viewport: no amount of
+   `min-width: 0` helps when the content genuinely cannot wrap.
+
+   `overflow-wrap: anywhere` is preferred over `word-break: break-all`, which
+   would also break ordinary prose mid-word.
+   ============================================================ */
+@media (max-width: 1023px) {
+  .break-anywhere,
+  .break-anywhere * { overflow-wrap: anywhere; }
+}
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg-subtle); }

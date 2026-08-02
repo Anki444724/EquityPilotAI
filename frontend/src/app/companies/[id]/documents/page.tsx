@@ -15,9 +15,7 @@ import {
   ExtractedTableView, FactTable, HitList, InfoNote, KnowledgeGraphView,
   PipelineTrace, RelationLegend, SearchAnswer, SECTION_LABELS,
 } from "@/components/documents/panels";
-import {
-  Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat,
-} from "@/components/ui";
+import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat, TabStrip } from "@/components/ui";
 import { api, docsApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -248,9 +246,9 @@ export default function DocumentsPage({ params }: { params: Promise<{ id: string
         </div>
 
         {/* ------------------------------------------------------ tabs */}
-        <div className="flex gap-1 border-b border-[var(--border)]">
+        <TabStrip label="Document views">
           {TABS.map(({ key, label, icon: Icon }) => (
-            <button
+            <button data-active={tab === key} role="tab" aria-selected={tab === key}
               key={key}
               type="button"
               onClick={() => setTab(key)}
@@ -265,12 +263,12 @@ export default function DocumentsPage({ params }: { params: Promise<{ id: string
               {label}
             </button>
           ))}
-        </div>
+        </TabStrip>
 
         {/* --------------------------------------------------- library */}
         {tab === "library" && (
-          <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
-            <div className="space-y-2">
+          <div className="grid min-w-0-all gap-4 lg:grid-cols-[340px_1fr]">
+            <div className="break-anywhere space-y-2">
               {documents.isLoading && <Skeleton className="h-24 w-full" />}
               {!documents.isLoading && !docs.length && (
                 <Card>
@@ -396,7 +394,7 @@ export default function DocumentsPage({ params }: { params: Promise<{ id: string
 
         {/* ---------------------------------------------------- search */}
         {tab === "search" && (
-          <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+          <div className="grid min-w-0-all gap-4 lg:grid-cols-[1fr_360px]">
             <div className="space-y-3">
               <form
                 onSubmit={(e) => { e.preventDefault(); setSubmitted(query.trim()); }}
@@ -557,7 +555,7 @@ export default function DocumentsPage({ params }: { params: Promise<{ id: string
 
         {/* ------------------------------------------------- knowledge */}
         {tab === "knowledge" && (
-          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+          <div className="grid min-w-0-all gap-4 lg:grid-cols-[1fr_320px]">
             <Card>
               <CardHeader
                 title="Knowledge graph"

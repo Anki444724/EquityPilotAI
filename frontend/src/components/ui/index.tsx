@@ -1,5 +1,79 @@
+"use client";
+
 import { cn } from "@/lib/utils";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+
+/* ------------------------------------------------------------- Scroller */
+/**
+ * The single horizontal scroll container used by every table on the platform.
+ *
+ * Previously each of ~30 tables wrote `<div className="overflow-x-auto">` by
+ * hand. That is nearly right, and the "nearly" is the bug: `overflow-x` alone
+ * does not stop a wide child widening a flex or grid parent, because such a
+ * child defaults to `min-width: auto` and therefore refuses to shrink below
+ * its content. The container scrolled internally AND pushed the document to
+ * 644px inside a 320px viewport — the page scrolled sideways and the sticky
+ * first column slid away with it, which is precisely what sticky was meant to
+ * prevent.
+ *
+ * `.scroll-x` carries the `min-width: 0` that makes the clip real, plus touch
+ * momentum and overscroll containment. Defining it once means a new table
+ * cannot reintroduce the defect by copying the old idiom.
+ */
+export function Scroller({
+  className, children, label,
+}: { className?: string; children: ReactNode; label?: string }) {
+  return (
+    <div
+      className={cn("scroll-x", className)}
+      // Keyboard users must be able to scroll it too; a focusable region with
+      // an accessible name is how a screen reader announces it as scrollable.
+      tabIndex={0}
+      role="region"
+      aria-label={label ?? "Scrollable table"}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- TabStrip */
+/**
+ * A tab bar that scrolls horizontally instead of wrapping.
+ *
+ * Wrapping was the previous behaviour everywhere. On a 360px phone the
+ * nine-item Financials strip wrapped to four rows and pushed the statement
+ * itself below the fold; the Portfolio strip did not even wrap, it simply
+ * overflowed the document to 587px.
+ *
+ * Children are supplied by the caller so this works for both `<button>` tabs
+ * (in-page state) and `<Link>` tabs (routed), which are the two shapes that
+ * already exist and should not be forced to converge.
+ */
+export function TabStrip({
+  children, className, label,
+}: { children: ReactNode; className?: string; label?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Keep the selected tab visible. Without this a strip that scrolls simply
+  // hides the user's current location off the right-hand edge.
+  useEffect(() => {
+    const el = ref.current?.querySelector<HTMLElement>("[data-active='true']");
+    el?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+  });
+
+  return (
+    <div
+      ref={ref}
+      data-tabstrip
+      role="tablist"
+      aria-label={label ?? "Sections"}
+      className={cn("tab-strip gap-1 border-b border-[var(--border)]", className)}
+    >
+      {children}
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ Card */
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
@@ -8,6 +82,17 @@ export function Card({ className, children }: { className?: string; children: Re
       className={cn(
         "rounded-lg border bg-[var(--bg-elevated)] shadow-sm",
         "border-[var(--border)]",
+        // A Card is almost always a flex or grid child, and such a child
+        // defaults to `min-width: auto` — it will not shrink below its
+        // content. A card containing a twelve-column table therefore widened
+        // its grid track to the table's full width and pushed the document
+        // to 644px inside a 320px viewport, even though the table's own
+        // wrapper had `overflow-x: auto`. Allowing the card to shrink is what
+        // lets that wrapper actually clip and scroll.
+        //
+        // This has no effect on desktop: the grid tracks there are already
+        // wider than their content.
+        "min-w-0",
         className,
       )}
     >

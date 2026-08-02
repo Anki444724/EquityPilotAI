@@ -102,7 +102,7 @@ export function WACCPanel({
           title="Cost of capital build"
           action={<Badge variant="accent">WACC {percent(wacc.wacc, 2)}</Badge>}
         />
-        <div className="overflow-x-auto">
+        <div className="scroll-x">
           <table className="grid-table">
             <thead>
               <tr><th className="!text-left">Component</th><th>Value</th><th className="!text-left">Basis</th></tr>
@@ -130,7 +130,7 @@ export function WACCPanel({
       {schedule.length > 0 && (
         <Card>
           <CardHeader title="Dynamic WACC" subtitle="Recomputed as the capital structure evolves" />
-          <div className="overflow-x-auto">
+          <div className="scroll-x">
             <table className="grid-table">
               <thead>
                 <tr><th className="!text-left">Period</th><th>D/E</th><th>Levered beta</th><th>Cost of equity</th><th>WACC</th></tr>
@@ -169,7 +169,7 @@ export function DCFPanel({ dcf, title }: { dcf: DCFOut; title: string }) {
           ) : undefined
         }
       />
-      <div className="overflow-x-auto">
+      <div className="scroll-x">
         <table className="grid-table">
           <thead>
             <tr>
@@ -255,7 +255,7 @@ export function RelativePanel({ relative }: { relative: RelativeOut }) {
     <div className="space-y-5">
       <Card>
         <CardHeader title="Trading multiples" subtitle="Trailing and forward" />
-        <div className="overflow-x-auto">
+        <div className="scroll-x">
           <table className="grid-table">
             <thead>
               <tr>
@@ -289,7 +289,7 @@ export function RelativePanel({ relative }: { relative: RelativeOut }) {
             ) : undefined
           }
         />
-        <div className="overflow-x-auto">
+        <div className="scroll-x">
           <table className="grid-table">
             <thead>
               <tr>
@@ -319,7 +319,7 @@ export function RelativePanel({ relative }: { relative: RelativeOut }) {
           title="Justified multiples"
           subtitle="What fundamentals warrant, derived from the Gordon model — not borrowed from peers"
         />
-        <div className="overflow-x-auto">
+        <div className="scroll-x">
           <table className="grid-table">
             <thead>
               <tr>
@@ -376,7 +376,7 @@ export function SensitivityMatrix({ grid, showUpside }: { grid: SensitivityOut; 
     v === null ? EM_DASH : showUpside ? percent(v, 0) : rupees(v, 0);
 
   return (
-    <div className="overflow-x-auto">
+    <div className="scroll-x">
       <table className="grid-table">
         <thead>
           <tr>
@@ -450,7 +450,7 @@ export function SimulationPanel({ sim }: { sim: SimulationOut }) {
 
       <Card>
         <CardHeader title="Percentiles" />
-        <div className="overflow-x-auto">
+        <div className="scroll-x">
           <table className="grid-table">
             <thead>
               <tr>

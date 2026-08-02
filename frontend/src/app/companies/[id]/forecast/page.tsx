@@ -7,7 +7,7 @@ import {
   CashFlowChart, HistoryForecastChart, ScenarioChart, ValueRangeChart,
 } from "@/components/charts";
 import { AssumptionEditor } from "@/components/forecast/assumption-editor";
-import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
+import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat, TabStrip } from "@/components/ui";
 import { api, forecastApi } from "@/lib/api";
 import { crore, EM_DASH, fiscalYear, multiple, percent, rupees } from "@/lib/format";
 import type { ScenarioName } from "@/lib/types";
@@ -196,9 +196,9 @@ export default function ForecastPage({ params }: { params: Promise<{ id: string 
           <WarningList warnings={data.warnings} />
 
           {/* Tabs */}
-          <div className="mb-5 mt-4 flex flex-wrap gap-1 border-b border-[var(--border)]">
+          <TabStrip className="mb-4 mt-4 lg:mb-5" label="Forecast views">
             {TABS.map((t) => (
-              <button
+              <button data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={cn(
@@ -211,9 +211,9 @@ export default function ForecastPage({ params }: { params: Promise<{ id: string 
                 {t.label}
               </button>
             ))}
-          </div>
+          </TabStrip>
 
-          <div className="grid gap-5 xl:grid-cols-[1fr_22rem]">
+          <div className="grid min-w-0-all gap-5 xl:grid-cols-[1fr_22rem]">
             <div className="min-w-0 space-y-5">
               {tab === "projection" && (
                 <MetricGrid sections={data.sections} periods={data.periods} />
@@ -291,7 +291,7 @@ export default function ForecastPage({ params }: { params: Promise<{ id: string 
               {tab === "detail" && (
                 <Card>
                   <CardHeader title="Year-by-year detail" />
-                  <div className="overflow-x-auto">
+                  <div className="scroll-x">
                     <table className="grid-table">
                       <thead>
                         <tr>
@@ -400,7 +400,7 @@ function ScenarioPanel({
         </Card>
         <Card>
           <CardHeader title="Scenario outcomes" subtitle={`${horizon}-year horizon`} />
-          <div className="overflow-x-auto">
+          <div className="scroll-x">
             <table className="grid-table">
               <thead>
                 <tr>

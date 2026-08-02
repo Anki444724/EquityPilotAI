@@ -8,7 +8,7 @@ import {
   DCFPanel, FootballField, RelativePanel, SensitivityMatrix, SimulationPanel,
   WACCPanel,
 } from "@/components/valuation/panels";
-import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
+import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat, TabStrip } from "@/components/ui";
 import { api, valuationApi } from "@/lib/api";
 import { EM_DASH, percent, rupees } from "@/lib/format";
 import type { ScenarioName } from "@/lib/types";
@@ -158,16 +158,16 @@ export default function ValuationPage({ params }: { params: Promise<{ id: string
             </CardBody></Card>
           </div>
 
-          <div className="mb-5 flex flex-wrap gap-1 border-b border-[var(--border)]">
+          <TabStrip className="mb-4 lg:mb-5" label="Valuation methods">
             {TABS.map((t) => (
-              <button key={t.key} onClick={() => setTab(t.key)}
+              <button key={t.key} onClick={() => setTab(t.key)} data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
                 className={cn("-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors",
                   tab === t.key ? "border-accent-500 text-accent-500"
                     : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]")}>
                 {t.label}
               </button>
             ))}
-          </div>
+          </TabStrip>
 
           {tab === "dashboard" && (
             <div className="space-y-5">
@@ -189,7 +189,7 @@ export default function ValuationPage({ params }: { params: Promise<{ id: string
 
               <Card>
                 <CardHeader title="Valuation summary" subtitle="Every methodology, side by side" />
-                <div className="overflow-x-auto">
+                <div className="scroll-x">
                   <table className="grid-table">
                     <thead>
                       <tr>

@@ -4,7 +4,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { CompanyTabs } from "@/components/layout/company-tabs";
 import { DebtPanels, NoData, ShareholdingHeader, WorkingCapitalHeader } from "@/components/analysis/panels";
 import { FlagList, MetricGrid, WarningList } from "@/components/analysis/metric-grid";
-import { Badge, Card, CardBody, Skeleton, Stat } from "@/components/ui";
+import { Badge, Card, CardBody, Skeleton, Stat, TabStrip } from "@/components/ui";
 import { analysisApi, api } from "@/lib/api";
 import { crore, EM_DASH, percent } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -62,9 +62,9 @@ export default function FinancialsPage({ params }: { params: Promise<{ id: strin
           </div>
 
           {/* Tabs */}
-          <div className="mb-5 flex flex-wrap gap-1 border-b border-[var(--border)]">
+          <TabStrip className="mb-4 lg:mb-5" label="Financial statements">
             {TABS.map((t) => (
-              <button
+              <button data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={cn(
@@ -77,7 +77,7 @@ export default function FinancialsPage({ params }: { params: Promise<{ id: strin
                 {t.label}
               </button>
             ))}
-          </div>
+          </TabStrip>
 
           {ticker && <TabContent tab={tab} ticker={ticker} />}
         </>
@@ -128,7 +128,7 @@ function OverviewTab({ ticker }: { ticker: string }) {
       </div>
 
       <Card>
-        <div className="overflow-x-auto">
+        <div className="scroll-x">
           <table className="grid-table">
             <thead>
               <tr>

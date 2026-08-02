@@ -149,7 +149,7 @@ export default function CompanyProfilePage({
                   )
                 }
               />
-              <div className="overflow-x-auto">
+              <div className="scroll-x">
                 <table className="grid-table">
                   <thead>
                     <tr><th>Metric</th><th>Value</th><th>Unit</th></tr>

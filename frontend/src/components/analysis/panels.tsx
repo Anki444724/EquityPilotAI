@@ -46,7 +46,7 @@ export function DebtPanels({ data }: { data: DebtResponse }) {
               )
             }
           />
-          <div className="overflow-x-auto">
+          <div className="scroll-x">
             <table className="grid-table">
               <thead>
                 <tr>
@@ -104,7 +104,7 @@ export function DebtPanels({ data }: { data: DebtResponse }) {
 
         <Card>
           <CardHeader title="Covenant compliance" subtitle="Tested on the latest reported period" />
-          <div className="overflow-x-auto">
+          <div className="scroll-x">
             <table className="grid-table">
               <thead>
                 <tr>

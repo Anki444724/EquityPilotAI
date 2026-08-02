@@ -5,7 +5,7 @@ import { CompanyTabs } from "@/components/layout/company-tabs";
 import {
   CapabilityPicker, CitationList, GuardrailPanel, Markdown, ProviderPanel, RunMeta,
 } from "@/components/ai/panels";
-import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton } from "@/components/ui";
+import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, TabStrip } from "@/components/ui";
 import { aiApi, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -132,18 +132,18 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
         </div>
       )}
 
-      <div className="mb-5 flex flex-wrap gap-1 border-b border-[var(--border)]">
+      <TabStrip className="mb-4 lg:mb-5" label="AI research sections">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => setTab(t.key)} data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
             className={cn("-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors",
               tab === t.key ? "border-accent-500 text-accent-500"
                 : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]")}>
             {t.label}
           </button>
         ))}
-      </div>
+      </TabStrip>
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_21rem]">
+      <div className="grid min-w-0-all gap-5 xl:grid-cols-[1fr_21rem]">
         <div className="min-w-0 space-y-5">
           {tab === "analysis" && (
             <>

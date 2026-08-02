@@ -63,7 +63,7 @@ export function MetricGrid({
   return (
     <Card>
       {title && <CardHeader title={title} subtitle={subtitle} action={action} />}
-      <div className="overflow-x-auto">
+      <div className="scroll-x">
         <table className="grid-table">
           <thead>
             <tr>

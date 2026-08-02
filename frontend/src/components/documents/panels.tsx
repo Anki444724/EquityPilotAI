@@ -295,8 +295,8 @@ export function FactTable({ facts }: { facts: DocFact[] }) {
     return <p className="p-4 text-sm text-[var(--text-muted)]">No fields extracted yet.</p>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="scroll-x">
+      <table className="w-full text-sm pin-first">
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
             <th className="px-3 py-2 font-medium">Field</th>
@@ -357,8 +357,8 @@ export function ExtractedTableView({ table }: { table: DocTable }) {
           </div>
         }
       />
-      <CardBody className="overflow-x-auto p-0">
-        <table className="w-full text-xs">
+      <CardBody className="scroll-x p-0">
+        <table className="w-full text-xs pin-first">
           {table.header.length > 0 && (
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-subtle)]">

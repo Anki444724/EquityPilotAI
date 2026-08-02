@@ -123,7 +123,7 @@ export function CategoryTable({
         title="Category scores"
         subtitle="Click a category to see the metrics behind it"
       />
-      <div className="overflow-x-auto">
+      <div className="scroll-x">
         <table className="grid-table">
           <thead>
             <tr>
@@ -341,7 +341,7 @@ export function PeerTable({ data, subject }: { data: PeerComparisonResponse; sub
   return (
     <Card>
       <CardHeader title="Peer comparison" subtitle="Scored on identical assumptions" />
-      <div className="overflow-x-auto">
+      <div className="scroll-x">
         <table className="grid-table">
           <thead>
             <tr>

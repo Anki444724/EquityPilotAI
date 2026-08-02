@@ -14,9 +14,7 @@ import {
   HoldingsTable, HoldingsTreemap, Note, RebalanceTable, RiskGrid,
   SectorHeatmap, UnderwaterChart, ValueChart, money, pct, toneOf,
 } from "@/components/portfolio/panels";
-import {
-  Badge, Card, CardBody, CardHeader, EmptyState, Skeleton,
-} from "@/components/ui";
+import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, TabStrip } from "@/components/ui";
 import { portfolioApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -178,9 +176,9 @@ export default function PortfolioPage() {
         )}
 
         {/* ------------------------------------------------------ tabs */}
-        <div className="flex gap-1 border-b border-[var(--border)]">
+        <TabStrip label="Portfolio views">
           {TABS.map(({ key, label, icon: Icon }) => (
-            <button
+            <button data-active={tab === key} role="tab" aria-selected={tab === key}
               key={key} type="button" onClick={() => setTab(key)}
               className={cn(
                 "inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition",
@@ -196,7 +194,7 @@ export default function PortfolioPage() {
               )}
             </button>
           ))}
-        </div>
+        </TabStrip>
 
         {view.isLoading && <Skeleton className="h-64 w-full" />}
 
@@ -211,7 +209,7 @@ export default function PortfolioPage() {
               <CardBody><HoldingsTreemap holdings={data.holdings} /></CardBody>
             </Card>
 
-            <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+            <div className="grid min-w-0-all gap-4 lg:grid-cols-[1fr_360px]">
               <Card>
                 <CardHeader
                   title="Portfolio value"
@@ -306,7 +304,7 @@ export default function PortfolioPage() {
               <Card>
                 <CardHeader title="Realised trades"
                             subtitle={`${data.realised.length} closed round-trips`} />
-                <CardBody className="overflow-x-auto p-0">
+                <CardBody className="scroll-x p-0">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
@@ -503,7 +501,7 @@ export default function PortfolioPage() {
 
         {/* -------------------------------------------------------- ai */}
         {tab === "ai" && (
-          <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+          <div className="grid min-w-0-all gap-4 lg:grid-cols-[1fr_320px]">
             <div className="space-y-4">
               {commentary.isLoading && <Skeleton className="h-64 w-full" />}
               {commentary.data?.sections.map((section) => (

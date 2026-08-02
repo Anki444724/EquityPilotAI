@@ -8,7 +8,7 @@ import {
   CategoryTable, ConfidenceBar, ExplanationPanel, GradeBadge, PeerTable,
   ProfilePicker, RecommendationBadge, StarRating,
 } from "@/components/scoring/panels";
-import { Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
+import { Card, CardBody, CardHeader, EmptyState, Skeleton, Stat, TabStrip } from "@/components/ui";
 import { api, scoringApi } from "@/lib/api";
 import { EM_DASH, percent } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -145,9 +145,9 @@ export default function ScoringPage({ params }: { params: Promise<{ id: string }
             </CardBody></Card>
           </div>
 
-          <div className="mb-5 flex flex-wrap gap-1 border-b border-[var(--border)]">
+          <TabStrip className="mb-4 lg:mb-5" label="Scoring views">
             {TABS.map((t) => (
-              <button
+              <button data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={cn(
@@ -160,9 +160,9 @@ export default function ScoringPage({ params }: { params: Promise<{ id: string }
                 {t.label}
               </button>
             ))}
-          </div>
+          </TabStrip>
 
-          <div className="grid gap-5 xl:grid-cols-[1fr_20rem]">
+          <div className="grid min-w-0-all gap-5 xl:grid-cols-[1fr_20rem]">
             <div className="min-w-0 space-y-5">
               {tab === "overview" && (
                 <>

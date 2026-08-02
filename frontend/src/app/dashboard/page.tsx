@@ -57,7 +57,7 @@ export default function DashboardPage() {
                 title="Largest by market capitalisation"
                 action={<Link href="/companies" className="text-xs text-accent-500 hover:underline">View all</Link>}
               />
-              <div className="overflow-x-auto">
+              <div className="scroll-x">
                 <table className="grid-table">
                   <thead>
                     <tr>

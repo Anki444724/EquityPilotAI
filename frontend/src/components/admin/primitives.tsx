@@ -113,8 +113,8 @@ export function DataTable<T>({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-full border-collapse text-sm">
+    <div className="scroll-x">
+      <table className="w-full min-w-full border-collapse text-sm pin-first">
         <thead>
           <tr className="border-b border-[var(--border)]">
             {columns.map((column) => (
@@ -309,11 +309,18 @@ export function Tabs({
   active: string; onChange: (key: string) => void;
 }) {
   return (
-    <div className="flex gap-1 overflow-x-auto border-b border-[var(--border)]">
+    <div
+      data-tabstrip
+      role="tablist"
+      className="tab-strip gap-1 border-b border-[var(--border)]"
+    >
       {tabs.map((tab) => (
         <button
           key={tab.key}
           type="button"
+          role="tab"
+          data-active={active === tab.key}
+          aria-selected={active === tab.key}
           onClick={() => onChange(tab.key)}
           className={cn(
             "whitespace-nowrap border-b-2 px-3 py-2 text-xs font-medium transition-colors",
