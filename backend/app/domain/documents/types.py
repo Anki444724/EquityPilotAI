@@ -35,6 +35,11 @@ class DocumentType(StrEnum):
     INVESTOR_PRESENTATION = "investor_presentation"
     CONFERENCE_CALL = "conference_call"
     CREDIT_RATING = "credit_rating"
+    #: Quarterly shareholding pattern filed under LODR Reg. 31. Named
+    #: separately rather than folded into EXCHANGE_FILING because the brief
+    #: asks for it as its own class and because the platform already has a
+    #: ShareholdingSnapshot table that consumes it.
+    SHAREHOLDING = "shareholding"
     DRHP = "drhp"
     ESG_REPORT = "esg_report"
     EXCHANGE_FILING = "exchange_filing"

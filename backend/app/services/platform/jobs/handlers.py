@@ -369,8 +369,21 @@ def handle_filing_crawl(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """
     from app.services.filings.collector import FilingCollector
 
-    max_companies = int(payload.get("max_companies", 25))
-    max_downloads = int(payload.get("max_downloads_per_company", 5))
+    # Coverage budget.
+    #
+    # The audit measured 161 of 501 companies ever crawled: at 25/day against
+    # a 7-day WEEKLY tier, the tail was never reached. Raising the number
+    # alone would not fix it — crawl job 528 took 5h20m for 25 companies
+    # (~12.8 min each), and that time is almost entirely DOWNLOADS, not
+    # discovery. Discovery is one HTTP call per source.
+    #
+    # So the two are separated. `discover_only` sweeps every due company for
+    # new filings and stores the discovery rows; the download budget stays
+    # bounded and drains the resulting queue over subsequent passes. That
+    # gives full daily COVERAGE without a proportional increase in provider
+    # load or worker time.
+    max_companies = int(payload.get("max_companies", 260))
+    max_downloads = int(payload.get("max_downloads_per_company", 2))
     download = bool(payload.get("download", True))
     tickers = payload.get("tickers") or None
 
@@ -431,6 +444,28 @@ def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str
             log.exception("post-filing processing failed", filing_id=row.id)
     db.commit()
     return {"processed": len(processed), "results": processed}
+
+
+# ===========================================================================
+# Investor-relations URL discovery
+# ===========================================================================
+def handle_ir_discovery(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Find and store IR URLs for companies that have none.
+
+    The audit found `ir_url` NULL for all 501 rows, so the brief's Priority-1
+    source contributed nothing and 100% of discovered filings came from NSE.
+
+    Bounded per run because each company costs up to a handful of HTTP probes
+    against a third-party site; the remainder is picked up tomorrow, and a
+    company whose probe fails is retried only after `ir_url_checked_at` ages,
+    not on every pass.
+    """
+    from app.services.filings.ir_discovery import IRDiscoveryService
+
+    limit = int(payload.get("limit", 40))
+    overwrite = bool(payload.get("overwrite", False))
+    report = IRDiscoveryService(db).run(limit=limit, overwrite=overwrite)
+    return report.as_dict()
 
 
 # ===========================================================================
@@ -523,6 +558,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.BACKUP: handle_backup,
     JobKind.RETENTION_SWEEP: handle_retention_sweep,
     JobKind.MEMORY_ENRICHMENT: handle_memory_enrichment,
+    JobKind.IR_DISCOVERY: handle_ir_discovery,
 }
 
 

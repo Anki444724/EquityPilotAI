@@ -132,8 +132,59 @@ _RULES: tuple[tuple[str, FilingType, DocumentType, float], ...] = (
      FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.88),
     (r"\border\s+win\b|\bnew\s+order\b|\bcontract\s+win\b|\bbags?\s+order\b",
      FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.85),
-    (r"\bshareholding\s+pattern\b",
-     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.90),
+    (r"\bshareholding\s+pattern\b|\breg(ulation)?\.?\s*31\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.SHAREHOLDING, 0.92),
+
+    # ---------------------------------------------------------------
+    # Rules below were derived from the ACTUAL NSE subject lines in the
+    # production corpus, not invented. Before they existed, 1,506 of 2,902
+    # discovered filings classified as `other` and 420 as NULL — 66% of the
+    # corpus carried no usable type.
+    #
+    # NSE reuses a small set of fixed subject strings, so a handful of exact
+    # rules converts most of that tail. Each pattern below is annotated with
+    # the count it addresses, measured on 2026-08-02.
+    # ---------------------------------------------------------------
+
+    # 452 rows. NSE's standing subject for an earnings-call intimation. The
+    # generic conference-call rule above misses it because the string is
+    # "Con. Call" with a full stop inside the abbreviation and "Analysts/"
+    # glued to the front with no word boundary.
+    (r"analysts?\s*/\s*institutional\s+investor|\bcon\.\s*call\b",
+     FilingType.OTHER, DocumentType.CONFERENCE_CALL, 0.80),
+
+    # 173 rows. An AGM/EGM notice carries the resolutions put to owners.
+    (r"\bshareholders?\s+meeting\b|\bpostal\s+ballot\b|\b(a|e)gm\b|"
+     r"\bannual\s+general\s+meeting\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.80),
+
+    # 93 rows. Substantial-acquisition disclosures move the ownership table.
+    (r"\btakeover\s+regulations?\b|\bsast\b|"
+     r"\bsubstantial\s+acquisition\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.SHAREHOLDING, 0.85),
+
+    # 65 + 51 + 30 + 27 + 25 + 19 + 9 + 7 rows. Board and KMP changes.
+    (r"\bchange\s+in\s+(management|director|auditor|kmp)|"
+     r"\bresignation\b|\bcessation\b|\bretirement\b|\bappointment\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.82),
+
+    # 59 + 52 + 33 + 13 rows. Capital and record-date actions.
+    (r"\brecord\s+date\b|\besop\b|\besos\b|\besps\b|"
+     r"\ballotment\s+of\s+securities\b|\bissue\s+of\s+securities\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.82),
+
+    # 18 + 9 rows. Regulatory action and litigation are material risk events.
+    (r"\baction\(?s\)?\s+taken\b|\borders?\s+passed\b|"
+     r"\bpendency\s+of\s+litigation\b|\bdispute\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.80),
+
+    # Last resort, and deliberately last: NSE files a great deal under bare
+    # "Updates" / "General Updates" (333 + 235 rows). These are genuinely
+    # heterogeneous, so they are typed as an exchange filing at LOW
+    # confidence rather than left null. A reader can see 0.45 and treat it
+    # accordingly; a null tells them nothing at all.
+    (r"^\s*(general\s+)?updates?\s*$|\bgeneral\s+updates?\b",
+     FilingType.CORPORATE_ANNOUNCEMENT, DocumentType.EXCHANGE_FILING, 0.45),
 )
 
 _COMPILED = tuple(

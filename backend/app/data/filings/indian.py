@@ -13,6 +13,7 @@ scrip code rather than a ticker.
 from __future__ import annotations
 
 import json
+import random
 import time
 import urllib.error
 import urllib.parse
@@ -49,9 +50,45 @@ class NSEFilingProvider(FilingProvider):
         "?index=equities&symbol={symbol}"
     )
 
-    def __init__(self, *, timeout: float = 20.0) -> None:
+    #: Retry schedule for a transient NSE failure.
+    #:
+    #: Measured, not guessed: 44 of 501 companies recorded
+    #: "NSE unreachable: The read operation timed out" on the nightly crawl,
+    #: and the previous implementation made exactly ONE attempt with a bare
+    #: `except`, so a single slow response cost that company a whole day.
+    #:
+    #: Exponential with jitter. The jitter matters more than the growth: a
+    #: crawl walks companies in a loop, so a fixed backoff would align every
+    #: retry into a burst and reproduce the overload that caused the timeout.
+    _RETRY_ATTEMPTS = 3
+    _RETRY_BASE_SECONDS = 1.5
+    _RETRY_FACTOR = 3.0
+    _RETRY_JITTER = 0.3
+
+    def __init__(self, *, timeout: float = 20.0,
+                 attempts: int | None = None) -> None:
         self.timeout = timeout
+        #: Injectable so a test can assert the retry loop without sleeping.
+        self.attempts = attempts if attempts is not None else self._RETRY_ATTEMPTS
         self._opener: urllib.request.OpenerDirector | None = None
+
+    def _backoff_seconds(self, attempt: int) -> float:
+        """Delay before retry `attempt` (1-based), with jitter."""
+        base = self._RETRY_BASE_SECONDS * (self._RETRY_FACTOR ** (attempt - 1))
+        return base * (1.0 + random.uniform(-self._RETRY_JITTER,
+                                            self._RETRY_JITTER))
+
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        """Whether another attempt could plausibly succeed.
+
+        A timeout, a reset connection or a 5xx is worth retrying. A 404 is
+        not — the symbol does not exist, and two more requests just spend the
+        rate-limit budget confirming it.
+        """
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code in (408, 425, 429, 500, 502, 503, 504)
+        return isinstance(exc, (TimeoutError, urllib.error.URLError, OSError))
 
     def available(self) -> bool:
         return True
@@ -93,15 +130,36 @@ class NSEFilingProvider(FilingProvider):
         symbol = (ticker or "").strip().upper().split(".")[0]
         wanted = set(filing_types or [])
 
-        try:
-            url = self._ANNOUNCEMENTS.format(symbol=urllib.parse.quote(symbol))
-            with self._session().open(url, timeout=self.timeout) as response:
-                payload = json.load(response)
-        except Exception as exc:  # noqa: BLE001
+        url = self._ANNOUNCEMENTS.format(symbol=urllib.parse.quote(symbol))
+        payload = None
+        last_error: Exception | None = None
+
+        for attempt in range(1, max(1, self.attempts) + 1):
+            try:
+                with self._session().open(url, timeout=self.timeout) as response:
+                    payload = json.load(response)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt >= self.attempts or not self._is_retryable(exc):
+                    break
+                # Drop the cookie jar between attempts. NSE expires a session
+                # aggressively, and a stale jar is a common cause of the
+                # second attempt failing the same way as the first.
+                self._opener = None
+                delay = self._backoff_seconds(attempt)
+                log.info("nse retry", symbol=symbol, attempt=attempt,
+                         delay=round(delay, 2), error=str(exc)[:100])
+                time.sleep(delay)
+
+        if payload is None:
             return FilingResult(
                 filings=[], source=self.name, category=self.category,
                 latency_ms=(time.perf_counter() - started) * 1000,
-                error=f"NSE unreachable: {str(exc)[:120]}",
+                error=(
+                    f"NSE unreachable after {self.attempts} attempts: "
+                    f"{str(last_error)[:100]}"
+                ),
             )
 
         rows = payload if isinstance(payload, list) else payload.get("data") or []

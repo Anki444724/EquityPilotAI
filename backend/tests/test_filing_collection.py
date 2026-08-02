@@ -513,12 +513,25 @@ class TestDashboard:
 class TestScheduling:
     """The system must run itself."""
 
-    def test_a_daily_crawl_is_on_the_standing_schedule(self):
+    def test_the_crawl_covers_the_universe_within_a_day(self):
+        """Twice daily, not once.
+
+        Updated from `== 24 * 3600` when the schedule changed. A single daily
+        pass at 25 companies left 340 of 501 never crawled, because the WEEKLY
+        tier re-queued the head of the list before the tail was reached. The
+        assertion is now the property that matters — full coverage inside 24
+        hours — rather than a specific interval.
+        """
         from app.domain.platform.jobs import SCHEDULES, JobKind
 
         crawl = [s for s in SCHEDULES if s.kind is JobKind.FILING_CRAWL]
         assert crawl, "no filing crawl on the schedule"
-        assert crawl[0].every_seconds == 24 * 3600
+        assert crawl[0].every_seconds <= 24 * 3600
+
+        passes_per_day = (24 * 3600) // crawl[0].every_seconds
+        assert passes_per_day * 260 >= 500, (
+            "the schedule cannot reach 500 companies in 24 hours"
+        )
 
     def test_post_processing_runs_more_often_than_the_crawl(self):
         """Ingestion is asynchronous, so the rescore must follow the document

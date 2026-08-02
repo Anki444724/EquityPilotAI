@@ -52,6 +52,10 @@ class JobKind(StrEnum):
     #: container while that worker held a large PDF, and adding LLM work to
     #: the same loop would guarantee a fourth.
     MEMORY_ENRICHMENT = "memory_enrichment"
+    #: Probe for investor-relations URLs. Separate from the crawl because it
+    #: is a different failure mode: a crawl failure means a source was down,
+    #: an IR-discovery failure means a company has no findable page.
+    IR_DISCOVERY = "ir_discovery"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -68,6 +72,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.BACKUP: "Backup",
     JobKind.RETENTION_SWEEP: "Retention sweep",
     JobKind.MEMORY_ENRICHMENT: "Memory enrichment",
+    JobKind.IR_DISCOVERY: "IR URL discovery",
 }
 
 
@@ -151,6 +156,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.BACKUP: JobPriority.BACKGROUND,
     JobKind.RETENTION_SWEEP: JobPriority.BACKGROUND,
     JobKind.MEMORY_ENRICHMENT: JobPriority.LOW,
+    JobKind.IR_DISCOVERY: JobPriority.BACKGROUND,
 }
 
 
@@ -217,6 +223,9 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # Long backoff: the usual failure is an LLM rate limit, and retrying in
     # five seconds simply burns the remaining quota.
     JobKind.MEMORY_ENRICHMENT: RetryPolicy(max_attempts=3, base_seconds=180),
+    # One retry only: a company with no findable IR page will not acquire one
+    # by being probed again in five minutes.
+    JobKind.IR_DISCOVERY: RetryPolicy(max_attempts=2, base_seconds=600),
 }
 
 
@@ -298,9 +307,22 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         "Copy unreplicated documents to object storage and verify SHA256.",
     ),
     ScheduleSpec(
-        JobKind.FILING_CRAWL, 24 * 3600,
+        # Twice daily, 260 companies per pass.
+        #
+        # 2 x 260 = 520 >= the 500-company universe, so every company is
+        # checked within 24 hours even if one pass is short. A single daily
+        # pass at 25 companies left 340 of 501 never crawled, because the
+        # WEEKLY tier re-queued the head of the list before the tail was
+        # reached.
+        JobKind.FILING_CRAWL, 12 * 3600,
         "Crawl investor-relations sites, NSE and BSE for new filings and "
         "ingest anything not already held.",
+    ),
+    ScheduleSpec(
+        # Daily. Probing is cheap and IR pages move, but not hourly.
+        JobKind.IR_DISCOVERY, 24 * 3600,
+        "Discover and store investor-relations URLs for companies that have "
+        "none, so the brief's Priority-1 source stops being empty.",
     ),
     ScheduleSpec(
         # Runs far more often than the crawl: ingestion is asynchronous, so

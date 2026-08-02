@@ -421,3 +421,40 @@ def update_crawl_state(
         "ir_url": state.ir_url, "bse_scrip_code": state.bse_scrip_code,
         "consecutive_failures": state.consecutive_failures,
     }
+
+
+@router.get("/scheduler/dashboard", summary="Scheduler coverage and health")
+def scheduler_dashboard(
+    window_hours: int = Query(default=24, ge=1, le=168),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Coverage, retries, failures, IR discovery, downloads and memory.
+
+    Registered under `/scheduler/` rather than `/filings/` deliberately.
+    ROUTE-001: `/filings/{ticker}` in the market router is declared before
+    the static filing paths and captured `/filings/dashboard` as a ticker,
+    answering 200 with an empty result — worse than a 404, because it looks
+    like data. A distinct prefix cannot be shadowed by that route.
+
+    Every figure is recomputed from the tables. A counter maintained by the
+    crawler would drift the first time a pass is interrupted, and this crawler
+    has been interrupted.
+    """
+    from app.services.filings.dashboard import SchedulerDashboard
+
+    return SchedulerDashboard(db).snapshot(window_hours=window_hours)
+
+
+@router.post("/scheduler/discover-ir", summary="Discover investor-relations URLs")
+def discover_ir_urls(
+    limit: int = Query(default=25, ge=1, le=500),
+    overwrite: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Run IR discovery now. The scheduler also runs this daily."""
+    _require_operator(user)
+    from app.services.filings.ir_discovery import IRDiscoveryService
+
+    return IRDiscoveryService(db).run(limit=limit, overwrite=overwrite).as_dict()

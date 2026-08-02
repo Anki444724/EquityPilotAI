@@ -127,6 +127,17 @@ class CompanyCrawlState(Base):
     #: The company's own investor-relations page, when known. Priority 1 in
     #: the brief; blank for companies whose page has not been registered.
     ir_url: Mapped[str | None] = mapped_column(String(500))
+    #: How the IR URL was obtained and how much to trust it. Discovery is a
+    #: heuristic — a derived domain plus a conventional path — so a stored URL
+    #: must be visibly a guess rather than indistinguishable from one a human
+    #: verified. `ir_url_checked_at` also stops the discoverer re-probing the
+    #: same dead domain every night.
+    ir_url_confidence: Mapped[float | None] = mapped_column(Float)
+    ir_url_method: Mapped[str | None] = mapped_column(String(24))
+    ir_url_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     #: BSE scrip code, needed because BSE's API keys on code rather than symbol.
     bse_scrip_code: Mapped[str | None] = mapped_column(String(16))
 
