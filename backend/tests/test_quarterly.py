@@ -406,3 +406,71 @@ def test_no_extra_request_when_consolidated_quarters_are_present(monkeypatch):
     source.fetch_screener("FINE")
 
     assert len(requested) == 1, f"made {len(requested)} requests, expected 1"
+
+
+# ----------------------------------------------------------------- endpoint
+
+def test_quarterly_endpoint_serialises_a_slots_dataclass(api_client):
+    """Regression for a 500 that reached production.
+
+    `QuarterRow` is declared `@dataclass(slots=True)` and therefore has NO
+    instance `__dict__`. The handler built its response with
+    `QuarterRowOut(**row.__dict__)`, which raises AttributeError, so the
+    endpoint returned HTTP 500 for every company that HAD quarters — while
+    the stored data was perfectly good.
+
+    The first version of this test asked the API for any company and checked
+    for a 200. It passed with the bug still in place, because the seeded test
+    companies have no quarterly rows at all, so the list comprehension never
+    executed. A test that cannot fail is worse than no test: it certifies the
+    defect. This one INSERTS a quarter first, which is what makes the
+    serialisation path run.
+    """
+    from app.models.analysis import QuarterlyResult
+    from tests.conftest import TestingSession
+
+    listing = api_client.get("/api/v1/companies", params={"page_size": 5})
+    assert listing.status_code == 200
+    results = listing.json()["results"]
+    assert results, "no companies available to test against"
+    company = results[0]
+
+    session = TestingSession()
+    try:
+        session.add(QuarterlyResult(
+            company_id=company["id"], fiscal_year=2026, quarter=2,
+            revenue=500.0, operating_profit=70.0, operating_margin=0.14,
+            net_profit=50.0, eps=4.2, source="test",
+        ))
+        session.commit()
+
+        response = api_client.get(f"/api/v1/company/{company['ticker']}/quarterly")
+        assert response.status_code == 200, response.text
+
+        body = response.json()
+        assert body["has_data"] is True
+        assert body["unavailable_reason"] is None
+        row = next(q for q in body["quarters"] if q["label"] == "Q2 FY26")
+        assert row["revenue"] == 500.0
+        assert row["operating_margin"] == 0.14
+    finally:
+        session.query(QuarterlyResult).filter_by(
+            company_id=company["id"], fiscal_year=2026, quarter=2,
+        ).delete()
+        session.commit()
+        session.close()
+
+
+def test_quarterly_endpoint_explains_an_empty_result(api_client):
+    """An empty list must say why, never be left ambiguous."""
+    listing = api_client.get("/api/v1/companies", params={"page_size": 5})
+    ticker = listing.json()["results"][0]["ticker"]
+
+    body = api_client.get(f"/api/v1/company/{ticker}/quarterly").json()
+    if not body["has_data"]:
+        assert body["unavailable_reason"]
+
+
+def test_quarterly_endpoint_404s_for_an_unknown_ticker(api_client):
+    response = api_client.get("/api/v1/company/NOSUCHTICKER/quarterly")
+    assert response.status_code == 404

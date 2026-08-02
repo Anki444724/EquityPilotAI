@@ -17,6 +17,8 @@ No financial logic lives in this layer.
 """
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -235,7 +237,11 @@ def quarterly(
 
     return QuarterlyResponse(
         company=svc.company_ref(),
-        quarters=[QuarterRowOut(**row.__dict__) for row in rows],
+        # `dataclasses.asdict`, not `row.__dict__`: QuarterRow is declared
+        # `slots=True` and therefore has no instance dict at all, so the
+        # attribute access raised AttributeError and the endpoint 500'd while
+        # the underlying data was perfectly good.
+        quarters=[QuarterRowOut(**asdict(row)) for row in rows],
         has_data=bool(rows),
         unavailable_reason=(
             None if rows else
