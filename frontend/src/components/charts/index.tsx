@@ -131,12 +131,13 @@ function Chart({
   needsMore?: boolean;
 }) {
   const { theme } = useTheme();
-  const [mounted, setMounted] = useState(false);
+  // Initialize synchronously when no async module load needed (avoids setState-in-effect lint)
+  const [mounted, setMounted] = useState(() => !needsMore);
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<HighchartsReact.RefObject>(null);
 
   useEffect(() => {
-    if (!needsMore) { setMounted(true); return; }
+    if (!needsMore) return;
     let live = true;
     loadHighchartsMore().then(() => { if (live) setMounted(true); });
     return () => { live = false; };

@@ -46,6 +46,17 @@ class Capability(StrEnum):
     PORTFOLIO_COMMENTARY = "portfolio_commentary"
     CHAT = "chat"
 
+    # Phase 3 — Institutional Equity Research Intelligence (additive)
+    INVESTMENT_CASES = "investment_cases"
+    COMPETITIVE_ANALYSIS = "competitive_analysis"
+    MANAGEMENT_QUALITY = "management_quality"
+    INDUSTRY_INTELLIGENCE = "industry_intelligence"
+    NEWS_INTELLIGENCE = "news_intelligence"
+    SCORE_EXPLANATION = "score_explanation"
+    HISTORICAL_COMPARISON = "historical_comparison"
+    PORTFOLIO_RANKING = "portfolio_ranking"
+    CONFIDENCE_REPORT = "confidence_report"
+
 
 class OutputStyle(StrEnum):
     MARKDOWN = "markdown"

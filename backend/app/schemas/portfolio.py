@@ -395,6 +395,11 @@ class WatchlistCreate(BaseModel):
     description: str | None = None
 
 
+class WatchlistUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = None
+
+
 class WatchlistOut(ORMModel):
     id: int
     owner_id: str

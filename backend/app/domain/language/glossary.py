@@ -65,7 +65,12 @@ def _t(english: str, hindi: str, hinglish: str | None = None,
 #: The core dictionary. Every term the brief names is present, plus the
 #: vocabulary the ten scoring modules actually emit — a glossary that covers
 #: the examples but not the output is decorative.
+# Phase 2: merged with expanded glossary for >500 total terms.
+from .glossary_expanded import EXPANDED_TERMS as _EXPANDED
+
 TERMS: tuple[GlossaryTerm, ...] = (
+    # Core terms (Phase 1)
+
     # --- the brief's list, verbatim ---
     _t("Revenue", "राजस्व"),
     _t("Net Profit", "शुद्ध लाभ"),
@@ -209,6 +214,9 @@ TERMS: tuple[GlossaryTerm, ...] = (
     _t("Crore", "करोड़"),
     _t("Lakh", "लाख"),
     _t("Basis Points", "आधार अंक", abbreviation="bps"),
+
+    # --- Phase 2 expansion: 400+ additional finance & equity research terms ---
+    *_EXPANDED,
 )
 
 #: Lookup by lowercased English term.

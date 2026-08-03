@@ -44,15 +44,13 @@ export function SignUp({ onSignedUp, onCancel }: Props) {
     { checking: boolean; available: boolean | null; problems: string[] }
   >({ checking: false, available: null, problems: [] });
 
-  // Debounced availability check, so the user learns a handle is taken while
-  // filling the form rather than on submit.
+  // Debounced availability check. Reset synchronously on input change (outside effect) to avoid setState-in-effect.
+  // Only schedule the async check inside effect when length >=3.
   useEffect(() => {
-    if (username.trim().length < 3) {
-      setHandleState({ checking: false, available: null, problems: [] });
-      return;
-    }
-    setHandleState((s) => ({ ...s, checking: true }));
+    if (username.trim().length < 3) return;
+
     const timer = setTimeout(async () => {
+      setHandleState((s) => ({ ...s, checking: true }));
       try {
         const result = await authApi.usernameAvailable(username.trim());
         setHandleState({
@@ -64,6 +62,14 @@ export function SignUp({ onSignedUp, onCancel }: Props) {
     }, 400);
     return () => clearTimeout(timer);
   }, [username]);
+
+  // Reset handle state synchronously on short username (called from onChange)
+  function onUsernameChange(v: string) {
+    setUsername(v);
+    if (v.trim().length < 3) {
+      setHandleState({ checking: false, available: null, problems: [] });
+    }
+  }
 
   const pwProblems = password ? passwordProblems(password, email) : [];
   const mismatch = confirm.length > 0 && confirm !== password;
@@ -155,7 +161,7 @@ export function SignUp({ onSignedUp, onCancel }: Props) {
           <label className="block">
             <span className="mb-1 block text-xs text-[var(--text-muted)]">Username</span>
             <div className="relative">
-              <input value={username} onChange={(e) => setUsername(e.target.value)}
+              <input value={username} onChange={(e) => onUsernameChange(e.target.value)}
                      className={field} placeholder="ankitsingh" autoComplete="username" />
               {username.trim().length >= 3 && (
                 <span className="absolute right-2 top-1/2 -translate-y-1/2">

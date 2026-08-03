@@ -253,15 +253,14 @@ export function ProfilePicker({
   );
 }
 
-/** AI-ready explanation feed. */
-export function ExplanationPanel({ data }: { data: ExplanationResponse }) {
-  const Section = ({
-    title, items, tone,
-  }: {
-    title: string;
-    items: ExplanationResponse["key_positives"];
-    tone: "gain" | "loss" | "neutral";
-  }) => (
+function ExplanationSection({
+  title, items, tone,
+}: {
+  title: string;
+  items: ExplanationResponse["key_positives"];
+  tone: "gain" | "loss" | "neutral";
+}) {
+  return (
     <Card>
       <CardHeader title={title} />
       <CardBody className="space-y-2">
@@ -292,7 +291,10 @@ export function ExplanationPanel({ data }: { data: ExplanationResponse }) {
       </CardBody>
     </Card>
   );
+}
 
+/** AI-ready explanation feed. */
+export function ExplanationPanel({ data }: { data: ExplanationResponse }) {
   return (
     <div className="space-y-5">
       <Card className="border-accent-500/30">
@@ -309,8 +311,8 @@ export function ExplanationPanel({ data }: { data: ExplanationResponse }) {
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Section title="Key positives" items={data.key_positives} tone="gain" />
-        <Section title="Key negatives" items={data.key_negatives} tone="loss" />
+        <ExplanationSection title="Key positives" items={data.key_positives} tone="gain" />
+        <ExplanationSection title="Key negatives" items={data.key_negatives} tone="loss" />
       </div>
 
       {data.data_gaps.length > 0 && (

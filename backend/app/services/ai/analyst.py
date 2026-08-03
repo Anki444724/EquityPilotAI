@@ -222,7 +222,8 @@ class ResearchAnalyst:
         task_extra = extra
         if language is not None and language is not CANONICAL_LANGUAGE:
             from app.services.language.adapter import LanguageAdapter
-            task_extra = f"{extra}{LanguageAdapter.response_instruction(language)}"
+            # Phase 2: use improved multilingual templates when capability known
+            task_extra = f"{extra}{LanguageAdapter.response_instruction_phase2(language, capability) if 'capability' in locals() else LanguageAdapter.response_instruction(language)}"
 
         built = self.prompts.build(
             prompt_template, context, question=question, memory=memory, style=style,

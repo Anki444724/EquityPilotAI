@@ -230,16 +230,21 @@ export function AllocationPie({
 
   const radius = size / 2 - 4;
   const centre = size / 2;
-  let angle = -Math.PI / 2;
+
+  // Pure functional computation of start angles (no mutation in render)
+  const positioned = slices.reduce((acc, slice, idx) => {
+    const prev = acc[idx - 1];
+    const start = prev ? prev.start + prev.sweep : -Math.PI / 2;
+    const sweep = slice.weight * 2 * Math.PI;
+    acc.push({ slice, start, sweep });
+    return acc;
+  }, [] as Array<{ slice: typeof slices[0]; start: number; sweep: number }>);
 
   return (
     <div className="flex flex-wrap items-center gap-4">
       <svg width={size} height={size} role="img"
            aria-label={`${allocation.dimension} allocation`}>
-        {slices.map((slice, index) => {
-          const sweep = slice.weight * 2 * Math.PI;
-          const start = angle;
-          angle += sweep;
+        {positioned.map(({ slice, start, sweep }, index) => {
           // A single 100% slice cannot be drawn as an arc — the start and end
           // points coincide, so the path collapses. Draw a circle instead.
           if (slice.weight >= 0.9999) {
@@ -250,8 +255,9 @@ export function AllocationPie({
           }
           const x1 = centre + radius * Math.cos(start);
           const y1 = centre + radius * Math.sin(start);
-          const x2 = centre + radius * Math.cos(angle);
-          const y2 = centre + radius * Math.sin(angle);
+          const endAngle = start + sweep;
+          const x2 = centre + radius * Math.cos(endAngle);
+          const y2 = centre + radius * Math.sin(endAngle);
           const large = sweep > Math.PI ? 1 : 0;
           return (
             <path

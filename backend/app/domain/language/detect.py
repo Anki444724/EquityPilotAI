@@ -129,6 +129,14 @@ _ENGLISH_WEIGHT = 0.6
 #: Hinglish and is exactly the brief's example.
 _HINGLISH_THRESHOLD = 2.5
 
+# ------------------------------------------------------------------
+# Phase 2: Mixed language improvement (Hindi + English + Hinglish)
+# ------------------------------------------------------------------
+
+_MIXED_LANGUAGE_THRESHOLD = 0.35
+_MIXED_DEVANAGARI_WEIGHT = 2.5
+_MIXED_HINGLISH_WEIGHT = 1.8
+
 
 @dataclass(frozen=True, slots=True)
 class Detection:
@@ -291,6 +299,51 @@ def detect(text: str, *, default: Language = Language.ENGLISH) -> Detection:
         hindi_score=hindi_score,
         english_score=english_score,
     )
+
+
+# ------------------------------------------------------------------
+# Phase 2 — Mixed language detection (Hindi + English + Hinglish)
+# ------------------------------------------------------------------
+
+def detect_mixed(text: str) -> dict:
+    """Improved mixed language signal for Phase 2.
+
+    Returns a dict with:
+      - is_mixed: bool
+      - hindi_share, english_share, hinglish_markers
+      - confidence_adjustment
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"is_mixed": False, "hindi_share": 0.0, "english_share": 0.0, "hinglish_markers": 0, "confidence_adjustment": 0.0}
+
+    normalised = unicodedata.normalize("NFC", raw)
+    devanagari_chars = len(_DEVANAGARI.findall(normalised))
+    letters = [c for c in normalised if c.isalpha()]
+    total_letters = len(letters) or 1
+
+    hindi_share = devanagari_chars / total_letters
+
+    tokens = _tokens(normalised)
+    hinglish_markers = sum(1 for t in tokens if t in _HINDI_MARKERS or t in _HINDI_STRONG)
+    english_markers = sum(1 for t in tokens if t in _ENGLISH_MARKERS)
+
+    english_share = english_markers / (len(tokens) or 1)
+
+    is_mixed = (hindi_share > 0.08 and english_share > 0.25) or (hinglish_markers >= 2 and english_markers >= 3)
+
+    confidence_adjustment = 0.0
+    if is_mixed:
+        # Boost confidence when both scripts + grammar signals are present
+        confidence_adjustment = min(0.18, 0.08 + hindi_share * 0.6 + (hinglish_markers / 8))
+
+    return {
+        "is_mixed": is_mixed,
+        "hindi_share": round(hindi_share, 3),
+        "english_share": round(english_share, 3),
+        "hinglish_markers": hinglish_markers,
+        "confidence_adjustment": round(confidence_adjustment, 3),
+    }
 
 
 #: Below this, detection is treated as a guess and a stored preference wins.

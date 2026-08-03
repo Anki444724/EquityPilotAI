@@ -52,7 +52,7 @@ from app.schemas.portfolio import (
     PortfolioViewOut, RealisedTradeOut, RebalanceTradeOut, RiskOut,
     SeriesPoint, SnapshotOut, TargetIn, TargetOut, TransactionCreate,
     TransactionOut, WatchlistCreate, WatchlistEntryCreate, WatchlistOut,
-    WatchlistRowOut,
+    WatchlistRowOut, WatchlistUpdate,
 )
 from app.services.portfolio.commentary import CommentaryEngine
 from app.services.portfolio.engine import PortfolioEngine, PortfolioView
@@ -736,6 +736,39 @@ def remove_watchlist_entry(
 ) -> Response:
     try:
         service.remove_from_watchlist(watchlist_id, entry_id)
+    except PortfolioError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(\"/watchlists/{watchlist_id}\", response_model=WatchlistOut)
+def update_watchlist(
+    watchlist_id: int,
+    payload: WatchlistUpdate,
+    service: PortfolioService = Depends(_service),
+    user: CurrentUser = Depends(get_current_user),
+) -> WatchlistOut:
+    try:
+        watchlist = service.update_watchlist(
+            watchlist_id, **payload.model_dump(exclude_none=True)
+        )
+    except PortfolioError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return WatchlistOut.model_validate(watchlist)
+
+
+@router.delete(
+    \"/watchlists/{watchlist_id}\",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_watchlist(
+    watchlist_id: int,
+    service: PortfolioService = Depends(_service),
+    user: CurrentUser = Depends(get_current_user),
+) -> Response:
+    try:
+        service.delete_watchlist(watchlist_id)
     except PortfolioError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

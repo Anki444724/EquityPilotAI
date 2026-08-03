@@ -127,3 +127,81 @@ class QuarterlyService:
             .where(QuarterlyResult.company_id == company_id)
             .limit(1)
         ) is not None
+
+    def segments(self, company_id: str) -> dict:
+        """Return segment data attached to quarterly results.
+
+        Pulls from document_facts when richer quarterly segment data has been
+        extracted during document intelligence processing.
+        """
+        from sqlalchemy import select
+        from app.models.document import DocumentFact, Document
+
+        try:
+            facts = list(self.db.execute(
+                select(DocumentFact)
+                .join(Document, Document.id == DocumentFact.document_id)
+                .where(
+                    Document.company_id == company_id,
+                    Document.doc_type.in_(["quarterly_result", "quarterly_results"]),
+                    DocumentFact.key.ilike("%segment%")
+                )
+                .limit(30)
+            ).scalars())
+        except Exception:
+            facts = []
+
+        if facts:
+            return {
+                "available": True,
+                "reason": "Segment data extracted from quarterly filings via document intelligence.",
+                "data": [
+                    {"label": getattr(f, "label", None) or getattr(f, "key", ""),
+                     "value": getattr(f, "value", None),
+                     "unit": getattr(f, "unit", "") or ""}
+                    for f in facts
+                ]
+            }
+
+        return {
+            "available": False,
+            "reason": "No segment data found for quarterly periods. "
+                      "Most Indian companies provide detailed segment reporting only in annual reports.",
+            "data": []
+        }
+
+    def ttm_summary(self, company_id: str) -> dict:
+        """Explain why TTM is not auto-generated from quarters (Indian reporting reality)."""
+        return {
+            "generated": False,
+            "reason": "TTM is deliberately not summed from four quarters. "
+                      "Indian Q4 is routinely a balancing figure that absorbs audit adjustments. "
+                      "Four quarters frequently do not equal the audited annual result.",
+            "recommendation": "Use audited annual statements for full-year views. "
+                              "Use quarterly rows for QoQ and YoY trend analysis only."
+        }
+
+    def full_quarterly_with_segments(self, company_id: str) -> list[dict]:
+        """Return quarterly rows + any attached segment data.
+
+        This strengthens the quarterly pipeline for production use.
+        """
+        rows = self.rows(company_id)
+        seg = self.segments(company_id)
+
+        result = []
+        for r in rows:
+            item = {
+                "fiscal_year": r.fiscal_year,
+                "quarter": r.quarter,
+                "label": r.label,
+                "revenue": r.revenue,
+                "net_profit": r.net_profit,
+                "revenue_qoq": r.revenue_qoq,
+                "revenue_yoy": r.revenue_yoy,
+                "profit_qoq": r.profit_qoq,
+                "profit_yoy": r.profit_yoy,
+                "segments": seg.get("data", []) if seg.get("available") else []
+            }
+            result.append(item)
+        return result

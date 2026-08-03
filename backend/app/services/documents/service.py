@@ -346,6 +346,30 @@ class DocumentService:
             self._persist_graph(document, result.graph)
         self.db.flush()
 
+        # === REAL Document Intelligence for Priority 1 (additive) ===
+        # After core persistence, run specialized extractors for conference calls
+        # and investor presentations. Outputs stored as AIAnalysis via post-filing
+        # or directly for immediate use. Facts also promoted via continuous learning.
+        if document.doc_type in ("conference_call", "investor_presentation"):
+            try:
+                from app.services.documents.conference_call import extract_conference_call_insights
+                from app.services.documents.investor_presentation import extract_presentation_insights
+                chunks = [
+                    {"text": c.text, "page": c.page}
+                    for c in self.chunks(document.id, limit=50)
+                ]
+                if document.doc_type == "conference_call":
+                    insights = extract_conference_call_insights(chunks)
+                else:
+                    insights = extract_presentation_insights(chunks)
+                # Store raw insights in doc metadata for quick access
+                meta = dict(document.doc_metadata or {})
+                meta[f"{document.doc_type}_intelligence"] = insights
+                document.doc_metadata = meta
+                self.db.flush()
+            except Exception:
+                pass  # never block core ingestion
+
     def _persist_graph(self, document: Document, graph: KnowledgeGraph) -> None:
         for edge in graph.edges.values():
             source = graph.nodes.get(edge.source)

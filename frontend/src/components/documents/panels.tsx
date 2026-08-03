@@ -84,6 +84,20 @@ export function docTypeIcon(type: string) {
   return FileText;
 }
 
+// Pre-resolved stable components (avoids creating component types during render)
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  investor_presentation: Presentation,
+  credit_rating: ShieldCheck,
+  conference_call: Quote,
+  quarterly_report: FileSpreadsheet,
+  default: FileText,
+};
+
+function StableDocIcon({ type }: { type: string }) {
+  const IconComp = ICON_MAP[type] ?? ICON_MAP.default;
+  return <IconComp className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-muted)]" />;
+}
+
 /* --------------------------------------------------------- confidence */
 
 /** Confidence rendered as a band, because a bare 0.74 means nothing to a reader. */
@@ -114,7 +128,6 @@ export function CoverageBar({ value, className }: { value: number; className?: s
 export function DocumentCard({
   document, selected, onSelect,
 }: { document: DocumentSummary; selected?: boolean; onSelect?: () => void }) {
-  const Icon = docTypeIcon(document.doc_type);
   const superseded = document.superseded_by !== null;
   return (
     <button
@@ -128,7 +141,7 @@ export function DocumentCard({
       )}
     >
       <div className="flex items-start gap-2">
-        <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-muted)]" />
+        <StableDocIcon type={document.doc_type} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-[var(--text)]">
             {document.title ?? document.filename}

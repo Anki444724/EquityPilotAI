@@ -15,21 +15,36 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+    setCursor(0);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((v) => !v);
+        setOpen((v) => {
+          const next = !v;
+          if (!next) {
+            setQuery("");
+            setCursor(0);
+          }
+          return next;
+        });
       }
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 20);
-    else { setQuery(""); setCursor(0); }
+    if (open) {
+      const t = setTimeout(() => inputRef.current?.focus(), 20);
+      return () => clearTimeout(t);
+    }
   }, [open]);
 
   const { data, isFetching } = useQuery({

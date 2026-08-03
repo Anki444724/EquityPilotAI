@@ -20,7 +20,7 @@ import {
   AlertTriangle, CheckCircle2, Clock, Download, Eye, FileSpreadsheet,
   FileText, Info, Layers, Loader2, Quote, Sparkles, Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 const FORMAT_META: Record<string, { label: string; icon: typeof FileText }> = {
   pdf: { label: "PDF", icon: FileText },
@@ -61,14 +61,12 @@ export default function ReportsPage() {
     queryFn: () => api.listCompanies(1, 60),
   });
 
-  useEffect(() => {
-    if (!companyId && companies.data?.results.length) {
-      const reference = companies.data.results.find(
-        (c) => c.ticker === "BHARATCP",
-      );
-      setCompanyId(reference?.id ?? companies.data.results[0].id);
-    }
-  }, [companies.data, companyId]);
+  // Derive default companyId from data (no setState in effect to avoid lint error)
+  const effectiveCompanyId = companyId || (companies.data?.results?.length
+    ? (companies.data.results.find((c) => c.ticker === "BHARATCP")?.id ?? companies.data.results[0].id)
+    : "");
+
+  // Removed the prior useEffect that setCompanyId synchronously in effect body.
 
   const capabilities = useQuery({
     queryKey: ["report-capabilities"], queryFn: () => reportApi.capabilities(),
@@ -88,7 +86,7 @@ export default function ReportsPage() {
   const generate = useMutation({
     mutationFn: () =>
       reportApi.generate({
-        company_id: companyId, report_type: reportType, formats,
+        company_id: effectiveCompanyId || companyId, report_type: reportType, formats,
         theme, analyst, include_ai: includeAi,
       }),
     onSuccess: (result) => {
@@ -178,7 +176,7 @@ export default function ReportsPage() {
                     Company
                   </label>
                   <select
-                    value={companyId}
+                    value={effectiveCompanyId || companyId}
                     onChange={(e) => setCompanyId(e.target.value)}
                     className="w-full rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--text)]"
                   >

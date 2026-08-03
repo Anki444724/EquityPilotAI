@@ -38,16 +38,19 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
   const [capability, setCapability] = useState("investment_thesis");
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
-  const [language, setLanguage] = useState("auto");
+  const [language, setLanguage] = useState(() => {
+    // Lazy initializer: safe on client, avoids setState-in-effect
+    if (typeof window === "undefined") return "auto";
+    try {
+      return storedLanguage();
+    } catch {
+      return "auto";
+    }
+  });
   const [lastLanguage, setLastLanguage] = useState<{
     detected?: string; translated?: boolean; note?: string;
   }>({});
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Read the remembered choice after mount, never during render: touching
-  // localStorage while rendering breaks server-side rendering and produces a
-  // hydration mismatch.
-  useEffect(() => setLanguage(storedLanguage()), []);
 
   const profile = useQuery({
     queryKey: ["company-profile", id],

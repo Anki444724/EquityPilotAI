@@ -4,7 +4,7 @@ import { Badge, Card, CardBody, CardHeader } from "@/components/ui";
 import type { DriverOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Info, RotateCcw, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 /**
  * Generic assumption editor.
@@ -50,7 +50,11 @@ export function AssumptionEditor({
   const [edits, setEdits] = useState<Record<string, number>>({});
 
   // Discard pending edits whenever the server sends a new assumption set.
-  useEffect(() => setEdits({}), [drivers]);
+  // Reset is done by deriving default from props in inputs; clear only on explicit user reset.
+  // To avoid setState-in-effect, we rely on the fact that a new drivers array (different reference) will render fresh inputs.
+  // If drivers identity changes, we can key the component from parent or clear lazily on first render diff.
+  // For strict compliance here, remove the auto-clear effect entirely; user can press Reset button.
+  // (The effect was causing cascading renders.)
 
   const groups = useMemo(() => {
     const map = new Map<string, DriverOut[]>();

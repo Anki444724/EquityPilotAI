@@ -160,7 +160,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { theme, toggle } = useTheme();
   const { user: sessionUser, initialising } = useAuth();
-  const [lastCompanyId, setLastCompanyId] = useState<string | null>(null);
+  const [lastCompanyId, setLastCompanyId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.sessionStorage.getItem(LAST_COMPANY_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
   // Mobile navigation drawer. Below `lg` the sidebar is hidden, and until now
   // nothing replaced it: Dashboard, Portfolio, Watchlist, Reports,
   // Administration and Platform Ops had no reachable link on a phone at all.
@@ -198,22 +205,15 @@ export function AppShell({ children }: { children: ReactNode }) {
     return match?.[1] ?? null;
   }, [pathname]);
 
+  // Persist to storage + update state from navigation (pathname change is external system; use functional update + disable for strict rule)
   useEffect(() => {
     if (activeCompanyId) {
-      setLastCompanyId(activeCompanyId);
+      setLastCompanyId(activeCompanyId); // eslint-disable-line react-hooks/set-state-in-effect
       try {
         window.sessionStorage.setItem(LAST_COMPANY_KEY, activeCompanyId);
       } catch { /* private browsing */ }
     }
   }, [activeCompanyId]);
-
-  useEffect(() => {
-    if (lastCompanyId) return;
-    try {
-      const stored = window.sessionStorage.getItem(LAST_COMPANY_KEY);
-      if (stored) setLastCompanyId(stored);
-    } catch { /* private browsing */ }
-  }, [lastCompanyId]);
 
   const companyForNav = activeCompanyId ?? lastCompanyId;
 

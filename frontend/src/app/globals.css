@@ -291,6 +291,210 @@ body {
   .break-anywhere * { overflow-wrap: anywhere; }
 }
 
+/* ============================================================
+   INSTITUTIONAL TERMINAL — Premium UI additions
+   Bloomberg / TIKR / AlphaSense aesthetic
+   Dense, minimal, high information density
+   ============================================================ */
+
+/* Terminal header / search */
+.terminal-header {
+  background: linear-gradient(to bottom, var(--bg-elevated), var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-search {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  transition: all 0.1s ease;
+}
+
+.ai-search:focus {
+  border-color: var(--color-accent-500);
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.1);
+  outline: none;
+}
+
+/* Score cards — professional, color coded */
+.score-card {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.score-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.1);
+}
+
+.score-value {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.score-bar {
+  height: 4px;
+  background: var(--bg-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.score-bar > div {
+  height: 100%;
+  background: linear-gradient(to right, #1f6feb, #4b8ef5);
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.score-bar.gain > div { background: linear-gradient(to right, #0b7a3b, #15803d); }
+.score-bar.loss > div { background: linear-gradient(to right, #b3261e, #dc2626); }
+
+/* Timeline — clean, scannable */
+.timeline-item {
+  position: relative;
+  padding-left: 1.75rem;
+}
+
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 0.375rem;
+  top: 0.35rem;
+  bottom: -0.75rem;
+  width: 2px;
+  background: var(--border);
+}
+
+.timeline-item:last-child::before {
+  display: none;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: 0;
+  top: 0.25rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--accent-500);
+  z-index: 1;
+}
+
+/* Heatmap */
+.heatmap-cell {
+  transition: transform 0.08s ease, filter 0.08s ease;
+  font-feature-settings: "tnum";
+}
+
+.heatmap-cell:hover {
+  transform: scale(1.03);
+  filter: brightness(1.1);
+  z-index: 10;
+  position: relative;
+}
+
+/* AI Verdict cards */
+.verdict {
+  border-left: 4px solid var(--accent-500);
+}
+
+.verdict.bull { border-color: #0b7a3b; }
+.verdict.bear { border-color: #b3261e; }
+.verdict.base { border-color: #1f6feb; }
+
+/* Dense tables */
+.institutional-table th {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+}
+
+.institutional-table td {
+  font-feature-settings: "tnum";
+  font-size: 0.8125rem;
+}
+
+/* Chat bubbles — terminal style */
+.chat-bubble {
+  max-width: 82%;
+  padding: 0.65rem 0.95rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+
+.chat-bubble.user {
+  background: var(--accent-500);
+  color: white;
+  margin-left: auto;
+  border-bottom-right-radius: 2px;
+}
+
+.chat-bubble.assistant {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 2px;
+}
+
+/* Global search / command feel */
+.global-search-result {
+  transition: background 0.05s ease;
+}
+
+.global-search-result:hover,
+.global-search-result[aria-selected="true"] {
+  background: var(--bg-subtle);
+}
+
+/* Premium card elevation */
+.premium-card {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.05);
+  border: 1px solid var(--border);
+}
+
+.dark .premium-card {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+}
+
+/* Loading states — subtle */
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-subtle) 25%,
+    var(--bg-elevated) 50%,
+    var(--bg-subtle) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Accessibility + keyboard */
+:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg-subtle); }
 ::-webkit-scrollbar-thumb {

@@ -799,6 +799,35 @@ class PortfolioService:
             .order_by(Watchlist.name)
         ).all())
 
+    def update_watchlist(self, watchlist_id: int, **changes) -> Watchlist:
+        watchlist = self.db.get(Watchlist, watchlist_id)
+        if watchlist is None:
+            raise PortfolioError(f"watchlist {watchlist_id} not found")
+        if "name" in changes and changes["name"]:
+            name = changes["name"].strip()
+            existing = self.db.scalar(
+                select(Watchlist).where(
+                    Watchlist.owner_id == watchlist.owner_id,
+                    Watchlist.name == name,
+                    Watchlist.id != watchlist_id,
+                )
+            )
+            if existing:
+                raise PortfolioError(f"a watchlist named '{name}' already exists")
+            watchlist.name = name
+        for k, v in changes.items():
+            if k != "name" and hasattr(watchlist, k) and v is not None:
+                setattr(watchlist, k, v)
+        self.db.commit()
+        return watchlist
+
+    def delete_watchlist(self, watchlist_id: int) -> None:
+        watchlist = self.db.get(Watchlist, watchlist_id)
+        if watchlist is None:
+            raise PortfolioError(f"watchlist {watchlist_id} not found")
+        self.db.delete(watchlist)
+        self.db.commit()
+
     def add_to_watchlist(
         self, watchlist_id: int, ticker: str, **kwargs
     ) -> WatchlistEntry:

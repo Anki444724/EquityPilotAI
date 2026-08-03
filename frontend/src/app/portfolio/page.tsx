@@ -23,6 +23,9 @@ import {
   Plus, Scale, Sparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/layout/auth-provider";
+import { ApiError, setSession } from "@/lib/api";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: Briefcase },
@@ -36,49 +39,93 @@ type TabKey = (typeof TABS)[number]["key"];
 
 export default function PortfolioPage() {
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const { user: authUser, initialising: authInitialising } = useAuth();
   const [tab, setTab] = useState<TabKey>("overview");
   const [selected, setSelected] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
 
+  // Gate the query on fully authenticated + not initialising
+  // This prevents the request from firing with no token (main cause of 401 on reload)
   const portfolios = useQuery({
-    queryKey: ["portfolios"], queryFn: () => portfolioApi.list(),
+    queryKey: ["portfolios"],
+    queryFn: async () => {
+      try {
+        return await portfolioApi.list();
+      } catch (err: any) {
+        // Task 8: In catch{} set an auth error state
+        if (err instanceof ApiError && err.status === 401) {
+          setAuthError("Session expired. Please sign in again.");
+          setSession(null);
+          throw err;
+        }
+        throw err;
+      }
+    },
+    enabled: !authInitialising && !!authUser,
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && error.status === 401) return false;
+      return failureCount < 1;
+    },
   });
 
+  // Tasks 6,7,9,10: On 401 clear token, redirect, never leave loading=true
   useEffect(() => {
-    if (selected === null && portfolios.data?.length) {
-      setSelected(portfolios.data[0].id);
+    if (portfolios.isError) {
+      const err = portfolios.error;
+      if (err instanceof ApiError && err.status === 401) {
+        setSession(null);           // clear invalid token
+        setAuthError("Session expired. Please sign in again.");
+        router.replace("/");        // go to login
+      }
     }
-  }, [portfolios.data, selected]);
+  }, [portfolios.isError, portfolios.error, router]);
+
+  // Task 7 + 9: Explicit "finally" equivalent — never leave loading state on auth failure
+  const isPortfoliosLoading = portfolios.isLoading && !authError && !portfolios.isError;
+
+  // Task 9/10: in finally{} equivalent via query state + UI guard below
+  // (the query always settles; we surface the error state)
+
+  // Derive current selection from state or first portfolio; never setState in effect
+  const current = selected ?? (portfolios.data && portfolios.data.length > 0 ? portfolios.data[0].id : null);
+
+  // Remove previous useEffect that did setSelected synchronously; use derived `current` instead
 
   const view = useQuery({
-    queryKey: ["portfolio-view", selected],
-    queryFn: () => portfolioApi.view(selected!),
-    enabled: selected !== null,
+    queryKey: ["portfolio-view", current],
+    queryFn: () => portfolioApi.view(current!),
+    enabled: !!authUser && current !== null,
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 401) && failureCount < 1,
   });
 
   const alerts = useQuery({
-    queryKey: ["portfolio-alerts", selected],
-    queryFn: () => portfolioApi.alerts(selected!),
-    enabled: selected !== null,
+    queryKey: ["portfolio-alerts", current],
+    queryFn: () => portfolioApi.alerts(current!),
+    enabled: !!authUser && current !== null,
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 401) && failureCount < 1,
   });
 
   const attribution = useQuery({
-    queryKey: ["portfolio-attribution", selected],
-    queryFn: () => portfolioApi.attribution(selected!),
-    enabled: selected !== null && tab === "allocation",
+    queryKey: ["portfolio-attribution", current],
+    queryFn: () => portfolioApi.attribution(current!),
+    enabled: !!authUser && current !== null && tab === "allocation",
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 401) && failureCount < 1,
   });
 
   const commentary = useQuery({
-    queryKey: ["portfolio-commentary", selected],
-    queryFn: () => portfolioApi.commentary(selected!),
-    enabled: selected !== null && tab === "ai",
+    queryKey: ["portfolio-commentary", current],
+    queryFn: () => portfolioApi.commentary(current!),
+    enabled: !!authUser && current !== null && tab === "ai",
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 401) && failureCount < 1,
   });
 
   const snapshot = useMutation({
-    mutationFn: () => portfolioApi.snapshot(selected!),
+    mutationFn: () => portfolioApi.snapshot(current!),
     onSuccess: () => {
       setNotice("Snapshot recorded — the return series now has one more point.");
-      queryClient.invalidateQueries({ queryKey: ["portfolio-view", selected] });
+      queryClient.invalidateQueries({ queryKey: ["portfolio-view", current] });
     },
   });
 
@@ -103,7 +150,7 @@ export default function PortfolioPage() {
           </div>
           <div className="flex items-center gap-2">
             <select
-              value={selected ?? ""}
+              value={current ?? ""}
               onChange={(e) => setSelected(Number(e.target.value))}
               className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs text-[var(--text)]"
             >
@@ -114,7 +161,7 @@ export default function PortfolioPage() {
             <button
               type="button"
               onClick={() => snapshot.mutate()}
-              disabled={snapshot.isPending || selected === null}
+              disabled={snapshot.isPending || current === null}
               className="inline-flex items-center gap-1.5 rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
             >
               {snapshot.isPending
@@ -127,7 +174,15 @@ export default function PortfolioPage() {
 
         {notice && <Note>{notice}</Note>}
 
-        {portfolios.isLoading && <Skeleton className="h-28 w-full" />}
+        {authError && (
+          <Card>
+            <CardBody className="text-sm text-loss">
+              {authError} — you will be redirected to sign in.
+            </CardBody>
+          </Card>
+        )}
+
+        {isPortfoliosLoading && <Skeleton className="h-28 w-full" />}
         {portfolios.data?.length === 0 && (
           <Card>
             <EmptyState

@@ -3,12 +3,13 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { CompanyTabs } from "@/components/layout/company-tabs";
 import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, scoringApi, watchlistApi } from "@/lib/api";
 import { crore, fiscalYear, marketCap, percent, plainNumber, rupees, signClass } from "@/lib/format";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Database, ExternalLink, Info } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, Database, ExternalLink, Info, Plus, Star } from "lucide-react";
 import Link from "next/link";
 import { use } from "react";
+import { useState } from "react";
 
 export default function CompanyProfilePage({
   params,
@@ -16,9 +17,44 @@ export default function CompanyProfilePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const queryClient = useQueryClient();
+  const [showWatchlistPicker, setShowWatchlistPicker] = useState(false);
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<number | null>(null);
+  const [addNote, setAddNote] = useState("");
+
   const { data, isLoading, error } = useQuery({
     queryKey: ["company-profile", id],
     queryFn: () => api.companyProfile(id),
+  });
+
+  // Watchlists for "Add to Watchlist"
+  const watchlists = useQuery({
+    queryKey: ["watchlists"],
+    queryFn: () => watchlistApi.list(),
+    enabled: !!data,
+  });
+
+  // Single shared scoring query (removes duplicate API call)
+  const score = useQuery({
+    queryKey: ["scoring", id],
+    queryFn: () => scoringApi.get(id),
+    enabled: !!data,
+  });
+
+  const addToWatchlist = useMutation({
+    mutationFn: (watchlistId: number) =>
+      watchlistApi.add(watchlistId, {
+        ticker: data?.company?.ticker || "",
+        note: addNote || undefined,
+      }),
+    onSuccess: () => {
+      setShowWatchlistPicker(false);
+      setAddNote("");
+      setSelectedWatchlistId(null);
+      queryClient.invalidateQueries({ queryKey: ["watchlist-rows"] });
+      alert(`Added to watchlist`);
+    },
+    onError: (err: unknown) => alert((err as Error)?.message || "Failed to add"),
   });
 
   if (isLoading) {
@@ -53,6 +89,12 @@ export default function CompanyProfilePage({
 
   const { company: c, coverage } = data;
   const hasData = coverage.has_data;
+
+  // Add to Watchlist button + modal logic (after data is available)
+  const handleAddToWatchlistClick = () => {
+    setShowWatchlistPicker(true);
+    setSelectedWatchlistId(watchlists.data?.[0]?.id ?? null);
+  };
 
   return (
     <AppShell>
@@ -96,6 +138,12 @@ export default function CompanyProfilePage({
                   Website <ExternalLink size={9} />
                 </a>
               )}
+              <button
+                onClick={handleAddToWatchlistClick}
+                className="mt-2 inline-flex items-center gap-1.5 rounded bg-accent-500/90 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-accent-500"
+              >
+                <Plus size={12} /> Add to Watchlist
+              </button>
             </div>
           </div>
         </CardBody>
@@ -260,6 +308,57 @@ export default function CompanyProfilePage({
             </div>
           </div>
         </>
+      )}
+
+      {/* Add to Watchlist modal (appears on every company page) */}
+      {showWatchlistPicker && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5">
+            <div className="font-semibold mb-3">Add {c.ticker} to Watchlist</div>
+
+            <div className="mb-3">
+              <label className="text-xs block mb-1 text-[var(--text-muted)]">Select watchlist</label>
+              <select
+                value={selectedWatchlistId ?? ""}
+                onChange={(e) => setSelectedWatchlistId(Number(e.target.value))}
+                className="w-full rounded border px-3 py-1.5 text-sm bg-[var(--bg)]"
+              >
+                {(watchlists.data ?? []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-xs block mb-1 text-[var(--text-muted)]">Note (optional)</label>
+              <input
+                value={addNote}
+                onChange={(e) => setAddNote(e.target.value)}
+                placeholder="Thesis note..."
+                className="w-full rounded border px-3 py-1.5 text-sm bg-[var(--bg)]"
+              />
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setShowWatchlistPicker(false);
+                  setAddNote("");
+                }}
+                className="px-3 py-1 text-xs rounded border"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!selectedWatchlistId || addToWatchlist.isPending}
+                onClick={() => selectedWatchlistId && addToWatchlist.mutate(selectedWatchlistId)}
+                className="px-3 py-1 text-xs rounded bg-accent-500 text-white disabled:opacity-50"
+              >
+                {addToWatchlist.isPending ? "Adding..." : "Add"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </AppShell>
   );

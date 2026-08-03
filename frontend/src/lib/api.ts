@@ -473,6 +473,15 @@ export const watchlistApi = {
     rawFetch(`/api/v1/watchlists/${id}/entries/${entryId}`, {
       method: "DELETE",
     }).then((r) => { if (!r.ok) throw new ApiError(r.status, r.statusText); }),
+
+  update: (id: number, body: { name?: string; description?: string }) =>
+    request<WatchlistMeta>(`/api/v1/watchlists/${id}`, {
+      method: "PATCH", body: JSON.stringify(body),
+    }),
+
+  removeWatchlist: (id: number) =>
+    rawFetch(`/api/v1/watchlists/${id}`, { method: "DELETE" })
+      .then((r) => { if (!r.ok) throw new ApiError(r.status, r.statusText); }),
 };
 
 /* ------------------------------------------------------------------ *
