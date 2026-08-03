@@ -65,6 +65,11 @@ class JobKind(StrEnum):
     #: cheap COUNT when no provider is configured, and starts backfilling on
     #: its own the moment one is.
     EMBEDDING_BACKFILL = "embedding_backfill"
+    #: Recalculate the ten-module AI score across the universe. Scheduled as
+    #: well as filing-triggered: several modules read time-sensitive evidence
+    #: (the twelve-month news window, filing freshness), so a company's score
+    #: changes through the passage of time alone with no new document.
+    AI_SCORE_REFRESH = "ai_score_refresh"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -84,6 +89,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.IR_DISCOVERY: "IR URL discovery",
     JobKind.QUALITY_REFRESH: "Data quality refresh",
     JobKind.EMBEDDING_BACKFILL: "Embedding backfill",
+    JobKind.AI_SCORE_REFRESH: "AI score refresh",
 }
 
 
@@ -170,6 +176,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.IR_DISCOVERY: JobPriority.BACKGROUND,
     JobKind.QUALITY_REFRESH: JobPriority.BACKGROUND,
     JobKind.EMBEDDING_BACKFILL: JobPriority.BACKGROUND,
+    JobKind.AI_SCORE_REFRESH: JobPriority.BACKGROUND,
 }
 
 
@@ -243,6 +250,10 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # Long backoff: the usual failure is an exhausted quota, and retrying in
     # thirty seconds simply burns what is left.
     JobKind.EMBEDDING_BACKFILL: RetryPolicy(max_attempts=2, base_seconds=900),
+    # Scoring is pure arithmetic over the database, so a failure is a bug or
+    # a transient connection loss rather than a rate limit. Retry quickly,
+    # twice.
+    JobKind.AI_SCORE_REFRESH: RetryPolicy(max_attempts=3, base_seconds=60),
 }
 
 
@@ -378,6 +389,18 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         JobKind.QUALITY_REFRESH, 24 * 3600,
         "Recompute the Data Quality Score for every company, so freshness "
         "decay is reflected even when no new data has arrived.",
+    ),
+    ScheduleSpec(
+        # Daily. The filing-triggered path is primary: a new document rescores
+        # its company within the post-processing cycle. This sweep exists
+        # because several modules read time-sensitive evidence — the
+        # twelve-month news window rolls forward every day, and an
+        # announcement ageing out of it changes the score with no new data
+        # arriving. It is also cheap: an unchanged input fingerprint writes
+        # nothing, so a quiet universe costs one scoring pass and no rows.
+        JobKind.AI_SCORE_REFRESH, 24 * 3600,
+        "Recalculate the ten-module AI score across the universe, recording "
+        "a new permanent version only where the evidence has actually moved.",
     ),
     ScheduleSpec(
         JobKind.USAGE_ROLLUP, 900,

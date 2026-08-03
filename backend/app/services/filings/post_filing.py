@@ -94,6 +94,17 @@ class PostFilingResult:
     warnings: list[str] = field(default_factory=list)
     latency_ms: float = 0.0
 
+    #: AI Scoring Engine 3.0 outcome. Recorded separately from the Module 5
+    #: dimensions above because the two engines answer different questions
+    #: and merging them would make "the score changed" ambiguous.
+    ai_score_before: float | None = None
+    ai_score_after: float | None = None
+    ai_rating_before: str | None = None
+    ai_rating_after: str | None = None
+    ai_version: int | None = None
+    ai_version_created: bool = False
+    ai_recommendation: str | None = None
+
     @property
     def overall_change(self) -> float | None:
         if self.overall_before is None or self.overall_after is None:
@@ -122,6 +133,20 @@ class PostFilingResult:
             "material": self.is_material, "notified": self.notified,
             "rescored": self.rescored, "warnings": self.warnings,
             "latency_ms": round(self.latency_ms, 1),
+            "ai_score": {
+                "before": self.ai_score_before,
+                "after": self.ai_score_after,
+                "change": (
+                    round(self.ai_score_after - self.ai_score_before, 2)
+                    if self.ai_score_before is not None
+                    and self.ai_score_after is not None else None
+                ),
+                "rating_before": self.ai_rating_before,
+                "rating_after": self.ai_rating_after,
+                "recommendation": self.ai_recommendation,
+                "version": self.ai_version,
+                "version_created": self.ai_version_created,
+            },
         }
 
 
@@ -222,6 +247,10 @@ class PostFilingProcessor:
                         after=after_dims.get(dimension),
                     ))
 
+        # The brief's learning loop: every module recalculated on arrival,
+        # with the prior version retained rather than replaced.
+        self._recalculate_ai_score(company, document_id, result)
+
         result.highlights = self._highlights(document_id)
         result.summary = self._summary(company, document_id, result)
 
@@ -252,6 +281,48 @@ class PostFilingProcessor:
             "grade": getattr(scored, "grade", None),
             "dimensions": self._dimensions(scored),
         }
+
+
+    # ------------------------------------------------------- AI score 3.0
+    def _recalculate_ai_score(
+        self, company: Company, document_id: int | None,
+        result: PostFilingResult,
+    ) -> None:
+        """Run the ten-module engine and append a permanent version.
+
+        This is the brief's learning loop: a new filing recalculates every
+        module. It runs inline rather than by enqueuing a job because scoring
+        is pure arithmetic over rows already in the database — measured at
+        roughly 5ms of compute plus the evidence read — and a job would add a
+        queue round-trip to something cheaper than the notification that
+        follows it.
+
+        Failure is caught and reported, never raised: a scoring bug must not
+        cost the platform a filing it has already downloaded, parsed and
+        indexed.
+        """
+        from app.services.ai_scoring.service import AIScoringService
+
+        service = AIScoringService(self.db)
+        previous = service.current(company.id)
+        if previous is not None:
+            result.ai_score_before = round(previous.overall_score, 2)
+            result.ai_rating_before = previous.rating
+
+        try:
+            scored, outcome = service.score_and_record(
+                company, trigger="filing", trigger_document_id=document_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.warnings.append(f"AI score 3.0 not recalculated: {exc}")
+            log.exception("ai score recalculation failed", ticker=company.ticker)
+            return
+
+        result.ai_score_after = round(scored.overall_score, 2)
+        result.ai_rating_after = scored.rating.value
+        result.ai_recommendation = scored.recommendation.value
+        result.ai_version = outcome.version.version if outcome.version else None
+        result.ai_version_created = outcome.created
 
     # ---------------------------------------------------------- narrative
     def _highlights(self, document_id: int | None) -> list[str]:

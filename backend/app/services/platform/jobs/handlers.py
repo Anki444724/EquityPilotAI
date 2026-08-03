@@ -447,6 +447,89 @@ def handle_filing_post_process(db: Session, payload: dict[str, Any]) -> dict[str
 
 
 # ===========================================================================
+# AI score refresh (Scoring Engine 3.0 learning loop)
+# ===========================================================================
+def handle_ai_score_refresh(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Recalculate the ten-module AI score and append versions where evidence moved.
+
+    Two modes, one code path.
+
+    With ``company_ids`` the handler rescores exactly those companies — this is
+    what the post-filing processor enqueues when a document finishes indexing,
+    so a new annual report rescores its own company within minutes rather than
+    waiting for the nightly sweep.
+
+    Without it, the scheduled sweep walks the active universe. Batched because
+    a 500-company pass in one job would hold a worker for minutes in a 1 GB
+    container, which is exactly how production was crashed three times before.
+
+    The service declines to write when the input fingerprint is unchanged, so
+    a quiet day produces a full scoring pass and zero rows. That is the
+    intended behaviour: a version that says nothing new buries the ones that do.
+    """
+    from app.models.company import Company
+    from app.services.ai_scoring.service import AIScoringService
+
+    company_ids = payload.get("company_ids") or []
+    trigger = str(payload.get("trigger") or "scheduled")
+    limit = int(payload.get("limit", 60))
+    document_id = payload.get("document_id")
+
+    service = AIScoringService(db)
+
+    if company_ids:
+        companies = list(db.execute(
+            select(Company).where(Company.id.in_(list(company_ids)))
+        ).scalars().all())
+        results = []
+        for company in companies:
+            try:
+                result, outcome = service.score_and_record(
+                    company, trigger=trigger,
+                    trigger_document_id=document_id,
+                )
+                results.append({
+                    "ticker": company.ticker,
+                    "score": round(result.overall_score, 2),
+                    "rating": result.rating.value,
+                    "version": outcome.version.version if outcome.version else None,
+                    "created": outcome.created,
+                    "delta": outcome.delta,
+                })
+            except Exception as exc:  # noqa: BLE001 — one company must not
+                # abort the batch
+                db.rollback()
+                log.warning("ai score refresh failed", ticker=company.ticker,
+                            error=str(exc))
+                results.append({"ticker": company.ticker, "error": str(exc)[:200]})
+        return {"mode": "targeted", "companies": len(companies),
+                "results": results}
+
+    # Scheduled sweep. Ordered by the company that has gone longest without a
+    # current score, so a run truncated by the batch limit makes progress
+    # through the universe rather than rescoring the same head of the list
+    # every night — the defect that left 340 of 501 companies never crawled.
+    from app.models.scoring import AIScoreVersion
+
+    current = (
+        select(AIScoreVersion.company_id, AIScoreVersion.computed_at)
+        .where(AIScoreVersion.status == "current")
+        .subquery()
+    )
+    stmt = (
+        select(Company)
+        .outerjoin(current, current.c.company_id == Company.id)
+        .where(Company.listing_status == "active")
+        .order_by(current.c.computed_at.asc().nullsfirst())
+        .limit(limit)
+    )
+    companies = list(db.execute(stmt).scalars().all())
+    summary = service.score_universe(companies=companies, trigger=trigger)
+    summary["mode"] = "sweep"
+    return summary
+
+
+# ===========================================================================
 # Embedding backfill
 # ===========================================================================
 def handle_embedding_backfill(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -601,6 +684,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.IR_DISCOVERY: handle_ir_discovery,
     JobKind.QUALITY_REFRESH: handle_quality_refresh,
     JobKind.EMBEDDING_BACKFILL: handle_embedding_backfill,
+    JobKind.AI_SCORE_REFRESH: handle_ai_score_refresh,
 }
 
 

@@ -1,0 +1,184 @@
+{
+  "framework_version": "3.0.0",
+  "universe": 503,
+  "sampled": 60,
+  "scored": 60,
+  "checks": [
+    {
+      "name": "Every sampled company scored without error",
+      "passed": true,
+      "detail": "60 companies"
+    },
+    {
+      "name": "Every company scored all ten modules",
+      "passed": true,
+      "detail": "1 distinct module counts"
+    },
+    {
+      "name": "Module order matches the framework",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Module weights match the framework exactly",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "No factor is ever produced without a reason",
+      "passed": true,
+      "detail": "3780 factors checked"
+    },
+    {
+      "name": "Every scored (non-missing) factor carries a citation",
+      "passed": true,
+      "detail": "3298 citations issued"
+    },
+    {
+      "name": "Every module carries a deterministic narrative",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Every probability states its drivers and derivation",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Composite equals the sum of module contributions",
+      "passed": true,
+      "detail": "max drift 0.00e+00"
+    },
+    {
+      "name": "Composite is bounded to 0-100",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Every factor score is within 0-10",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Every probability is bounded to (0, 1)",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Coverage is bounded to 0-1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Repeated runs are byte-identical",
+      "passed": true,
+      "detail": "10/10 companies stable over 3 runs"
+    },
+    {
+      "name": "Input fingerprints are stable",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Rating is monotonic in the composite",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Recommendation is monotonic where no guardrail fired",
+      "passed": true,
+      "detail": "33 of 60 unconstrained"
+    },
+    {
+      "name": "No company with an unobservable evidence base gets a directional call",
+      "passed": true,
+      "detail": "0 thin-evidence companies"
+    },
+    {
+      "name": "Risk 10 = LOW risk: no fragile company is rated Strong Buy",
+      "passed": true,
+      "detail": "0 companies below 3.0 on risk"
+    },
+    {
+      "name": "Valuation 10 = CHEAP: no expensive company is rated above Hold",
+      "passed": true,
+      "detail": "23 companies below 3.0 on valuation"
+    },
+    {
+      "name": "An unchanged fingerprint writes no new version",
+      "passed": true,
+      "detail": "0 written on first pass, 0 on the identical second pass"
+    },
+    {
+      "name": "Exactly one version is current per company",
+      "passed": true,
+      "detail": "5 companies checked"
+    }
+  ],
+  "failures": 0,
+  "latency_p50_ms": 339.70820050001294,
+  "score_median": 60.1316875,
+  "coverage_median": 0.589975,
+  "modules": [
+    {
+      "key": "company_data",
+      "weight": 10.0,
+      "mean_score": 6.216833333333333,
+      "mean_coverage": 0.58325
+    },
+    {
+      "key": "financial_statements",
+      "weight": 15.0,
+      "mean_score": 6.9499375,
+      "mean_coverage": 0.9725166666666667
+    },
+    {
+      "key": "latest_news",
+      "weight": 8.0,
+      "mean_score": 6.499633333333334,
+      "mean_coverage": 0.9
+    },
+    {
+      "key": "industry_analysis",
+      "weight": 8.0,
+      "mean_score": 5.258,
+      "mean_coverage": 0.32753333333333334
+    },
+    {
+      "key": "management_commentary",
+      "weight": 10.0,
+      "mean_score": 5.0056666666666665,
+      "mean_coverage": 0.0038666666666666663
+    },
+    {
+      "key": "ai_analysis",
+      "weight": 10.0,
+      "mean_score": 5.109166666666667,
+      "mean_coverage": 0.043166666666666666
+    },
+    {
+      "key": "business_quality",
+      "weight": 14.0,
+      "mean_score": 6.100979695767196,
+      "mean_coverage": 0.8009666666666667
+    },
+    {
+      "key": "growth",
+      "weight": 10.0,
+      "mean_score": 6.975016666666667,
+      "mean_coverage": 0.59995
+    },
+    {
+      "key": "risk",
+      "weight": 8.0,
+      "mean_score": 6.331083333333333,
+      "mean_coverage": 0.6048
+    },
+    {
+      "key": "valuation",
+      "weight": 7.0,
+      "mean_score": 3.902166666666667,
+      "mean_coverage": 0.6905166666666667
+    }
+  ]
+}

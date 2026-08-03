@@ -151,3 +151,139 @@ class PeerComparisonResponse(BaseModel):
     peers: list[PeerScoreRow] = Field(default_factory=list)
     #: Median score per category across the peer set, for radar overlay.
     category_medians: dict[str, float] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# AI Scoring Engine 3.0
+# ---------------------------------------------------------------------------
+
+class CitationOut(BaseModel):
+    kind: str
+    label: str
+    reference: str = ""
+    document_id: int | None = None
+    page: int | None = None
+    fiscal_year: int | None = None
+    url: str | None = None
+    excerpt: str | None = None
+
+
+class FactorScoreOut(BaseModel):
+    """One factor, with everything the brief requires it to carry."""
+
+    key: str
+    label: str
+    score: float = Field(ge=0, le=10)
+    weight: float
+    origin: str
+    coverage: float
+    reason: str
+    value: float | None = None
+    unit: str = ""
+    evidence: str = ""
+    citations: list[CitationOut] = Field(default_factory=list)
+    computed_by: str = ""
+
+
+class ModuleScoreOut(BaseModel):
+    key: str
+    label: str
+    weight: float
+    score: float = Field(ge=0, le=10)
+    contribution: float
+    coverage: float
+    reason: str
+    ai_commentary: str | None = None
+    missing_factors: list[str] = Field(default_factory=list)
+    citation_count: int = 0
+    factors: list[FactorScoreOut] = Field(default_factory=list)
+
+
+class ProbabilityDriverOut(BaseModel):
+    module: str
+    influence: float
+
+
+class ProbabilityOut(BaseModel):
+    key: str
+    label: str
+    probability: float = Field(ge=0, le=1)
+    percent: float
+    drivers: list[ProbabilityDriverOut] = Field(default_factory=list)
+    reason: str
+    shrinkage: float = 0.0
+
+
+class AIScoreResponse(BaseModel):
+    company_id: str
+    ticker: str
+    name: str
+    overall_score: float = Field(ge=0, le=100)
+    rating: str
+    rating_description: str
+    recommendation: str
+    recommendation_reason: str
+    coverage: float
+    summary: str
+    warnings: list[str] = Field(default_factory=list)
+    guardrails: list[str] = Field(default_factory=list)
+    framework_version: str
+    input_fingerprint: str
+    total_citations: int
+    modules: list[ModuleScoreOut] = Field(default_factory=list)
+    probabilities: list[ProbabilityOut] = Field(default_factory=list)
+    #: Present when the run was recorded, so the caller knows which permanent
+    #: version this response corresponds to.
+    version: int | None = None
+    version_created: bool | None = None
+    version_note: str | None = None
+
+
+class AIScoreVersionOut(BaseModel):
+    version: int
+    status: str
+    framework_version: str
+    overall_score: float
+    rating: str
+    recommendation: str
+    coverage: float
+    module_scores: dict[str, float] = Field(default_factory=dict)
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    summary: str | None = None
+    input_fingerprint: str
+    total_citations: int
+    trigger: str
+    trigger_document_id: int | None = None
+    supersedes_version: int | None = None
+    score_delta: float | None = None
+    computed_at: object
+
+
+class AIScoreHistoryResponse(BaseModel):
+    company: CompanyRef
+    framework_version: str
+    versions_retained: int
+    versions: list[AIScoreVersionOut] = Field(default_factory=list)
+    #: True when the history spans more than one framework version, in which
+    #: case a trend line across it is comparing two different questions.
+    spans_framework_versions: bool = False
+
+
+class ModuleCriterionOut(BaseModel):
+    key: str
+    label: str
+    weight: float
+    criteria: list[str] = Field(default_factory=list)
+
+
+class AIFrameworkResponse(BaseModel):
+    """The framework definition, published so the score is inspectable."""
+
+    version: str
+    modules: list[ModuleCriterionOut] = Field(default_factory=list)
+    total_weight: float
+    rating_bands: list[dict] = Field(default_factory=list)
+    recommendation_bands: list[dict] = Field(default_factory=list)
+    guardrails: list[dict] = Field(default_factory=list)
+    probability_specs: list[dict] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)

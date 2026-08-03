@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
-    admin, ai, analysis, auth, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
+    admin, ai, ai_scoring, analysis, auth, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
 )
 
 api_router = APIRouter()
@@ -14,6 +14,10 @@ api_router.include_router(analysis.router)
 api_router.include_router(forecast.router)
 api_router.include_router(valuation.router)
 api_router.include_router(scoring.router)
+# AI Scoring Engine 3.0. Before `market.router` for the ROUTE-001 reason:
+# a router declaring `/{ticker}` captures literal sibling segments
+# registered after it.
+api_router.include_router(ai_scoring.router)
 api_router.include_router(ai.router)
 api_router.include_router(documents.router)
 api_router.include_router(portfolio.router)
