@@ -1,6 +1,6 @@
 # Multilingual AI Response Engine — deployment validation report
 
-**Status:** deployed, backend SHA `1f2c9e7`, frontend SHA `62f3607`
+**Status:** deployed, backend SHA `ebdfe44`, frontend SHA `62f3607`
 **Validation:** 29/29 production checks passed against the live database
 **Tests:** 2,778 passing, 0 failures (166 new)
 **Live:** https://backend-production-18956.up.railway.app
