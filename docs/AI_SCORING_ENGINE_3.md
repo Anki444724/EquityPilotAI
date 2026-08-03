@@ -4,6 +4,7 @@
 **Status:** deployed, 503 of 503 active companies scored
 **Validation:** 22 of 22 production checks passed on a 60-company live sample
 **Tests:** 2,618 passing, 0 failures (89 new)
+**Deployed:** backend SHA `2a6144a`
 
 ---
 
@@ -340,7 +341,13 @@ new test reproduces the 500 exactly, and passes once restored.
 the first fixture used the in-memory `db` fixture, which cannot cross the
 thread `TestClient` runs the app on; the second put `import app.models.x`
 above `from app.main import app`, binding `app` to the *package* and turning
-`app.dependency_overrides` into an `AttributeError`.
+`app.dependency_overrides` into an `AttributeError`; the third called
+`dependency_overrides.clear()` in teardown, which removed the session-wide
+`get_db` override `conftest.py` installs at import — producing **130 failures
+and 161 errors** across `test_valuation_api`, `test_document_api`,
+`test_scoring_api` and `test_report_api`, none of which had anything wrong with
+them. A fixture that tears down more than it set up is a harness bug that looks
+exactly like a product regression. Teardown now saves and restores.
 
 ---
 
