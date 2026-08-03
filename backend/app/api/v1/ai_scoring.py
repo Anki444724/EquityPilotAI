@@ -215,10 +215,13 @@ def get_history(
     frameworks = {v.framework_version for v in versions}
 
     return AIScoreHistoryResponse(
-        company=CompanyRef(
-            id=company.id, name=company.name, ticker=company.ticker,
-            sector=company.sector, industry=company.industry,
-        ),
+        # Built with `model_validate`, not by hand. Constructing it field by
+        # field meant guessing the schema: `exchange` is required and was
+        # omitted, and `industry` was passed but does not exist on the model,
+        # so every call returned HTTP 500 (AISCORE-001). `from_attributes`
+        # reads whatever the schema actually declares, so the endpoint cannot
+        # drift from it again.
+        company=CompanyRef.model_validate(company),
         framework_version=FRAMEWORK_VERSION,
         versions_retained=len(versions),
         versions=[

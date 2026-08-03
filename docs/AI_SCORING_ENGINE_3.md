@@ -3,6 +3,7 @@
 **Framework version:** `3.0.0`
 **Status:** deployed, 503 of 503 active companies scored
 **Validation:** 22 of 22 production checks passed on a 60-company live sample
+**Tests:** 2,618 passing, 0 failures (89 new)
 
 ---
 
@@ -315,6 +316,31 @@ communication — reading an absence of announcements where there were several.
 **Fix:** resignation patterns added to "management" as well. `classify` returns
 a *set* precisely so an event can be two things at once; a CFO resignation is
 both adverse and a management announcement.
+
+### AISCORE-001 — `/ai-score/history` returned HTTP 500 in production
+
+**Found by:** hitting the deployed endpoint after the first deploy. Every unit
+test passed; the endpoint was broken on every single call.
+
+I built `CompanyRef` field by field from a *guess* at its schema — omitting
+`exchange`, which is required, and passing `industry`, which the model does not
+declare. Pydantic raised on construction, so the endpoint returned 500
+unconditionally.
+
+The service-layer tests could not catch this because they never built a
+response model. Only an actual HTTP request does, and I had not written one.
+
+**Fix:** `CompanyRef.model_validate(company)` — the model reads whatever it
+actually declares, so the endpoint cannot drift from its schema again. Eight
+`TestAPIContract` tests now exercise every endpoint through a real
+`TestClient` and assert the status code. Confirmed by reverting the fix: the
+new test reproduces the 500 exactly, and passes once restored.
+
+**Two harness bugs of my own along the way, both mine and not the product's:**
+the first fixture used the in-memory `db` fixture, which cannot cross the
+thread `TestClient` runs the app on; the second put `import app.models.x`
+above `from app.main import app`, binding `app` to the *package* and turning
+`app.dependency_overrides` into an `AttributeError`.
 
 ---
 

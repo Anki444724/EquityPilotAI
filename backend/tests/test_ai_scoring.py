@@ -884,3 +884,141 @@ class TestZeroCountFactorsAreCited:
             if not f.is_missing and not f.citations
         ]
         assert uncited == []
+
+
+# ===========================================================================
+# API contract — every endpoint exercised against a real response model
+# ===========================================================================
+
+class TestAPIContract:
+    """AISCORE-001: `/ai-score/history` returned HTTP 500 in production.
+
+    The endpoint constructed `CompanyRef` field by field from a guess at its
+    schema — omitting `exchange`, which is required, and passing `industry`,
+    which does not exist. Pydantic raised on every call. Unit tests of the
+    service layer could not catch it because they never built a response
+    model; only an actual request does.
+
+    These tests therefore go through the real app and assert the status code,
+    which is the only thing that would have caught it.
+    """
+
+    @pytest.fixture()
+    def client(self):
+        """A TestClient over a file-backed SQLite database.
+
+        Not the in-memory `db` fixture: TestClient runs the app on a separate
+        thread, and an in-memory SQLite connection cannot cross threads —
+        "SQLite objects created in a thread can only be used in that same
+        thread". That is a limitation of the test harness, not of the
+        application, so the fixture is what changes. A file-backed database
+        with `check_same_thread=False` and a shared `StaticPool` gives every
+        thread the same database.
+        """
+        import tempfile
+        from fastapi.testclient import TestClient
+        from sqlalchemy.pool import StaticPool
+
+        # `import app.models.x` binds the name `app` to the PACKAGE in this
+        # scope, shadowing the FastAPI instance imported below it and turning
+        # `app.dependency_overrides` into an AttributeError on the module.
+        # The model imports must therefore come first, and the FastAPI object
+        # is bound last under an unambiguous name.
+        import app.models.analysis  # noqa: F401
+        import app.models.company  # noqa: F401
+        import app.models.document  # noqa: F401
+        import app.models.filing_collection  # noqa: F401
+        import app.models.knowledge  # noqa: F401
+        import app.models.platform  # noqa: F401
+        import app.models.scoring  # noqa: F401
+
+        from app.core.security import get_current_user
+        from app.db.base import get_db
+        from app.main import app as fastapi_app
+
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        engine = create_engine(
+            f"sqlite:///{handle.name}",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        session = Session()
+
+        # Save and RESTORE, never clear. `tests/conftest.py` installs a
+        # session-wide `get_db` override at import time, against a shared
+        # seeded database that most of the suite depends on. Calling
+        # `dependency_overrides.clear()` in teardown removed it, so every API
+        # test module collected after this one fell back to the real
+        # `get_db` and failed — 130 failures and 161 errors across
+        # test_valuation_api, test_document_api, test_scoring_api,
+        # test_report_api and others, none of which had anything wrong with
+        # them. A fixture that tears down more than it set up is a harness
+        # bug that looks exactly like a product regression.
+        previous = dict(fastapi_app.dependency_overrides)
+        fastapi_app.dependency_overrides[get_db] = lambda: session
+        fastapi_app.dependency_overrides[get_current_user] = lambda: object()
+        try:
+            client = TestClient(fastapi_app)
+            client.session = session
+            yield client
+        finally:
+            fastapi_app.dependency_overrides.clear()
+            fastapi_app.dependency_overrides.update(previous)
+            session.close()
+            engine.dispose()
+
+    def test_framework_endpoint(self, client):
+        response = client.get("/api/v1/ai-score/framework")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total_weight"] == 100.0
+        assert len(body["modules"]) == 10
+
+    def test_dashboard_endpoint(self, client):
+        response = client.get("/api/v1/ai-score/dashboard")
+        assert response.status_code == 200, response.text
+
+    def test_score_endpoint(self, client):
+        make_company(client.session, ticker="APITEST")
+        response = client.get("/api/v1/company/APITEST/ai-score")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["modules"]) == 10
+        assert len(body["probabilities"]) == 5
+
+    def test_recalculate_endpoint(self, client):
+        make_company(client.session, ticker="APIRECALC")
+        response = client.post("/api/v1/company/APIRECALC/ai-score/recalculate")
+        assert response.status_code == 200, response.text
+        assert response.json()["version_created"] is True
+
+    def test_history_endpoint(self, client):
+        """The endpoint that was returning 500."""
+        make_company(client.session, ticker="APIHIST")
+        client.post("/api/v1/company/APIHIST/ai-score/recalculate")
+        response = client.get("/api/v1/company/APIHIST/ai-score/history")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["versions_retained"] == 1
+        assert body["company"]["ticker"] == "APIHIST"
+        assert body["spans_framework_versions"] is False
+
+    def test_version_endpoint(self, client):
+        make_company(client.session, ticker="APIVER")
+        client.post("/api/v1/company/APIVER/ai-score/recalculate")
+        response = client.get("/api/v1/company/APIVER/ai-score/version/1")
+        assert response.status_code == 200, response.text
+        assert response.json()["detail"]["modules"]
+
+    def test_unknown_ticker_is_404_not_500(self, client):
+        for path in ("", "/history", "/version/1"):
+            response = client.get(f"/api/v1/company/NOSUCHCO/ai-score{path}")
+            assert response.status_code == 404, f"{path}: {response.status_code}"
+
+    def test_unknown_version_is_404(self, client):
+        make_company(client.session, ticker="APIMISS")
+        response = client.get("/api/v1/company/APIMISS/ai-score/version/99")
+        assert response.status_code == 404
