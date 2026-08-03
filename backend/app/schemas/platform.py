@@ -168,6 +168,10 @@ class SessionUser(BaseModel):
     username: str | None = None
     #: "Premium User" rather than "subscriber" — the product vocabulary.
     role_display: str | None = None
+    #: Saved response language, or None to auto-detect on every request.
+    #: Read from the existing `users.preferences` JSON column, so remembering
+    #: a preference needs no migration.
+    language: str | None = None
 
 
 class AuthConfig(BaseModel):
@@ -725,3 +729,16 @@ class RbacMatrixOut(BaseModel):
 
 
 TenantDetailOut.model_rebuild()
+
+
+class LanguagePreferenceRequest(BaseModel):
+    """Save or clear the caller's preferred response language."""
+
+    #: "auto" | "english" | "hindi" | "hinglish" | a BCP-47 tag.
+    #: "auto" clears the stored preference and returns to detection.
+    language: str = Field(default="auto", max_length=32)
+
+
+class LanguagePreferenceResponse(BaseModel):
+    language: str | None = None
+    detail: str = ""

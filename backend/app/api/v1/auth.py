@@ -49,6 +49,7 @@ from app.models.platform import Tenant, User
 from app.schemas.platform import (
     AuthConfig, LoginRequest, MagicLinkRequest, MessageResponse,
     PasswordChangeRequest, PasswordPolicyOut, PasswordResetConfirm,
+    LanguagePreferenceRequest, LanguagePreferenceResponse,
     PasswordResetRequest, RefreshRequest, RegisterRequest, SessionUser,
     TokenRequest, TokenResponse, UsernameAvailability,
 )
@@ -217,6 +218,65 @@ def me(
         mfa_enabled=bool(record and record.mfa_method != "none"),
         username=record.username if record else None,
         role_display=display_name(user.role.value),
+        language=(record.preferences or {}).get("language") if record else None,
+    )
+
+
+@router.put("/me/language", response_model=LanguagePreferenceResponse,
+            summary="Remember a preferred response language")
+def set_language_preference(
+    body: LanguagePreferenceRequest,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LanguagePreferenceResponse:
+    """Persist the caller's language choice across sessions.
+
+    Written to the existing `users.preferences` JSON column rather than a new
+    column or table — the brief requires that adding a language needs no
+    migration, and the same applies to remembering one.
+
+    A stored preference does NOT override confident detection: someone who
+    saved English and then types Devanagari gets Devanagari. It breaks ties
+    when detection is a guess, which is the case a bare "TCS revenue"
+    presents. `choose_language` implements that precedence.
+    """
+    from app.domain.language.types import AUTO, resolve as resolve_language
+
+    record = db.get(User, user.user_id)
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+
+    requested = (body.language or AUTO).strip().lower()
+    preferences = dict(record.preferences or {})
+
+    if requested in {AUTO, "", "detect"}:
+        preferences.pop("language", None)
+        # Reassigned rather than mutated: SQLAlchemy does not track in-place
+        # changes to a JSON column, so mutating the dict saves nothing and the
+        # preference silently fails to persist.
+        record.preferences = preferences
+        db.commit()
+        return LanguagePreferenceResponse(
+            language=None,
+            detail="Preference cleared; the language is detected per request.",
+        )
+
+    resolved = resolve_language(requested)
+    if resolved is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"unknown language '{body.language}'",
+        )
+
+    preferences["language"] = resolved.value
+    record.preferences = preferences
+    db.commit()
+    return LanguagePreferenceResponse(
+        language=resolved.value,
+        detail=(
+            f"Responses will default to {resolved.value}. Confident detection "
+            "still wins — typing in another language is honoured immediately."
+        ),
     )
 
 

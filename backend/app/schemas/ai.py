@@ -70,6 +70,40 @@ class DataQualityOut(BaseModel):
     missing_items: list[str] = Field(default_factory=list)
 
 
+class DetectionOut(BaseModel):
+    language: str
+    confidence: float
+    script: str
+    reason: str
+    is_mixed: bool = False
+    ambiguous_with: list[str] = Field(default_factory=list)
+
+
+class TranslationOut(BaseModel):
+    language: str
+    translated: bool
+    provider: str
+    detail: str = ""
+    latency_ms: float = 0.0
+    cost_usd: float = 0.0
+    integrity_problems: list[str] = Field(default_factory=list)
+
+
+class LanguageOut(BaseModel):
+    """How the response language was chosen, and what happened."""
+
+    language: str
+    label: str
+    native_label: str
+    script: str
+    bcp47: str
+    #: "requested" | "detected" | "preference".
+    resolved_from: str
+    detected: DetectionOut
+    translation: TranslationOut
+    latency_ms: float = 0.0
+
+
 class AnalysisResponse(BaseModel):
     company: CompanyRef
     capability: str
@@ -93,6 +127,11 @@ class AnalysisResponse(BaseModel):
     #: Never optional in practice — populated for every response so a client
     #: can always state how good the underlying data is.
     data_quality: DataQualityOut | None = None
+    #: Present only when the response went through the Language Adapter, i.e.
+    #: when a non-English language was requested or detected. Absent on the
+    #: English path, which keeps every existing client's payload byte-for-byte
+    #: unchanged.
+    language: LanguageOut | None = None
 
 
 class CapabilityOut(BaseModel):
@@ -113,6 +152,10 @@ class CapabilityListResponse(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: str = Field(default="default", max_length=64)
+    #: "auto" | "english" | "hindi" | "hinglish" | a BCP-47 tag.
+    #: Defaults to auto-detection, so an existing client that never sets it
+    #: gets English for English questions exactly as before.
+    language: str = "auto"
     provider: str | None = None
     stream: bool = False
     #: Restrict which evidence may answer. Omitted means the scope is read
@@ -136,6 +179,7 @@ class AnalysisRequest(BaseModel):
     style: str | None = None
     question: str = ""
     save: bool = True
+    language: str = "auto"
 
 
 class ReportRequest(BaseModel):
@@ -144,6 +188,7 @@ class ReportRequest(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     style: str = "report_section"
     provider: str | None = None
+    language: str = "auto"
 
 
 class ReportSection(BaseModel):
@@ -213,3 +258,37 @@ class ProviderListResponse(BaseModel):
     providers: list[ProviderOut]
     preferred: str | None = None
     ai_enabled: bool
+
+
+class LanguageSpecOut(BaseModel):
+    code: str
+    label: str
+    native_label: str
+    script: str
+    status: str
+    bcp47: str
+    keeps_english_terms: bool = False
+
+
+class LanguageListResponse(BaseModel):
+    """The language registry, including languages not yet enabled."""
+
+    languages: list[LanguageSpecOut] = Field(default_factory=list)
+    default: str = "auto"
+    canonical: str = "english"
+    supported: list[str] = Field(default_factory=list)
+    planned: list[str] = Field(default_factory=list)
+    glossary: dict = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class DetectRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class DetectResponse(BaseModel):
+    detected: DetectionOut
+    #: The English query the retriever would actually receive.
+    normalised_query: str
+    rewritten: bool = False
+    mapped_terms: list[dict] = Field(default_factory=list)

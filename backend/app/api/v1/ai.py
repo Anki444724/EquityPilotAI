@@ -29,12 +29,20 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.base import get_db
 from app.domain.ai.sourcing import SourceDirective, parse_directive
 from app.domain.ai.types import NoProviderConfigured, ProviderError
+from app.domain.language.detect import detect
+from app.domain.language.glossary import coverage as glossary_coverage
+from app.domain.language.types import (
+    AUTO, CANONICAL_LANGUAGE, LANGUAGES, Language, PLANNED_LANGUAGES,
+    SUPPORTED_LANGUAGES, resolve as resolve_language,
+)
 from app.schemas.ai import (
     AnalysisRequest, AnalysisResponse, CapabilityListResponse, CapabilityOut,
     ChatRequest, ChatResponse, CitationAuditOut, CitationOut, ClaimBlockOut,
     GuardrailOut, PromptActivateRequest, PromptListResponse, PromptOut,
     PromptUpdateRequest, ProviderListResponse, ProviderOut, ReportRequest,
     ReportResponse, ReportSection, UsageResponse,
+    DetectionOut, DetectRequest, DetectResponse, LanguageListResponse,
+    LanguageOut, LanguageSpecOut, TranslationOut,
 )
 from app.services.ai.analyst import AnalystResult
 from app.services.ai.guardrails import DISCLOSURE
@@ -96,6 +104,58 @@ def _quality_out(analysis: AnalysisService) -> tuple[Any, str | None]:
     ), warning
 
 
+def _language_out(result: AnalystResult) -> LanguageOut | None:
+    """Render the adapter's report, when the response went through it."""
+    block = result.language
+    if not block:
+        return None
+    return LanguageOut(
+        language=block["language"], label=block["label"],
+        native_label=block["native_label"], script=block["script"],
+        bcp47=block["bcp47"], resolved_from=block["resolved_from"],
+        detected=DetectionOut(**block["detected"]),
+        translation=TranslationOut(**block["translation"]),
+        latency_ms=block.get("latency_ms", 0.0),
+    )
+
+
+def _resolve_request_language(
+    requested: str | None, question: str, user: CurrentUser, db: Session,
+) -> Language | None:
+    """Decide the response language for one request.
+
+    Returns ``None`` for English, which is the signal to the analyst that the
+    Language Adapter should not run at all. That keeps the English path
+    exactly as fast and exactly as it was before this feature existed.
+    """
+    explicit = resolve_language(requested)
+    if explicit is not None:
+        return None if explicit is CANONICAL_LANGUAGE else explicit
+
+    # auto: detection, with a stored preference breaking low-confidence ties.
+    from app.domain.language.detect import choose_language
+
+    preference = _stored_language_preference(user, db)
+    language, _ = choose_language(question, preference=preference)
+    return None if language is CANONICAL_LANGUAGE else language
+
+
+def _stored_language_preference(user: CurrentUser, db: Session) -> Language | None:
+    """The user's saved language, if any.
+
+    Read from the existing `users.preferences` JSON column — no new table and
+    no migration, which is one of the brief's constraints.
+    """
+    try:
+        from app.models.platform import User
+        row = db.get(User, getattr(user, "id", None))
+        if row is None or not row.preferences:
+            return None
+        return resolve_language(row.preferences.get("language"))
+    except Exception:  # noqa: BLE001 — a preference lookup must never fail a request
+        return None
+
+
 def _result_out(analysis: AnalysisService, result: AnalystResult) -> AnalysisResponse:
     audit = result.citation_audit
     guardrails = result.guardrails
@@ -142,6 +202,7 @@ def _result_out(analysis: AnalysisService, result: AnalystResult) -> AnalysisRes
         fell_back_from=result.fell_back_from,
         warnings=(result.warnings + [warning]) if warning else result.warnings,
         data_quality=quality,
+        language=_language_out(result),
     )
 
 
@@ -335,6 +396,7 @@ async def analyse(
     analysis: AnalysisService = Depends(get_analysis),
     service: AIService = Depends(_service),
     user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> AnalysisResponse:
     _require_data(analysis)
     if body.capability not in BUILTIN_PROMPTS:
@@ -349,6 +411,9 @@ async def analyse(
         result = await analyst.run(
             body.capability, question=body.question, style=style,
             provider=body.provider, template=template,
+            language=_resolve_request_language(
+                body.language, body.question, user, db,
+            ),
         )
     except NoProviderConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
@@ -414,6 +479,7 @@ async def chat(
     analysis: AnalysisService = Depends(get_analysis),
     service: AIService = Depends(_service),
     user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> ChatResponse:
     _require_data(analysis)
     memory = service.memory(f"{user.id}:{body.session_id}")
@@ -436,6 +502,9 @@ async def chat(
             )
         result = await analyst.chat(
             body.question, memory, provider=body.provider, source=directive,
+            language=_resolve_request_language(
+                body.language, body.question, user, db,
+            ),
         )
     except NoProviderConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
@@ -578,3 +647,66 @@ def history(
             for r in records
         ],
     }
+
+
+# ------------------------------------------------------------------ language
+@router.get("/ai/languages", response_model=LanguageListResponse,
+            summary="Supported and planned response languages")
+def list_languages(
+    _: CurrentUser = Depends(get_current_user),
+) -> LanguageListResponse:
+    """Publish the language registry, including languages not yet enabled.
+
+    Planned languages are returned with `status: planned` rather than hidden.
+    The brief's architectural claim is that adding one requires only a
+    translation module, and publishing the roadmap is what makes that claim
+    checkable instead of something to be taken on trust.
+    """
+    return LanguageListResponse(
+        languages=[
+            LanguageSpecOut(**spec.as_dict()) for spec in LANGUAGES.values()
+        ],
+        default=AUTO,
+        canonical=CANONICAL_LANGUAGE.value,
+        supported=[lang.value for lang in SUPPORTED_LANGUAGES],
+        planned=[lang.value for lang in PLANNED_LANGUAGES],
+        glossary=glossary_coverage(),
+        notes=[
+            "One canonical knowledge base. Every document, chunk, embedding, "
+            "vault entry, summary and memory row is stored in English and is "
+            "never duplicated per language.",
+            "Language is detected automatically; no selector is required. "
+            "Pass language=auto|english|hindi|hinglish to override.",
+            "Scores, citations, evidence and probabilities are identical in "
+            "every language. Only the explanatory prose changes.",
+            "Company names, tickers, ISINs, numbers, ratios, years, document "
+            "titles and citation identifiers are never translated.",
+            "Adding a language requires a translation module only — no "
+            "retrieval, scoring, RAG or database change.",
+        ],
+    )
+
+
+@router.post("/ai/languages/detect", response_model=DetectResponse,
+             summary="Detect the language of a question and show the rewrite")
+def detect_language(
+    body: DetectRequest,
+    _: CurrentUser = Depends(get_current_user),
+) -> DetectResponse:
+    """Detection plus the English query the retriever would actually receive.
+
+    Exposed because cross-language search is the least visible part of this
+    feature: a user whose Hindi question returns nothing needs to see what it
+    was rewritten to before anyone can tell whether detection, normalisation
+    or the corpus was at fault.
+    """
+    from app.services.language.adapter import LanguageAdapter
+
+    detection = detect(body.text)
+    normalised = LanguageAdapter().normalise_query(body.text)
+    return DetectResponse(
+        detected=DetectionOut(**detection.as_dict()),
+        normalised_query=normalised.english,
+        rewritten=normalised.was_rewritten,
+        mapped_terms=[{"from": a, "to": b} for a, b in normalised.mapped],
+    )

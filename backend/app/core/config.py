@@ -191,6 +191,21 @@ class Settings(BaseSettings):
     #: Master switch. The hybrid engine falls back to the legacy in-memory
     #: index when off, or when no chunk carries a semantic vector.
     HYBRID_RETRIEVAL_ENABLED: bool = True
+
+    # --- Multilingual AI Response Engine -----------------------------------
+    #: Which translator renders the final answer.
+    #: One of: llm | glossary | passthrough | none.
+    #: `llm` reuses the existing provider router, so it needs no new key and
+    #: inherits the caching, fallback and cost accounting already in place.
+    TRANSLATION_PROVIDER: str = "llm"
+    #: Master switch. When off, every response is English regardless of the
+    #: request — detection still runs and is still reported, so a client can
+    #: see what would have happened.
+    MULTILINGUAL_ENABLED: bool = True
+    #: Language used when detection is inconclusive and the user has saved no
+    #: preference. Also the canonical storage language; changing it does NOT
+    #: re-translate the corpus and is not supported in production.
+    DEFAULT_RESPONSE_LANGUAGE: str = "english"
     #: Sent as HTTP-Referer / X-Title. OpenRouter attributes usage with these
     #: and rate-limits anonymous traffic more aggressively.
     OPENROUTER_SITE_URL: str = "https://frontend-production-1a313.up.railway.app"

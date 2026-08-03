@@ -238,7 +238,8 @@ export const scoringApi = {
 /* ---------------------------------------------------------------- Module 6 */
 import type {
   AIAnalysisResponse, AIChatResponse, AIContextResponse, AIReportResponse,
-  AIUsageResponse, CapabilityListResponse, ProviderListResponse, PromptOut,
+  AIUsageResponse, CapabilityListResponse, DetectResponse,
+  LanguageListResponse, ProviderListResponse, PromptOut,
 } from "./types";
 
 export const aiApi = {
@@ -252,16 +253,33 @@ export const aiApi = {
       method: "PUT", body: JSON.stringify(body),
     }),
 
-  analyse: (ticker: string, capability: string, opts: { provider?: string; style?: string } = {}) =>
+  analyse: (
+    ticker: string,
+    capability: string,
+    opts: { provider?: string; style?: string; language?: string } = {},
+  ) =>
     request<AIAnalysisResponse>(`${co(ticker)}/ai/analyse`, {
       method: "POST",
       body: JSON.stringify({ capability, save: true, ...opts }),
     }),
 
-  chat: (ticker: string, question: string, sessionId = "default") =>
+  /** `language` defaults to "auto" server-side, so omitting it detects. */
+  chat: (ticker: string, question: string, sessionId = "default", language = "auto") =>
     request<AIChatResponse>(`${co(ticker)}/ai/chat`, {
       method: "POST",
-      body: JSON.stringify({ question, session_id: sessionId }),
+      body: JSON.stringify({ question, session_id: sessionId, language }),
+    }),
+
+  languages: () => request<LanguageListResponse>("/api/v1/ai/languages"),
+
+  detectLanguage: (text: string) =>
+    request<DetectResponse>("/api/v1/ai/languages/detect", {
+      method: "POST", body: JSON.stringify({ text }),
+    }),
+
+  saveLanguage: (language: string) =>
+    request<{ language: string | null; detail: string }>("/api/v1/auth/me/language", {
+      method: "PUT", body: JSON.stringify({ language }),
     }),
 
   report: (ticker: string, capabilities?: string[]) =>

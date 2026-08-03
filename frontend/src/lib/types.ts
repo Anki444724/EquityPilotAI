@@ -625,10 +625,50 @@ export interface AIAnalysisResponse {
   prompt_tokens: number; completion_tokens: number; total_tokens: number;
   cost_usd: number; latency_ms: number; cached: boolean;
   fell_back_from: string | null; warnings: string[];
+  /** Present only when the response went through the Language Adapter,
+   *  i.e. when a non-English language was requested or detected. Absent on
+   *  the English path, which keeps existing payloads unchanged. */
+  language?: LanguageBlock | null;
 }
 
 export interface AIChatResponse extends AIAnalysisResponse {
   session_id: string; turn_count: number; session_state: string;
+}
+
+/* --- Multilingual AI Response Engine --------------------------------- */
+
+export interface LanguageDetection {
+  language: string; confidence: number; script: string; reason: string;
+  is_mixed: boolean; ambiguous_with: string[];
+}
+
+export interface LanguageTranslation {
+  language: string; translated: boolean; provider: string; detail: string;
+  latency_ms: number; cost_usd: number; integrity_problems: string[];
+}
+
+/** Present only when a response went through the Language Adapter. */
+export interface LanguageBlock {
+  language: string; label: string; native_label: string; script: string;
+  bcp47: string; resolved_from: string;
+  detected: LanguageDetection; translation: LanguageTranslation;
+  latency_ms: number;
+}
+
+export interface LanguageSpecOut {
+  code: string; label: string; native_label: string; script: string;
+  status: "supported" | "planned"; bcp47: string; keeps_english_terms: boolean;
+}
+
+export interface LanguageListResponse {
+  languages: LanguageSpecOut[]; default: string; canonical: string;
+  supported: string[]; planned: string[];
+  glossary: Record<string, number>; notes: string[];
+}
+
+export interface DetectResponse {
+  detected: LanguageDetection; normalised_query: string;
+  rewritten: boolean; mapped_terms: { from: string; to: string }[];
 }
 
 export interface CapabilityOut {

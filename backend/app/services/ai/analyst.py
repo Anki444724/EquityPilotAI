@@ -23,6 +23,7 @@ from app.domain.ai.types import (
 from app.domain.ai.sourcing import (
     SCOPE_KINDS, SourceDirective, SourceScope, parse_directive,
 )
+from app.domain.language.types import CANONICAL_LANGUAGE, Language
 from app.services.ai.citation_engine import CitationAudit, annotate, audit
 from app.services.ai.context_builder import ContextBuilder, GroundedContext
 from app.services.ai.guardrails import GuardrailReport, check, enforce
@@ -60,6 +61,11 @@ class AnalystResult:
     cached: bool = False
     fell_back_from: str | None = None
     warnings: list[str] = field(default_factory=list)
+
+    #: Language metadata, populated by the Language Adapter. `None` means the
+    #: response was produced on the English path and never went near the
+    #: adapter — which is the default and costs nothing.
+    language: dict | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -104,8 +110,17 @@ class ResearchAnalyst:
         context_override: GroundedContext | None = None,
         extra: str = "",
         retrieve: bool = True,
+        language: "Language | None" = None,
     ) -> AnalystResult:
         """Produce one grounded analysis.
+
+        `language` is the Language Adapter's only point of contact with this
+        method, and it is deliberately inert on the English path. When set to
+        a non-English language two things happen and nothing else changes:
+        the retrieval query is normalised to English first, and the finished
+        English answer is rendered afterwards. The reasoning in between is
+        byte-identical either way, which is what keeps scores, citations and
+        evidence the same in every language.
 
         `context_override` lets the report orchestrator hand in a context
         already restricted to one section's permitted sources, so a section
@@ -149,7 +164,22 @@ class ResearchAnalyst:
         # question text and every section prompt is question text. The
         # restriction was real when the context was built and gone by the time
         # the prompt was assembled.
-        retrieved = self._retrieve(question, capability) if retrieve else []
+        # Inbound adaptation: a non-English question is rewritten into
+        # English retrieval terms BEFORE it reaches the retriever, so
+        # "राजस्व", "kamai" and "revenue" hit the same English index. The
+        # retriever, the corpus and the embeddings are unchanged — this is a
+        # query rewrite, not a second knowledge base.
+        retrieval_query = question
+        normalised = None
+        if language is not None and language is not CANONICAL_LANGUAGE and question:
+            from app.services.language.adapter import LanguageAdapter
+            normalised = LanguageAdapter().normalise_query(question)
+            retrieval_query = normalised.english
+            log.info("multilingual query normalised",
+                     language=language.value,
+                     original=question[:120], english=retrieval_query[:120])
+
+        retrieved = self._retrieve(retrieval_query, capability) if retrieve else []
         if retrieved:
             context = context.with_citations(retrieved)
 
@@ -185,10 +215,19 @@ class ResearchAnalyst:
                     capability, directive, context, memory, question,
                 )
 
+        # Writing directly in the target language produces better prose than
+        # translating afterwards — native sentence structure rather than a
+        # calque. Translation still runs as the guarantee, because a model
+        # told to write Hindi will sometimes write English anyway.
+        task_extra = extra
+        if language is not None and language is not CANONICAL_LANGUAGE:
+            from app.services.language.adapter import LanguageAdapter
+            task_extra = f"{extra}{LanguageAdapter.response_instruction(language)}"
+
         built = self.prompts.build(
             prompt_template, context, question=question, memory=memory, style=style,
             include_history=capability == Capability.CHAT.value,
-            extra=extra,
+            extra=task_extra,
         )
 
         log.info(
@@ -204,8 +243,9 @@ class ResearchAnalyst:
         response = await self.router.complete(built.request, preferred=provider)
         elapsed = (time.perf_counter() - started) * 1000
 
-        return self._finalise(
-            capability, built, response, context, elapsed, memory, question
+        return await self._finalise(
+            capability, built, response, context, elapsed, memory, question,
+            language=language,
         )
 
     #: Passages fetched per question. Ten is the brief's figure and comfortably
@@ -328,9 +368,15 @@ class ResearchAnalyst:
                 f"Restricted to {directive.scope.value}; no evidence from that "
                 "source bears on the question. No other source was consulted."
             ],
+            # Deliberately NOT translated. A refusal is returned verbatim
+            # because integrations branch on its exact wording — the docstring
+            # above states that contract, and rendering it into Hindi would
+            # break every caller that relies on it. The language block records
+            # that the text is English so a client can label it.
+            language=None,
         )
 
-    def _finalise(
+    async def _finalise(
         self,
         capability: str,
         built: BuiltPrompt,
@@ -339,8 +385,18 @@ class ResearchAnalyst:
         elapsed_ms: float,
         memory: ConversationMemory | None,
         question: str,
+        *,
+        language: "Language | None" = None,
     ) -> AnalystResult:
-        """Verify, classify and record."""
+        """Verify, classify and record.
+
+        The single funnel every capability, chat turn and report section
+        passes through, which is why the Language Adapter is invoked here and
+        nowhere else. Crucially the audit, the guardrail check and the
+        citation annotation all run on the ENGLISH text first: the evidence
+        chain is verified in the canonical language and only then rendered,
+        so a translation can never change what was audited.
+        """
         citation_audit = audit(response.content, built.citations)
         guardrails = check(response.content, citation_audit)
         content = enforce(response.content, guardrails)
@@ -362,15 +418,55 @@ class ResearchAnalyst:
         if memory is not None:
             if question:
                 memory.add(Role.USER, question)
+            # Memory stores the ENGLISH text, always. Conversation memory is
+            # part of the canonical knowledge base, and storing a Hindi turn
+            # would create exactly the per-language state the brief forbids —
+            # it would also mean a user who switched language mid-session
+            # carried untranslatable history forward.
             memory.add(
                 Role.ASSISTANT, response.content,
                 citations=[c.key for c in citation_audit.resolved],
             )
 
+        # --- outbound language adaptation --------------------------------
+        #
+        # Runs LAST, after audit(), check(), enforce() and the memory write,
+        # so everything the platform verifies and stores is canonical English.
+        # A translation cannot alter what was audited, which is what makes
+        # "same evidence and citations in every language" structural rather
+        # than merely tested.
+        display = annotate(content, built.citations)
+        language_block: dict | None = None
+
+        if language is not None and language is not CANONICAL_LANGUAGE:
+            from app.services.language.adapter import LanguageAdapter
+
+            entities: list[str] = []
+            company = getattr(getattr(self.builder, "analysis", None),
+                              "company", None)
+            if company is not None:
+                entities = [n for n in (getattr(company, "name", None),
+                                        getattr(company, "ticker", None)) if n]
+
+            adapted = await LanguageAdapter().adapt(
+                display, question=question, requested=language,
+                entities=entities,
+            )
+            display = adapted.text
+            language_block = adapted.as_dict()
+            if not adapted.translation.translated:
+                warnings.append(
+                    adapted.translation.detail
+                    or f"Response could not be rendered in {language.value}."
+                )
+
         return AnalystResult(
             capability=capability,
+            # `content` stays English: it is the audited artefact, it is what
+            # gets persisted by AIService.record(), and a downstream consumer
+            # comparing two responses must be comparing like with like.
             content=content,
-            display_content=annotate(content, built.citations),
+            display_content=display,
             provider=response.provider, model=response.model,
             prompt_key=built.prompt_key, prompt_version=built.prompt_version,
             citations=citation_audit.resolved,
@@ -380,6 +476,7 @@ class ResearchAnalyst:
             cost_usd=response.cost_usd, latency_ms=elapsed_ms,
             cached=response.cached, fell_back_from=response.fell_back_from,
             warnings=warnings,
+            language=language_block,
         )
 
     # ------------------------------------------------------------------ chat
@@ -390,10 +487,11 @@ class ResearchAnalyst:
         *,
         provider: str | None = None,
         source: SourceDirective | None = None,
+        language: "Language | None" = None,
     ) -> AnalystResult:
         return await self.run(
             Capability.CHAT.value, question=question, memory=memory,
-            provider=provider, source=source,
+            provider=provider, source=source, language=language,
         )
 
     async def stream_chat(self, question: str, memory: ConversationMemory):

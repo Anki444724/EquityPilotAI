@@ -6,12 +6,13 @@ import {
   CapabilityPicker, CitationList, GuardrailPanel, Markdown, ProviderPanel, RunMeta,
 } from "@/components/ai/panels";
 import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, TabStrip } from "@/components/ui";
+import { LanguageSelector, storedLanguage } from "@/components/ai/language-selector";
 import { aiApi, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Info, Send, Sparkles } from "lucide-react";
 import Link from "next/link";
-import { use, useRef, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 
 const TABS = [
   { key: "analysis", label: "Analysis" },
@@ -21,7 +22,15 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
-interface ChatTurn { role: "user" | "assistant"; text: string; meta?: string }
+interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
+  meta?: string;
+  /** BCP-47 tag, so the browser renders Devanagari with the right font
+   *  and a screen reader switches voice. Without `lang`, Devanagari falls
+   *  back to whatever glyphs the Latin font happens to carry. */
+  lang?: string;
+}
 
 export default function AIPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -29,7 +38,16 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
   const [capability, setCapability] = useState("investment_thesis");
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [language, setLanguage] = useState("auto");
+  const [lastLanguage, setLastLanguage] = useState<{
+    detected?: string; translated?: boolean; note?: string;
+  }>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Read the remembered choice after mount, never during render: touching
+  // localStorage while rendering breaks server-side rendering and produces a
+  // hydration mismatch.
+  useEffect(() => setLanguage(storedLanguage()), []);
 
   const profile = useQuery({
     queryKey: ["company-profile", id],
@@ -63,13 +81,25 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
   });
 
   const ask = useMutation({
-    mutationFn: (q: string) => aiApi.chat(ticker!, q, "workspace"),
+    mutationFn: (q: string) => aiApi.chat(ticker!, q, "workspace", language),
     onSuccess: (data) => {
+      const block = data.language;
+      setLastLanguage({
+        detected: block?.detected?.language,
+        translated: block?.translation?.translated,
+        note: block?.translation?.detail || undefined,
+      });
       setTurns((prev) => [
         ...prev,
         {
           role: "assistant", text: data.display_content,
-          meta: `${data.provider} · ${data.total_tokens} tokens · ${data.citations.length} citations`,
+          lang: block?.bcp47,
+          meta: [
+            data.provider,
+            `${data.total_tokens} tokens`,
+            `${data.citations.length} citations`,
+            block && block.language !== "english" ? block.native_label : null,
+          ].filter(Boolean).join(" · "),
         },
       ]);
       requestAnimationFrame(() =>
@@ -181,7 +211,22 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
 
           {tab === "chat" && (
             <Card className="flex h-[34rem] flex-col">
-              <CardHeader title="Analyst chat" subtitle="Answers are grounded in platform data" />
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border)] p-4">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold">Analyst chat</h3>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    Answers are grounded in platform data. Ask in English,
+                    हिन्दी or Hinglish — the reply follows your language.
+                  </p>
+                </div>
+                <LanguageSelector
+                  value={language}
+                  onChange={setLanguage}
+                  detected={lastLanguage.detected}
+                  translated={lastLanguage.translated}
+                  note={lastLanguage.note}
+                />
+              </div>
               <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
                 {turns.length === 0 && (
                   <div className="py-12 text-center">
@@ -194,12 +239,15 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
                 )}
                 {turns.map((turn, i) => (
                   <div key={i} className={cn("flex", turn.role === "user" && "justify-end")}>
-                    <div className={cn(
-                      "max-w-[85%] rounded-lg px-3 py-2",
-                      turn.role === "user"
-                        ? "bg-accent-500 text-white"
-                        : "border border-[var(--border)] bg-[var(--bg-subtle)]",
-                    )}>
+                    <div
+                      lang={turn.lang}
+                      className={cn(
+                        "max-w-[85%] rounded-lg px-3 py-2",
+                        turn.role === "user"
+                          ? "bg-accent-500 text-white"
+                          : "border border-[var(--border)] bg-[var(--bg-subtle)]",
+                      )}
+                    >
                       {turn.role === "user"
                         ? <p className="text-xs">{turn.text}</p>
                         : <Markdown text={turn.text} />}
@@ -226,7 +274,7 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && send()}
-                  placeholder="Ask about leverage, valuation, the moat…"
+                  placeholder="Ask in English, हिन्दी or Hinglish…"
                   className="flex-1 rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-2 text-xs outline-none focus:border-accent-500"
                 />
                 <button onClick={send} disabled={ask.isPending || !question.trim()}

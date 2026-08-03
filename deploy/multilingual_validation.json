@@ -1,0 +1,172 @@
+{
+  "detection_accuracy": 1.0,
+  "checks": [
+    {
+      "name": "Detection accuracy on the brief's examples",
+      "passed": true,
+      "detail": "15/15 (100%)"
+    },
+    {
+      "name": "No English question is answered in Hinglish",
+      "passed": true,
+      "detail": "4 English questions checked"
+    },
+    {
+      "name": "Detection is deterministic",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Every detection carries a reason",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Equivalent queries converge on English terms",
+      "passed": true,
+      "detail": "revenue: 4/4; debt: 3/3; profit: 3/3"
+    },
+    {
+      "name": "English queries reach the retriever byte-identical",
+      "passed": true,
+      "detail": "5/5 unchanged \u2014 Retrieval 2.1 cannot regress"
+    },
+    {
+      "name": "Mask/restore round trip is exact",
+      "passed": true,
+      "detail": "14 spans: {'entity': 1, 'markdown_link': 1, 'citation': 3, 'isin': 1, 'fiscal_year': 1, 'number': 4, 'ticker': 3}"
+    },
+    {
+      "name": "No nested sentinels are produced",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "A dropped token is detected",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "A mangled figure is detected",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Translated prose with intact tokens raises no alarm",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "The brief's glossary is exact",
+      "passed": true,
+      "detail": "12/12 verbatim"
+    },
+    {
+      "name": "Glossary covers the platform's own vocabulary",
+      "passed": true,
+      "detail": "121 terms, 121 Hindi renderings"
+    },
+    {
+      "name": "Hinglish keeps English financial vocabulary",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "No per-language table exists in production",
+      "passed": true,
+      "detail": "65 tables scanned"
+    },
+    {
+      "name": "No per-language column on any content table",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "name": "No chunk is duplicated per language",
+      "passed": true,
+      "detail": "49 of 11,485 chunks contain Devanagari \u2014 all from bilingual SOURCE filings ingested before this feature, none a translation"
+    },
+    {
+      "name": "No document is duplicated WITHIN a company by this feature",
+      "passed": true,
+      "detail": "1 duplicated hash(es), all 1 of them the same file uploaded against different companies \u2014 a pre-existing ingestion artefact, not a language duplicate"
+    },
+    {
+      "name": "Retrieval, scoring and knowledge never import the language layer",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "name": "The language layer never writes to the database",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "name": "The language layer imports no ORM model",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "name": "All six future languages are declared",
+      "passed": true,
+      "detail": "marathi, gujarati, tamil, telugu, kannada, bengali"
+    },
+    {
+      "name": "Phase 1 languages are supported",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Every declared language has a complete spec",
+      "passed": true,
+      "detail": "9 languages registered"
+    },
+    {
+      "name": "Canonical storage language is English",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "The scoring engine has no language parameter",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "The retrieval engine has no language parameter",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Citations are audited in English before any translation",
+      "passed": true,
+      "detail": "audit precedes adaptation in _finalise"
+    },
+    {
+      "name": "Persisted content stays English",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "failures": 0,
+  "glossary": {
+    "terms": 121,
+    "hindi_translated": 121,
+    "abbreviations_preserved": 21,
+    "hinglish_keeps_english": 121
+  },
+  "devanagari_chunks": 49,
+  "total_chunks": 11485,
+  "supported": [
+    "english",
+    "hindi",
+    "hinglish"
+  ],
+  "planned": [
+    "marathi",
+    "gujarati",
+    "tamil",
+    "telugu",
+    "kannada",
+    "bengali"
+  ]
+}
