@@ -200,6 +200,31 @@ class LLMTranslator:
             )
 
         started = time.perf_counter()
+
+        # TRANS-001. Observed in production: with the LLM quota exhausted the
+        # router falls through to the OFFLINE provider, which is a
+        # template composer, not a model. Handed masked text it returns
+        # unrelated boilerplate, so all 30 sentinels vanish, the integrity
+        # check correctly rejects the result, and the user gets pure English
+        # after paying for a round trip that could never have succeeded.
+        #
+        # Detecting this up front costs nothing and lets the glossary
+        # translator produce partially-rendered Hindi instead — which is
+        # strictly more useful to someone who asked in Hindi, and is labelled
+        # as partial rather than presented as a translation.
+        if self._offline_only():
+            log.info("no live model for translation; using the glossary",
+                     language=language.value)
+            result = await GlossaryTranslator().translate(
+                text, language, entities=entities,
+            )
+            result.detail = (
+                "No live language model was reachable (the configured "
+                "provider is the offline composer, which cannot translate). "
+                + result.detail
+            )
+            return result
+
         spec = spec_for(language)
         protection = protect(text, extra_terms=entities or [])
 
@@ -294,6 +319,32 @@ class LLMTranslator:
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             cost_usd=cost,
         )
+
+    def _offline_only(self) -> bool:
+        """True when the only reachable provider cannot actually translate.
+
+        Deliberately conservative: any doubt resolves to False and the normal
+        path runs, because wrongly skipping a live model would silently
+        downgrade every translation. Router internals are read defensively —
+        a private attribute that disappears must degrade to "try anyway",
+        never to an exception on the response path.
+        """
+        try:
+            chain = getattr(self.router, "chain", None)
+            if callable(chain):
+                chain = chain()
+            if not chain:
+                return False
+            names = [
+                str(getattr(c, "payload_shape", "")
+                    or getattr(c, "name", "")).lower()
+                for c in chain
+            ]
+            return bool(names) and all(
+                "offline" in n or "mock" in n for n in names
+            )
+        except Exception:  # noqa: BLE001
+            return False
 
     def _split(self, text: str) -> list[str]:
         """Split on blank lines, never mid-paragraph."""

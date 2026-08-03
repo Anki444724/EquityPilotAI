@@ -967,3 +967,76 @@ class TestEndToEndConsistency:
         assert payload["language"] == "hindi"          # answered in
         assert payload["detected"]["language"] == "hinglish"   # typed in
         assert payload["resolved_from"] == "requested"
+
+
+class TestOfflineProviderShortCircuit:
+    """TRANS-001, found in production.
+
+    With the LLM quota exhausted the router falls through to the OFFLINE
+    provider, a template composer rather than a model. Handed masked text it
+    returned unrelated boilerplate, all 30 sentinels vanished, the integrity
+    check correctly rejected the result, and the user got pure English after
+    paying for a round trip that could never have succeeded.
+    """
+
+    class _OfflineOnlyRouter:
+        def chain(self, preferred=None):
+            class Config:
+                name = "Offline"
+                payload_shape = "offline"
+            return [Config()]
+
+        async def complete(self, request, preferred=None):
+            raise AssertionError(
+                "the LLM must not be called when only the offline composer "
+                "is reachable"
+            )
+
+    class _LiveRouter:
+        def chain(self, preferred=None):
+            class Config:
+                name = "Gemini"
+                payload_shape = "gemini"
+            return [Config()]
+
+    SOURCE = "Revenue of ₹2,55,324 crore [revenue] grew. Debt fell 10.2% [debt]."
+
+    def test_offline_only_routes_to_the_glossary(self):
+        translator = LLMTranslator(router=self._OfflineOnlyRouter())
+        assert translator._offline_only()
+        result = _run(translator.translate(self.SOURCE, Language.HINDI,
+                                           entities=["TCS"]))
+        assert result.provider == "glossary"
+
+    def test_the_fallback_still_preserves_every_protected_token(self):
+        translator = LLMTranslator(router=self._OfflineOnlyRouter())
+        result = _run(translator.translate(self.SOURCE, Language.HINDI,
+                                           entities=["TCS"]))
+        assert verify_preserved(self.SOURCE, result.text) == []
+        assert "[revenue]" in result.text
+        assert "2,55,324" in result.text
+
+    def test_the_fallback_renders_some_hindi(self):
+        translator = LLMTranslator(router=self._OfflineOnlyRouter())
+        result = _run(translator.translate(self.SOURCE, Language.HINDI,
+                                           entities=["TCS"]))
+        assert "राजस्व" in result.text
+        assert "ऋण" in result.text
+
+    def test_the_fallback_never_claims_to_be_a_translation(self):
+        translator = LLMTranslator(router=self._OfflineOnlyRouter())
+        result = _run(translator.translate(self.SOURCE, Language.HINDI))
+        assert result.translated is False
+        assert "offline composer" in result.detail
+
+    def test_a_live_provider_is_never_short_circuited(self):
+        """Wrongly skipping a live model would downgrade every translation."""
+        assert not LLMTranslator(router=self._LiveRouter())._offline_only()
+
+    def test_a_broken_router_degrades_to_trying_anyway(self):
+        class Broken:
+            def chain(self, preferred=None):
+                raise RuntimeError("router internals changed")
+
+        # Must not raise on the response path, and must not skip the model.
+        assert LLMTranslator(router=Broken())._offline_only() is False
