@@ -1,8 +1,8 @@
 # Multilingual AI Response Engine — deployment validation report
 
-**Status:** deployed, backend and frontend SHA `62f3607` (+ TRANS-001 follow-up)
+**Status:** deployed, backend SHA `1f2c9e7`, frontend SHA `62f3607`
 **Validation:** 29/29 production checks passed against the live database
-**Tests:** 2,762 passing, 0 failures (150 new)
+**Tests:** 2,778 passing, 0 failures (166 new)
 **Live:** https://backend-production-18956.up.railway.app
 
 ---
@@ -257,10 +257,19 @@ received pure English after paying for a call that could never have succeeded.
 
 The fail-closed guarantee worked perfectly — but the round trip was pointless.
 
-**Fix:** detect an offline-only provider chain up front and route to the
-glossary translator instead, which yields partially-rendered Hindi with every
-citation and figure intact, honestly labelled as terminology substitution
-rather than translation:
+**Fix, in two parts.** The first attempt checked the *configured* provider
+chain up front — and shipping it revealed it was insufficient. Production has a
+live provider **configured but exhausted**, so the chain looks healthy and the
+router falls through to the offline composer at request time. Re-testing the
+live deployment showed the guard never firing and the answer still coming back
+in pure English.
+
+The reliable signal is which provider **actually served** the response, which
+is only knowable afterwards. Both checks now run: the chain check avoids the
+call entirely where possible, and a runtime check on `response.provider`
+abandons after the first chunk otherwise. Either way the glossary translator
+takes over, yielding partially-rendered Hindi with every citation and figure
+intact, honestly labelled as terminology substitution rather than translation:
 
 ```
 राजस्व of 2,55,324 crore [revenue] grew. ऋण fell 10.2%.

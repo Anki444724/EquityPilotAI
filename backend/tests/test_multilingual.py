@@ -1040,3 +1040,76 @@ class TestOfflineProviderShortCircuit:
 
         # Must not raise on the response path, and must not skip the model.
         assert LLMTranslator(router=Broken())._offline_only() is False
+
+
+class TestRuntimeOfflineFallthrough:
+    """TRANS-001, second half — the case the first fix missed.
+
+    Checking the CONFIGURED chain up front was not enough. Production has a
+    live provider configured but exhausted, so the chain looks healthy and the
+    router falls through to the offline composer at request time. The only
+    reliable signal is which provider actually served the response, which is
+    knowable only afterwards.
+
+    Caught by testing the live deployment after the first fix had shipped.
+    """
+
+    SOURCE = "Revenue of ₹2,55,324 crore [revenue] grew. Debt fell 10.2% [debt]."
+
+    class _FallsBackRouter:
+        """Healthy chain, offline response — exactly what production does."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def chain(self, preferred=None):
+            class Config:
+                name = "Gemini"
+                payload_shape = "gemini"
+            return [Config()]
+
+        async def complete(self, request, preferred=None):
+            from app.domain.ai.types import CompletionResponse, TokenUsage
+            self.calls += 1
+            return CompletionResponse(
+                content="Unrelated template prose with no placeholders.",
+                provider="Offline", model="offline-composer",
+                usage=TokenUsage(),
+            )
+
+    def test_the_chain_guard_alone_does_not_catch_it(self):
+        translator = LLMTranslator(router=self._FallsBackRouter())
+        assert translator._offline_only() is False
+
+    def test_the_runtime_check_catches_it(self):
+        translator = LLMTranslator(router=self._FallsBackRouter())
+        result = _run(translator.translate(self.SOURCE, Language.HINDI,
+                                           entities=["TCS"]))
+        assert result.provider == "glossary"
+        assert "fell through to the offline composer" in result.detail
+
+    def test_it_still_renders_hindi_with_everything_intact(self):
+        translator = LLMTranslator(router=self._FallsBackRouter())
+        result = _run(translator.translate(self.SOURCE, Language.HINDI,
+                                           entities=["TCS"]))
+        assert "राजस्व" in result.text
+        assert "[revenue]" in result.text and "[debt]" in result.text
+        assert "2,55,324" in result.text
+        assert verify_preserved(self.SOURCE, result.text) == []
+
+    def test_it_abandons_after_the_first_chunk(self):
+        """Translating the rest against a composer that cannot translate is waste."""
+        router = self._FallsBackRouter()
+        long_text = "\n\n".join([self.SOURCE] * 60)   # forces several chunks
+        translator = LLMTranslator(router=router)
+        _run(translator.translate(long_text, Language.HINDI))
+        assert router.calls == 1
+
+    @pytest.mark.parametrize("provider,expected", [
+        ("Offline", True), ("offline", True), ("mock", True),
+        ("Gemini", False), ("OpenRouter", False), ("", False),
+    ])
+    def test_provider_name_detection(self, provider, expected):
+        from app.domain.ai.types import CompletionResponse
+        response = CompletionResponse(content="x", provider=provider, model="m")
+        assert LLMTranslator._is_offline(response) is expected

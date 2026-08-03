@@ -253,6 +253,31 @@ class LLMTranslator:
                     max_tokens=min(4000, max(700, int(len(chunk) / 1.4))),
                 )
                 response = await self.router.complete(request)
+
+                # TRANS-001 (second half). Checking the configured chain up
+                # front is not enough: production has a live provider
+                # CONFIGURED but exhausted, so the chain looks healthy and the
+                # router falls through to the offline composer at request
+                # time. The only reliable signal is which provider actually
+                # served the response, and that is only knowable afterwards.
+                #
+                # Abandon immediately rather than translating the remaining
+                # chunks against a composer that cannot translate any of them.
+                if self._is_offline(response):
+                    log.info("router fell through to the offline composer; "
+                             "using the glossary instead",
+                             language=language.value)
+                    result = await GlossaryTranslator().translate(
+                        text, language, entities=entities,
+                    )
+                    result.detail = (
+                        "The configured language model was unavailable and "
+                        "the request fell through to the offline composer, "
+                        "which cannot translate. " + result.detail
+                    )
+                    result.latency_ms = (time.perf_counter() - started) * 1000
+                    return result
+
                 pieces.append((response.content or "").strip())
                 usage = getattr(response, "usage", None)
                 prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
@@ -319,6 +344,18 @@ class LLMTranslator:
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             cost_usd=cost,
         )
+
+    @staticmethod
+    def _is_offline(response: Any) -> bool:
+        """Did the offline composer actually serve this response?
+
+        Matched on the provider name the response reports, which is the one
+        piece of evidence that cannot be wrong — the configured chain can look
+        healthy while the live provider is rate-limited and the router quietly
+        falls back.
+        """
+        name = str(getattr(response, "provider", "") or "").strip().lower()
+        return name in {"offline", "mock"}
 
     def _offline_only(self) -> bool:
         """True when the only reachable provider cannot actually translate.
