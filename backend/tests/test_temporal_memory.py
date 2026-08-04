@@ -437,3 +437,57 @@ def test_completion_budget_accounts_for_reasoning_tokens():
     assert MAX_COMPLETION_TOKENS >= 8000, (
         "budget too small for a model that reasons before answering"
     )
+
+
+def test_observation_run_as_dict():
+    from app.services.knowledge.temporal import ObservationRun
+    run = ObservationRun(company_id="company-abc")
+    run.generated = 3
+    run_dict = run.as_dict()
+    assert run_dict["company_id"] == "company-abc"
+    assert run_dict["generated"] == 3
+
+
+def test_real_evidence_for_summaries_and_chunks(db, company):
+    from app.models.knowledge import DocumentSummary
+    from app.models.document import Document, DocumentChunk
+
+    doc = Document(id=33, company_id=company.id, filename="fy25.pdf", doc_type="annual_report", file_format="pdf", content_hash="hash33")
+    db.add(doc)
+    db.commit()
+
+    # Create summary
+    summary = DocumentSummary(
+        document_id=33, company_id=company.id, kind="business_overview",
+        content="This is the summary content for FY2025.", fiscal_year=2025, word_count=100
+    )
+    db.add(summary)
+    db.commit()
+
+    service = TemporalMemoryService(db)
+    evidence, doc_ids = service._evidence_for(company.id, 2025)
+    assert "This is the summary content" in evidence
+    assert doc_ids == [33]
+
+    # Test fallback to chunks when no summaries exist
+    doc2 = Document(id=34, company_id=company.id, filename="fy26.pdf", doc_type="annual_report", file_format="pdf", content_hash="hash34", fiscal_year=2026)
+    db.add(doc2)
+    db.commit()
+
+    chunk = DocumentChunk(
+        document_id=34, chunk_index=0, text="This is fallback chunk text for FY2026.",
+        fingerprint="fingerprint34"
+    )
+    db.add(chunk)
+    db.commit()
+
+    evidence2, doc_ids2 = service._evidence_for(company.id, 2026)
+    assert "This is fallback chunk" in evidence2
+    assert doc_ids2 == [34]
+
+
+def test_real_metrics_for(db, company):
+    service = TemporalMemoryService(db)
+    metrics = service._metrics_for(company.id, 2025)
+    assert isinstance(metrics, dict)
+

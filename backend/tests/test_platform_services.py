@@ -1404,6 +1404,15 @@ class TestWorker:
         # Immediately again: nothing is due, so nothing is enqueued.
         assert scheduler.tick()["enqueued"] == 0
 
+    def test_in_process_supervision(self, session_factory):
+        from app.services.platform.jobs.worker import start_in_process, stop_in_process
+        from unittest.mock import MagicMock, patch
+
+        with patch("app.core.config.settings.WORKER_ENABLED", True), \
+             patch("app.core.config.settings.SCHEDULER_ENABLED", True):
+            start_in_process(session_factory)
+            stop_in_process()
+
 
 # ===========================================================================
 class TestObservability:
