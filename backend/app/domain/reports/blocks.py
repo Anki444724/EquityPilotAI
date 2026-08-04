@@ -192,7 +192,7 @@ class Heading(Block):
     level: int = 2
 
     def __init__(self, text: str, level: int = 2, **kwargs):
-        super().__init__(BlockKind.HEADING, **kwargs)
+        Block.__init__(self, BlockKind.HEADING, **kwargs)
         self.text = text
         self.level = level
 
@@ -204,7 +204,7 @@ class Paragraph(Block):
     text: str = ""
 
     def __init__(self, text: str, **kwargs):
-        super().__init__(BlockKind.PARAGRAPH, **kwargs)
+        Block.__init__(self, BlockKind.PARAGRAPH, **kwargs)
         self.text = text
 
 
@@ -214,7 +214,7 @@ class Bullets(Block):
     ordered: bool = False
 
     def __init__(self, items: Sequence[str], ordered: bool = False, **kwargs):
-        super().__init__(BlockKind.BULLETS, **kwargs)
+        Block.__init__(self, BlockKind.BULLETS, **kwargs)
         self.items = list(items)
         self.ordered = ordered
 
@@ -227,7 +227,7 @@ class KeyValue(Block):
     columns: int = 2
 
     def __init__(self, pairs: Sequence[tuple[str, str]], columns: int = 2, **kwargs):
-        super().__init__(BlockKind.KEY_VALUE, **kwargs)
+        Block.__init__(self, BlockKind.KEY_VALUE, **kwargs)
         self.pairs = [(str(k), str(v)) for k, v in pairs]
         self.columns = columns
 
@@ -253,7 +253,7 @@ class Table(Block):
         emphasis_rows: Sequence[int] = (),
         **kwargs,
     ):
-        super().__init__(BlockKind.TABLE, **kwargs)
+        Block.__init__(self, BlockKind.TABLE, **kwargs)
         self.header = [str(h) for h in header]
         self.rows = [[str(cell) for cell in row] for row in rows]
         # Default: first column left, the rest right. Financial tables are read
@@ -279,7 +279,7 @@ class MetricGrid(Block):
     def __init__(
         self, metrics: Sequence[tuple[str, str, str]], columns: int = 4, **kwargs
     ):
-        super().__init__(BlockKind.METRIC_GRID, **kwargs)
+        Block.__init__(self, BlockKind.METRIC_GRID, **kwargs)
         #: (label, value, hint)
         self.metrics = [(str(a), str(b), str(c)) for a, b, c in metrics]
         self.columns = columns
@@ -319,7 +319,7 @@ class Chart(Block):
         row_labels: Sequence[str] = (),
         **kwargs,
     ):
-        super().__init__(BlockKind.CHART, **kwargs)
+        Block.__init__(self, BlockKind.CHART, **kwargs)
         self.chart_kind = chart_kind
         self.title = title
         self.labels = [str(x) for x in labels]
@@ -352,7 +352,7 @@ class Callout(Block):
     def __init__(
         self, title: str, text: str, tone: CalloutTone = CalloutTone.NEUTRAL, **kwargs
     ):
-        super().__init__(BlockKind.CALLOUT, **kwargs)
+        Block.__init__(self, BlockKind.CALLOUT, **kwargs)
         self.title = title
         self.text = text
         self.tone = tone
@@ -366,7 +366,7 @@ class Quote(Block):
     attribution: str = ""
 
     def __init__(self, text: str, attribution: str = "", **kwargs):
-        super().__init__(BlockKind.QUOTE, **kwargs)
+        Block.__init__(self, BlockKind.QUOTE, **kwargs)
         self.text = text
         self.attribution = attribution
 
@@ -374,13 +374,13 @@ class Quote(Block):
 @dataclass(slots=True)
 class Divider(Block):
     def __init__(self, **kwargs):
-        super().__init__(BlockKind.DIVIDER, **kwargs)
+        Block.__init__(self, BlockKind.DIVIDER, **kwargs)
 
 
 @dataclass(slots=True)
 class PageBreak(Block):
     def __init__(self, **kwargs):
-        super().__init__(BlockKind.PAGE_BREAK, **kwargs)
+        Block.__init__(self, BlockKind.PAGE_BREAK, **kwargs)
 
 
 @dataclass(slots=True)
@@ -395,7 +395,7 @@ class Insufficient(Block):
     STATEMENT = "Insufficient evidence."
 
     def __init__(self, reason: str = "", **kwargs):
-        super().__init__(BlockKind.INSUFFICIENT, **kwargs)
+        Block.__init__(self, BlockKind.INSUFFICIENT, **kwargs)
         self.reason = reason
 
     @property
@@ -412,7 +412,7 @@ class CitationList(Block):
     entries: list[Evidence] = field(default_factory=list)
 
     def __init__(self, entries: Sequence[Evidence], **kwargs):
-        super().__init__(BlockKind.CITATION_LIST, **kwargs)
+        Block.__init__(self, BlockKind.CITATION_LIST, **kwargs)
         self.entries = list(entries)
 
 

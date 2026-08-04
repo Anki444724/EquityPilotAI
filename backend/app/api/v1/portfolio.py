@@ -741,7 +741,7 @@ def remove_watchlist_entry(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.patch(\"/watchlists/{watchlist_id}\", response_model=WatchlistOut)
+@router.patch("/watchlists/{watchlist_id}", response_model=WatchlistOut)
 def update_watchlist(
     watchlist_id: int,
     payload: WatchlistUpdate,
@@ -758,7 +758,7 @@ def update_watchlist(
 
 
 @router.delete(
-    \"/watchlists/{watchlist_id}\",
+    "/watchlists/{watchlist_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )

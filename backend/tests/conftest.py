@@ -170,6 +170,17 @@ _engine = create_engine(
 Base.metadata.create_all(bind=_engine)
 TestingSession = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
 
+# A few integration helpers construct a session through ``SessionLocal``
+# rather than FastAPI's ``get_db`` dependency.  Point that factory at the same
+# seeded StaticPool database as the override; otherwise those helpers open the
+# uninitialised configured SQLite file and fail with "no such table:
+# companies".  Both references must be replaced because ``app.main`` imported the factory by value.
+import app.db.base as _db_base  # noqa: E402
+import app.main as _main  # noqa: E402
+_db_base.SessionLocal = TestingSession
+# ``main`` imported the factory by value before it was replaced above.
+_main.SessionLocal = TestingSession
+
 with TestingSession() as _db:
     seed(_db)
     seed_module2(_db)
