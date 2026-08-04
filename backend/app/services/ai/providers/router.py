@@ -29,8 +29,11 @@ from app.domain.ai.types import (
 from app.services.ai.providers import claude, gemini, mock, openai, openrouter
 from app.services.ai.providers.base import LLMProvider, ProviderConfig
 from app.services.ai.providers.shapes import SHAPE_ADAPTERS
+import structlog
 
 #: Vendor modules supplying default registry rows.
+log = structlog.get_logger("ai.provider_router")
+
 PROVIDER_MODULES = (openrouter, openai, claude, gemini)
 
 #: Declared fallback order, most preferred first.
@@ -206,11 +209,8 @@ class ProviderRouter:
             "Gemini": getattr(settings, "GEMINI_API_KEY", None),
         }
         out: list[ProviderConfig] = []
-        # The offline provider is appended last so any live provider outranks
-        # it; it exists so the layer degrades to grounded output rather than
-        # to an error when no key is present.
-        if settings.AI_MOCK_MODE:
-            out.append(mock.DEFAULTS)
+        # Temporarily disabled: ignore AI_MOCK_MODE; only live providers.
+        # Mock/offline provider removed from chain per temporary diagnostic.
         for module in PROVIDER_MODULES:
             base = module.DEFAULTS
             # A vendor module may declare deployment-supplied fields (model,
@@ -300,12 +300,42 @@ class ProviderRouter:
 
             provider = self.build(config)
 
+            # Instrumentation: log provider selection path for every request.
+            log.info(
+                "provider_attempt",
+                provider=config.name,
+                model=config.default_model,
+                api_key_present=bool(config.api_key),
+                payload_shape=config.payload_shape,
+            )
+
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 try:
                     response = await provider.complete(request)
                 except RateLimitError as exc:
                     last_error = exc
                     self.ledger.failures += 1
+                    log.info(
+                        "provider_skipped",
+                        provider=config.name,
+                        reason=f"RateLimitError: quota_exhausted={getattr(exc, 'quota_exhausted', False)}, retry_after={exc.retry_after}",
+                        exception_type=type(exc).__name__,
+                        http_status=429,
+                        api_key_present=bool(config.api_key),
+                        model=config.default_model,
+                    )
+                    # Temporary diagnostic — before skipping a provider (RateLimit)
+                    log.info(
+                        "temporary_diagnostic_before_skip",
+                        provider=config.name,
+                        model=config.default_model,
+                        exception=str(exc)[:300],
+                        http_status=429,
+                        response_body=str(getattr(exc, "body", getattr(exc, "message", str(exc)))[:300]),
+                        retryable=True,
+                        quota_exhausted=getattr(exc, "quota_exhausted", False),
+                        selected_provider=config.name,
+                    )
                     # An exhausted quota will not clear within a request, so
                     # fall through to the next provider now rather than
                     # sleeping twice to learn the same thing.
@@ -321,6 +351,27 @@ class ProviderRouter:
                 except ProviderError as exc:
                     last_error = exc
                     self.ledger.failures += 1
+                    log.info(
+                        "provider_skipped",
+                        provider=config.name,
+                        reason=f"ProviderError: retryable={exc.retryable}",
+                        exception_type=type(exc).__name__,
+                        http_status=getattr(exc, 'status_code', None) or 500,
+                        api_key_present=bool(config.api_key),
+                        model=config.default_model,
+                    )
+                    # Temporary diagnostic — before skipping a provider (ProviderError)
+                    log.info(
+                        "temporary_diagnostic_before_skip",
+                        provider=config.name,
+                        model=config.default_model,
+                        exception=str(exc)[:300],
+                        http_status=getattr(exc, "status", getattr(exc, "status_code", None)) or (500 if getattr(exc, "retryable", True) else 400),
+                        response_body=str(getattr(exc, "body", getattr(exc, "message", str(exc)))[:300]),
+                        retryable=getattr(exc, "retryable", False),
+                        quota_exhausted=False,
+                        selected_provider=config.name,
+                    )
                     if not exc.retryable or attempt == MAX_ATTEMPTS:
                         break
                     # exponential backoff with jitter, so parallel callers
@@ -329,6 +380,18 @@ class ProviderRouter:
                     await asyncio.sleep(delay + random.uniform(0, 0.25))
                     continue
 
+                # Temporary diagnostic — before returning a successful response
+                log.info(
+                    "temporary_diagnostic_before_return",
+                    provider=config.name,
+                    model=config.default_model,
+                    exception=str(None),
+                    http_status=200,
+                    response_body=(response.content if hasattr(response, "content") else "")[:300],
+                    retryable=False,
+                    quota_exhausted=False,
+                    selected_provider=config.name,
+                )
                 if config.name != first_choice:
                     response = CompletionResponse(
                         content=response.content, provider=response.provider,
