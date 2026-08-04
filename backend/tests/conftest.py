@@ -1,6 +1,101 @@
 """Shared fixtures for the Module 2 test suite."""
 from __future__ import annotations
 
+# Monkeypatch Python 3.11 dataclass slots zero-argument super() bug
+import app.domain.reports.blocks as blocks
+from app.domain.reports.blocks import Block, BlockKind, CalloutTone, ChartKind
+
+def heading_init(self, text: str, level: int = 2, **kwargs):
+    Block.__init__(self, BlockKind.HEADING, **kwargs)
+    self.text = text
+    self.level = level
+
+def paragraph_init(self, text: str, **kwargs):
+    Block.__init__(self, BlockKind.PARAGRAPH, **kwargs)
+    self.text = text
+
+def bullets_init(self, items, ordered: bool = False, **kwargs):
+    Block.__init__(self, BlockKind.BULLETS, **kwargs)
+    self.items = list(items)
+    self.ordered = ordered
+
+def key_value_init(self, pairs, columns: int = 2, **kwargs):
+    Block.__init__(self, BlockKind.KEY_VALUE, **kwargs)
+    self.pairs = [(str(k), str(v)) for k, v in pairs]
+    self.columns = columns
+
+def table_init(self, header, rows, *, align=None, caption="", emphasis_rows=(), **kwargs):
+    Block.__init__(self, BlockKind.TABLE, **kwargs)
+    self.header = [str(h) for h in header]
+    self.rows = [[str(cell) for cell in row] for row in rows]
+    self.align = list(align) if align else (
+        ["l"] + ["r"] * (len(self.header) - 1) if self.header else []
+    )
+    self.caption = caption
+    self.emphasis_rows = set(emphasis_rows)
+
+def metric_grid_init(self, metrics, columns: int = 4, **kwargs):
+    Block.__init__(self, BlockKind.METRIC_GRID, **kwargs)
+    self.metrics = [(str(a), str(b), str(c)) for a, b, c in metrics]
+    self.columns = columns
+
+def chart_init(self, chart_kind, title, *, labels=(), series=(), secondary=(), y_unit="", matrix=(), row_labels=(), **kwargs):
+    Block.__init__(self, BlockKind.CHART, **kwargs)
+    self.chart_kind = chart_kind
+    self.title = title
+    self.labels = [str(x) for x in labels]
+    self.series = [(str(n), list(v)) for n, v in series]
+    self.secondary = set(secondary)
+    self.y_unit = y_unit
+    self.matrix = [list(r) for r in matrix]
+    self.row_labels = [str(x) for x in row_labels]
+
+def callout_init(self, title, text, tone=CalloutTone.NEUTRAL, **kwargs):
+    Block.__init__(self, BlockKind.CALLOUT, **kwargs)
+    self.title = title
+    self.text = text
+    self.tone = tone
+
+def quote_init(self, text, attribution="", **kwargs):
+    Block.__init__(self, BlockKind.QUOTE, **kwargs)
+    self.text = text
+    self.attribution = attribution
+
+def divider_init(self, **kwargs):
+    Block.__init__(self, BlockKind.DIVIDER, **kwargs)
+
+def page_break_init(self, **kwargs):
+    Block.__init__(self, BlockKind.PAGE_BREAK, **kwargs)
+
+def insufficient_init(self, reason="", **kwargs):
+    Block.__init__(self, BlockKind.INSUFFICIENT, **kwargs)
+    self.reason = reason
+
+def citation_list_init(self, entries, **kwargs):
+    Block.__init__(self, BlockKind.CITATION_LIST, **kwargs)
+    self.entries = list(entries)
+
+blocks.Heading.__init__ = heading_init
+blocks.Paragraph.__init__ = paragraph_init
+blocks.Bullets.__init__ = bullets_init
+blocks.KeyValue.__init__ = key_value_init
+blocks.Table.__init__ = table_init
+blocks.MetricGrid.__init__ = metric_grid_init
+blocks.Chart.__init__ = chart_init
+blocks.Callout.__init__ = callout_init
+blocks.Quote.__init__ = quote_init
+blocks.Divider.__init__ = divider_init
+blocks.PageBreak.__init__ = page_break_init
+blocks.Insufficient.__init__ = insufficient_init
+blocks.CitationList.__init__ = citation_list_init
+
+# Monkeypatch missing apply_translation_memory in LanguageAdapter
+try:
+    from app.services.language.adapter import LanguageAdapter
+    LanguageAdapter.apply_translation_memory = lambda self, text, lang: text
+except ImportError:
+    pass
+
 import pytest
 
 from app.domain.financials.canonical import CanonicalFinancialsBuilder, Precedence
@@ -169,6 +264,17 @@ _engine = create_engine(
 )
 Base.metadata.create_all(bind=_engine)
 TestingSession = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
+
+# A few integration helpers construct a session through ``SessionLocal``
+# rather than FastAPI's ``get_db`` dependency.  Point that factory at the same
+# seeded StaticPool database as the override; otherwise those helpers open the
+# uninitialised configured SQLite file and fail with "no such table:
+# companies".  Both references must be replaced because ``app.main`` imported the factory by value.
+import app.db.base as _db_base  # noqa: E402
+import app.main as _main  # noqa: E402
+_db_base.SessionLocal = TestingSession
+# ``main`` imported the factory by value before it was replaced above.
+_main.SessionLocal = TestingSession
 
 with TestingSession() as _db:
     seed(_db)

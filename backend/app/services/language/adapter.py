@@ -347,7 +347,7 @@ class LanguageAdapter:
         # Phase 2: apply translation memory for repeated phrases (improves consistency)
         final_text = result.text
         if result.translated:
-            final_text = self.apply_translation_memory(result.text, language)
+            final_text = get_translation_memory().apply(result.text, language)
 
         return AdaptedResponse(
             text=final_text,
