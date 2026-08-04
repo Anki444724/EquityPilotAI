@@ -142,6 +142,19 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from app.db.base import Base, get_db  # noqa: E402
+import os
+# Initialize the CI SQLite database file (sqlite+pysqlite:///./ci.db) with schema
+# This ensures the database has all required tables when tests use file-based SQLite
+from sqlalchemy import create_engine
+from app.core.config import settings
+if settings.DATABASE_URL.startswith("sqlite") and not ":memory:" in settings.DATABASE_URL:
+    # Create the .db file schema if it doesn't exist
+    try:
+        file_engine = create_engine(settings.DATABASE_URL)
+        Base.metadata.create_all(bind=file_engine)
+        file_engine.dispose()
+    except Exception:
+        pass  # If initialization fails, tests will handle it
 # `create_all` below builds the schema from whatever models have been
 # imported, so a model module that nothing else happens to import is silently
 # missing its table and every test touching it fails with "no such table".

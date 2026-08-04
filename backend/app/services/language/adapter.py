@@ -40,7 +40,7 @@ import structlog
 
 from app.domain.language.detect import Detection, choose_language, detect, detect_mixed
 from app.domain.language.glossary import BY_ENGLISH, TERMS
-from app.domain.language.translation_memory import get_translation_memory
+from app.domain.language.translation_memory import get_translation_memory, apply_translation_memory
 from app.domain.language.types import (
     CANONICAL_LANGUAGE, Language, LanguageSpec, spec_for,
 )
@@ -347,7 +347,7 @@ class LanguageAdapter:
         # Phase 2: apply translation memory for repeated phrases (improves consistency)
         final_text = result.text
         if result.translated:
-            final_text = self.apply_translation_memory(result.text, language)
+            final_text = apply_translation_memory(result.text, language)
 
         return AdaptedResponse(
             text=final_text,
