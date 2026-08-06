@@ -472,7 +472,17 @@ export function HoldingsTable({ holdings }: { holdings: Holding[] }) {
               </td>
               <td className="num px-3 py-2 text-right">{h.quantity.toLocaleString("en-IN")}</td>
               <td className="num px-3 py-2 text-right">{money(h.average_cost)}</td>
-              <td className="num px-3 py-2 text-right">{money(h.current_price)}</td>
+              <td className="num px-3 py-2 text-right" title={h.price_source ?? undefined}>
+                <div>{money(h.current_price)}</div>
+                {h.price_source && (
+                  <div className="text-[0.625rem] font-normal text-[var(--text-muted)]">{h.price_source}</div>
+                )}
+                {h.market_status && (
+                  <div className="text-[0.625rem] font-normal text-[var(--text-muted)]">
+                    {h.market_status}{h.last_updated ? ` · ${h.last_updated}` : ""}
+                  </div>
+                )}
+              </td>
               <td className="num px-3 py-2 text-right">{money(h.market_value)}</td>
               <td className={cn("num px-3 py-2 text-right", toneOf(h.unrealised_pnl))}>
                 {money(h.unrealised_pnl)}
@@ -761,7 +771,17 @@ export function WatchlistTable({
                 <div className="font-medium text-[var(--text)]">{row.ticker}</div>
                 <div className="truncate text-xs text-[var(--text-muted)]">{row.name}</div>
               </td>
-              <td className="num px-3 py-2 text-right">{money(row.price)}</td>
+              <td className="num px-3 py-2 text-right" title={row.price_source ?? undefined}>
+                <div>{money(row.price)}</div>
+                {row.price_source && (
+                  <div className="text-[0.625rem] font-normal text-[var(--text-muted)]">{row.price_source}</div>
+                )}
+                {row.market_status && (
+                  <div className="text-[0.625rem] font-normal text-[var(--text-muted)]">
+                    {row.market_status}{row.last_updated ? ` · ${row.last_updated}` : ""}
+                  </div>
+                )}
+              </td>
               <td className="num px-3 py-2 text-right">{money(row.buy_below)}</td>
               <td className="num px-3 py-2 text-right">{money(row.target_price)}</td>
               <td className={cn("num px-3 py-2 text-right", toneOf(row.upside))}>

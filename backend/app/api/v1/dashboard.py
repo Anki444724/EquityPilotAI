@@ -10,6 +10,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.base import get_db
 from app.models.company import Company, FinancialFact
 from app.schemas.company import CompanySummary
+from app.services.live_market import LiveMarketService
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -72,6 +73,20 @@ def overview(
         select(Company).order_by(Company.created_at.desc()).limit(8)
     ).scalars().all()
 
+    market = LiveMarketService(db).attach_many(list(largest) + list(recent))
+    largest_out = [
+        CompanySummary.model_validate(c).model_copy(
+            update={"market": market.get(c.ticker)}
+        )
+        for c in largest
+    ]
+    recent_out = [
+        CompanySummary.model_validate(c).model_copy(
+            update={"market": market.get(c.ticker)}
+        )
+        for c in recent
+    ]
+
     return DashboardOverview(
         coverage=CoverageStats(
             companies=companies,
@@ -84,6 +99,6 @@ def overview(
             SectorBreakdown(sector=s, count=c, market_cap=float(m))
             for s, c, m in sector_rows
         ],
-        largest=[CompanySummary.model_validate(c) for c in largest],
-        recently_added=[CompanySummary.model_validate(c) for c in recent],
+        largest=largest_out,
+        recently_added=recent_out,
     )

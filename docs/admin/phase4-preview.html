@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EquityPilot Admin — Phase 4 Preview (Market Operations Center)</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --elev:#151a25; --border:#232b3a;
+    --text:#e6eaf2; --muted:#8b94a7; --accent:#6ea8ff; --gain:#3ecf8e;
+    --loss:#ff6b6b; --warn:#ffb454; --subtle:#1a2030;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:236px;background:var(--elev);border-right:1px solid var(--border);flex-shrink:0;position:sticky;top:0;height:100vh;overflow:auto}
+  .brand{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border)}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--accent);color:#04121f;font-weight:800;font-size:13px;display:grid;place-items:center}
+  .brand .t{font-size:13px;font-weight:700}.brand .s{font-size:10px;color:var(--muted)}
+  nav{padding:8px}
+  .sec{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:12px 10px 4px}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+  .item.active{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .item.dim{color:rgba(139,148,167,.45);cursor:default}
+  .item .ph{margin-left:auto;font-size:9px;background:var(--subtle);color:var(--muted);border-radius:4px;padding:1px 5px}
+  .main{flex:1;padding:22px 28px;max-width:1280px}
+  h1{font-size:19px;font-weight:700}.sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .block{margin-top:20px}.muted{color:var(--muted);font-size:10px}
+  .tabs{display:flex;gap:6px;margin-top:14px;flex-wrap:wrap}
+  .tab{padding:6px 12px;border-radius:7px;font-size:12px;border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:5px}
+  .tab.on{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:12px}
+  .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .card .v{font-size:20px;font-weight:700;margin-top:4px}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(4,1fr);margin-top:12px}
+  .pill{display:inline-flex;border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:10px;font-weight:600;text-transform:capitalize}
+  .pill.ok{color:var(--gain);border-color:rgba(62,207,142,.3);background:rgba(62,207,142,.08)}
+  .pill.warn{color:var(--warn);border-color:rgba(255,180,84,.3);background:rgba(255,180,84,.08)}
+  .pill.off{color:var(--muted)}
+  .pill.accent{color:var(--accent);border-color:rgba(110,168,255,.3);background:rgba(110,168,255,.08)}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  .btn.sm{padding:2px 7px;font-size:11px}
+  .tablewrap{margin-top:10px;border:1px solid var(--border);border-radius:10px;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:var(--elev);text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;padding:8px 10px}
+  th.r,td.r{text-align:right}
+  td{border-top:1px solid var(--border);padding:8px 10px}
+  .num{font-variant-numeric:tabular-nums}
+  .note{font-size:10px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">EP</div><div><div class="t">EquityPilot Admin</div><div class="s">Control room</div></div></div>
+    <nav>
+      <div class="sec">Overview</div>
+      <div class="item">◧ Dashboard</div><div class="item">◈ Activity History</div><div class="item">♻ Recycle Bin</div>
+      <div class="sec">Content</div>
+      <div class="item">🏢 Companies</div><div class="item">▤ Financial Statements</div>
+      <div class="item active">◉ Live Market</div>
+      <div class="item dim">✦ AI Score<span class="ph">P5</span></div>
+      <div class="item dim">📄 Documents<span class="ph">P6</span></div>
+      <div class="item dim">📰 News<span class="ph">P7</span></div>
+      <div class="item dim">⊞ Sectors<span class="ph">P8</span></div>
+      <div class="sec">Platform</div>
+      <div class="item dim">👥 Users<span class="ph">P9</span></div>
+      <div class="item dim">🔑 API Settings<span class="ph">P10</span></div>
+      <div class="item dim">⚙ System Settings<span class="ph">P11</span></div>
+      <div class="item dim">🛢 Database<span class="ph">P12</span></div>
+      <div class="item dim">📜 Logs<span class="ph">P13</span></div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Market Operations Center</h1>
+    <div class="sub">The heart of EquityPilot AI — provider health, manual overrides, realtime ops.</div>
+
+    <div class="tabs">
+      <div class="tab on">◔ Realtime</div><div class="tab">⚡ Providers</div><div class="tab">◉ Overrides</div>
+      <div class="tab">🛢 Cache</div><div class="tab">☰ Scheduler</div><div class="tab">◈ WebSocket</div><div class="tab">↺ Historical Sync</div><div class="tab">📜 Logs</div>
+    </div>
+
+    <!-- Realtime dashboard -->
+    <div class="grid">
+      <div class="card"><div class="k">Connected symbols</div><div class="v">128</div></div>
+      <div class="card"><div class="k">Cache size</div><div class="v">128</div></div>
+      <div class="card"><div class="k">Cache hit rate</div><div class="v">92%</div></div>
+      <div class="card"><div class="k">Active overrides</div><div class="v" style="color:var(--warn)">1</div></div>
+      <div class="card"><div class="k">Providers available</div><div class="v">3</div></div>
+      <div class="card"><div class="k">Market</div><div class="v" style="color:var(--loss)">Closed</div></div>
+      <div class="card"><div class="k">Redis</div><div class="v">memory</div></div>
+      <div class="card"><div class="k">TTL</div><div class="v">300s</div></div>
+    </div>
+
+    <!-- Providers -->
+    <div class="card">
+      <div class="k">Provider registry &amp; health</div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Provider</th><th class="r">Priority</th><th>Status</th><th class="r">Latency</th><th class="r">Calls</th><th>Last success</th></tr></thead>
+          <tbody>
+            <tr><td><b>Finnhub</b></td><td class="num r">1</td><td><span class="pill off">unconfigured</span></td><td class="num r">—</td><td class="num r">0</td><td>—</td></tr>
+            <tr><td><b>Financial Modeling Prep</b></td><td class="num r">2</td><td><span class="pill off">unconfigured</span></td><td class="num r">—</td><td class="num r">0</td><td>—</td></tr>
+            <tr><td><b>Yahoo Finance (Fallback)</b></td><td class="num r">3</td><td><span class="pill ok">live</span></td><td class="num r">320ms</td><td class="num r">42</td><td>13:30 UTC</td></tr>
+            <tr><td><b>Infoway</b></td><td class="num r">4</td><td><span class="pill off">unconfigured</span></td><td class="num r">—</td><td class="num r">0</td><td>—</td></tr>
+            <tr><td><b>AlphaVantage</b></td><td class="num r">5</td><td><span class="pill off">unconfigured</span></td><td class="num r">—</td><td class="num r">0</td><td>—</td></tr>
+            <tr><td><b>Polygon</b></td><td class="num r">6</td><td><span class="pill off">unconfigured</span></td><td class="num r">—</td><td class="num r">0</td><td>—</td></tr>
+            <tr><td><b>Custom Provider</b></td><td class="num r">7</td><td><span class="pill off">unconfigured</span></td><td class="num r">—</td><td class="num r">0</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Overrides -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="k">Active overrides</div>
+        <div><button class="btn primary">＋ New override</button> <button class="btn">🗑 Clear all</button></div>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Ticker</th><th class="r">Price</th><th class="r">Volume</th><th class="r">PE</th><th>Reason</th><th>Expires</th><th></th></tr></thead>
+          <tbody>
+            <tr><td><b>RELIANCE</b></td><td class="num r">1,500.0</td><td class="num r">5,000,000</td><td class="num r">—</td><td>Ops center test</td><td>never</td><td><button class="btn sm">✕</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">Manual overrides are consumed by every surface — dashboard, company, portfolio, watchlist, AI — until they expire or are cleared.</div>
+    </div>
+
+    <!-- Cache manager -->
+    <div class="card">
+      <div class="k">Cache manager</div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary">Clear cache</button><button class="btn">Refresh cache</button></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

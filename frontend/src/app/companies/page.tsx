@@ -3,7 +3,7 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, EmptyState, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
-import { marketCap, rupees } from "@/lib/format";
+import { marketCap, marketPrice, rupees } from "@/lib/format";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Building2, Search } from "lucide-react";
 import Link from "next/link";
@@ -104,7 +104,7 @@ export default function CompaniesPage() {
                     </td>
                     <td className="!text-left text-xs text-[var(--text-muted)]">{c.sector ?? "—"}</td>
                     <td className="!text-left text-xs text-[var(--text-muted)]">{c.industry ?? "—"}</td>
-                    <td className="num">{rupees(c.current_price)}</td>
+                    <td className="num">{rupees(marketPrice(c))}</td>
                     <td className="num font-medium">{marketCap(c.market_cap)}</td>
                   </tr>
                 ))}

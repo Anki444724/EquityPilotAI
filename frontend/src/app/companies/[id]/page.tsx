@@ -4,7 +4,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { CompanyTabs } from "@/components/layout/company-tabs";
 import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
 import { api, scoringApi, watchlistApi } from "@/lib/api";
-import { crore, fiscalYear, marketCap, percent, plainNumber, rupees, signClass } from "@/lib/format";
+import { crore, fiscalYear, marketCap, marketPrice, percent, plainNumber, rupees, signClass } from "@/lib/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Database, ExternalLink, Info, Plus, Star } from "lucide-react";
 import Link from "next/link";
@@ -124,10 +124,22 @@ export default function CompanyProfilePage({
               </p>
             </div>
             <div className="text-right">
-              <div className="num text-2xl font-semibold">{rupees(c.current_price)}</div>
+              <div className="num text-2xl font-semibold">{rupees(marketPrice(c))}</div>
+              {c.market && c.market.change !== null && c.market.change !== undefined && (
+                <div className={`mt-0.5 text-[0.6875rem] font-medium ${signClass(c.market.change)}`}>
+                  {c.market.change >= 0 ? "+" : ""}{rupees(c.market.change)}{" "}
+                  ({c.market.change_percent !== null && c.market.change_percent !== undefined && c.market.change_percent >= 0 ? "+" : ""}
+                  {percent(c.market.change_percent)})
+                </div>
+              )}
               <div className="mt-0.5 text-[0.6875rem] uppercase tracking-wider text-[var(--text-muted)]">
                 {marketCap(c.market_cap)} market cap
               </div>
+              {c.market?.price_source && (
+                <div className="mt-0.5 text-[0.625rem] text-[var(--text-muted)]">
+                  {c.market.price_source}{c.market.market_status ? ` · ${c.market.market_status}` : ""}
+                </div>
+              )}
               {c.website && (
                 <a
                   href={c.website}

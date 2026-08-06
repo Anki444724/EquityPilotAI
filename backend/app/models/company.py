@@ -7,14 +7,21 @@ Universal Company Engine becomes genuinely unbounded here.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import (
-    Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Exchange(StrEnum):
@@ -95,11 +102,32 @@ class Company(Base):
     website: Mapped[str | None] = mapped_column(String(300))
     incorporated_year: Mapped[int | None] = mapped_column(Integer)
 
+    # ---- Phase 2: enterprise company-management fields -----------------
+    #: Nominal value of one share (₹).
+    face_value: Mapped[float | None] = mapped_column(Float)
+    #: Date the company first listed.
+    listing_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ceo: Mapped[str | None] = mapped_column(String(160))
+    employees: Mapped[int | None] = mapped_column(Integer)
+    headquarters: Mapped[str | None] = mapped_column(String(200))
+    #: Logo / favicon URLs (uploaded or external).
+    logo_url: Mapped[str | None] = mapped_column(String(500))
+    favicon_url: Mapped[str | None] = mapped_column(String(500))
+    #: Soft-delete flag. Active rows are NULL; a deleted company keeps its
+    #: history so it can be restored from the recycle bin.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, index=True,
+    )
+
     #: Bumped whenever facts change, so cache keys invalidate atomically.
     data_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     facts: Mapped[list["FinancialFact"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
+    )
+    versions: Mapped[list["CompanyVersion"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan",
+        order_by="CompanyVersion.version",
     )
 
     __table_args__ = (
@@ -108,6 +136,8 @@ class Company(Base):
         # alone, which is what allows a US listing to coexist with an Indian
         # one that happens to share a symbol.
         Index("ix_company_sector_mcap", "sector", "market_cap"),
+        Index("ix_company_listing_status", "listing_status"),
+        Index("ix_company_exchange", "exchange"),
     )
 
     @property
@@ -166,4 +196,42 @@ class FinancialFact(Base):
         ),
         # The hot path: load every fact for one company in a single scan.
         Index("ix_fact_lookup", "company_id", "fiscal_year", "line_item"),
+    )
+
+
+class CompanyVersion(Base):
+    """An immutable snapshot of one company edit, for rollback and audit.
+
+    Every create/update records a row capturing the changed fields (before and
+    after). The latest row is the current state's provenance; rolling back to
+    an earlier version re-applies that snapshot and records a new row. This
+    satisfies both the "every edit logged" and "version history / rollback"
+    requirements without a per-field audit table.
+    """
+
+    __tablename__ = "company_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[str] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The actor who made the change.
+    actor_id: Mapped[str | None] = mapped_column(String(36))
+    actor_email: Mapped[str | None] = mapped_column(String(254))
+    #: {field: {"from": ..., "to": ...}} for the changed fields.
+    changes: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    #: Full editable-field state after this edit — the rollback target.
+    snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    #: "create" | "update" | "import" | "merge" | "rollback" | "restore"
+    change_type: Mapped[str] = mapped_column(String(16), default="update")
+    summary: Mapped[str] = mapped_column(String(400), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False, index=True,
+    )
+
+    company: Mapped[Company] = relationship(back_populates="versions")
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "version", name="uq_company_version"),
     )

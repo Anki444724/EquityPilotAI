@@ -93,6 +93,35 @@ def _score_response(analysis: AnalysisService, result: ScoreResult) -> ScoreResp
     )
 
 
+def _apply_ai_override(analysis: AnalysisService, score: ScoreResponse) -> ScoreResponse:
+    """If a manual AI override is active for this company, apply it.
+
+    Consulted by the scoring endpoint so the company page, dashboard, portfolio
+    and watchlist all consume the same manual AI score until it expires.
+    """
+    from app.services.ai_ops import AIOpsService
+    try:
+        db = analysis.db
+        overridden = AIOpsService(db).apply_override(
+            analysis.company, {
+                "overall_score": score.overall_score,
+                "recommendation": score.recommendation,
+                "summary": score.summary,
+            },
+        )
+        if overridden is None:
+            return score
+        return score.model_copy(update={
+            "overall_score": overridden["overall_score"],
+            "recommendation": overridden["recommendation"],
+            "summary": overridden["summary"],
+            "warnings": [*score.warnings, "AI score manually overridden"]
+            if overridden.get("overridden") else score.warnings,
+        })
+    except Exception:  # noqa: BLE001 - an override must never break scoring
+        return score
+
+
 def _profile_out(profile: WeightProfile) -> WeightProfileOut:
     from app.domain.scoring.weights import CATEGORY_LABELS
     return WeightProfileOut(
@@ -126,7 +155,7 @@ def get_scoring(
 
     if save:
         scoring.save_snapshot(result)
-    return _score_response(analysis, result)
+    return _apply_ai_override(analysis, _score_response(analysis, result))
 
 
 @router.get("/company/{ticker}/scoring/explanation", response_model=ExplanationResponse,

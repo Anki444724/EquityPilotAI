@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EquityPilot Admin — Phase 2 Preview (Company Management)</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --elev:#151a25; --border:#232b3a;
+    --text:#e6eaf2; --muted:#8b94a7; --accent:#6ea8ff; --gain:#3ecf8e;
+    --loss:#ff6b6b; --warn:#ffb454; --subtle:#1a2030; --radius:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:236px;background:var(--elev);border-right:1px solid var(--border);flex-shrink:0;position:sticky;top:0;height:100vh;overflow:auto}
+  .brand{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border)}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--accent);color:#04121f;font-weight:800;font-size:13px;display:grid;place-items:center}
+  .brand .t{font-size:13px;font-weight:700}.brand .s{font-size:10px;color:var(--muted)}
+  nav{padding:8px}
+  .sec{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:12px 10px 4px}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+  .item:hover{background:var(--subtle)}
+  .item.active{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .item.dim{color:rgba(139,148,167,.45);cursor:default}
+  .item .ph{margin-left:auto;font-size:9px;background:var(--subtle);color:var(--muted);border-radius:4px;padding:1px 5px}
+  .main{flex:1;padding:22px 28px;max-width:1280px}
+  h1{font-size:19px;font-weight:700}.sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .block{margin-top:20px}
+  .muted{color:var(--muted);font-size:10px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+  input,select{background:var(--elev);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:7px 10px;font-size:12px}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:7px 12px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  .btn.danger{color:var(--loss);border-color:rgba(255,107,107,.4)}
+  .btn.sm{padding:3px 8px;font-size:11px;border-radius:5px}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .tablewrap{margin-top:12px;border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:440px;background:var(--elev)}
+  table{width:100%;border-collapse:collapse;font-size:12px;min-width:980px}
+  th{position:sticky;top:0;background:var(--elev);text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);padding:9px 10px;z-index:2}
+  td{border-bottom:1px solid var(--border);padding:9px 10px;vertical-align:middle}
+  .pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:10px;font-weight:600;text-transform:capitalize}
+  .pill.ok{color:var(--gain);border-color:rgba(62,207,142,.3);background:rgba(62,207,142,.08)}
+  .note{font-size:10px;color:var(--muted);margin-top:10px}
+  .icon{font-size:13px;opacity:.85}
+  .modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;max-width:520px}
+  .frow{display:flex;justify-content:space-between;gap:8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">EP</div><div><div class="t">EquityPilot Admin</div><div class="s">Control room</div></div></div>
+    <nav>
+      <div class="sec">Overview</div>
+      <div class="item">◧ Dashboard</div><div class="item">◈ Activity History</div><div class="item">♻ Recycle Bin</div>
+      <div class="sec">Content</div>
+      <div class="item active">🏢 Companies</div>
+      <div class="item dim">▤ Financial Statements<span class="ph">P3</span></div>
+      <div class="item dim">◉ Live Market Data<span class="ph">P4</span></div>
+      <div class="item dim">✦ AI Score<span class="ph">P5</span></div>
+      <div class="item dim">📄 Documents<span class="ph">P6</span></div>
+      <div class="item dim">📰 News<span class="ph">P7</span></div>
+      <div class="item dim">⊞ Sectors<span class="ph">P8</span></div>
+      <div class="sec">Platform</div>
+      <div class="item dim">👥 Users<span class="ph">P9</span></div>
+      <div class="item dim">🔑 API Settings<span class="ph">P10</span></div>
+      <div class="item dim">⚙ System Settings<span class="ph">P11</span></div>
+      <div class="item dim">🛢 Database<span class="ph">P12</span></div>
+      <div class="item dim">📜 Logs<span class="ph">P13</span></div>
+      <div class="sec">Governance</div>
+      <div class="item">👥 Members</div><div class="item">💳 Billing</div><div class="item">◔ Usage</div><div class="item">🔑 API Keys</div><div class="item">📜 Audit Log</div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Company Management</h1>
+    <div class="sub">The heart of EquityPilot AI — 10,000+ company universe, CRUD, bulk, merge, versions.</div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input placeholder="Search name, symbol, ISIN, sector…" style="width:230px" />
+      <select><option>All sectors</option><option>IT</option><option>Banking</option><option>Energy</option></select>
+      <select><option>All industries</option></select>
+      <select><option>All exchanges</option><option>NSE</option><option>BSE</option></select>
+      <select><option>All listing statuses</option><option>Active</option></select>
+      <label class="muted" style="display:flex;align-items:center;gap:4px"><input type="checkbox" /> Include deleted</label>
+      <span style="flex:1"></span>
+      <button class="btn"><span class="icon">⇧</span> CSV</button>
+      <button class="btn"><span class="icon">▤</span> XLSX</button>
+      <button class="btn"><span class="icon">⇩</span></button>
+      <button class="btn"><span class="icon">▦</span> Bulk edit</button>
+      <button class="btn"><span class="icon">⧉</span> Merge</button>
+      <button class="btn primary">＋ Add company</button>
+    </div>
+
+    <!-- Table -->
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Company Name</th><th>Symbol</th><th>Sector</th><th>Industry</th>
+            <th>Market Cap</th><th>Listing Date</th><th>ISIN</th><th>BSE</th><th>Face</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><b>Reliance Industries Ltd</b></td><td>RELIANCE</td><td>Oil &amp; Gas</td><td>Refining</td><td>₹19,90,000 cr</td><td>—</td><td>INE002A01018</td><td>500325</td><td>10</td><td><span class="pill ok">active</span></td><td><span class="icon">✎ ◪ ⌫</span></td></tr>
+          <tr><td><b>Tata Consultancy Services Ltd</b></td><td>TCS</td><td>IT Services</td><td>IT Consulting</td><td>₹14,08,000 cr</td><td>—</td><td>INE467B01029</td><td>532540</td><td>1</td><td><span class="pill ok">active</span></td><td><span class="icon">✎ ◪ ⌫</span></td></tr>
+          <tr><td><b>HDFC Bank Ltd</b></td><td>HDFCBANK</td><td>Banking</td><td>Private Bank</td><td>₹12,80,000 cr</td><td>—</td><td>INE040A01034</td><td>500180</td><td>2</td><td><span class="pill ok">active</span></td><td><span class="icon">✎ ◪ ⌫</span></td></tr>
+          <tr><td><b>Runtime Test Co</b></td><td>RT1</td><td>IT</td><td>Software</td><td>₹5,000 cr</td><td>—</td><td>INE888888888</td><td>—</td><td>—</td><td><span class="pill ok">active</span></td><td><span class="icon">✎ ◪ ⌫</span></td></tr>
+          <tr><td><b>Legacy Corp (deleted)</b></td><td>LEGACY</td><td>Telecom</td><td>Infra</td><td>₹200 cr</td><td>—</td><td>INE111111111</td><td>—</td><td>—</td><td><span class="pill" style="opacity:.5">deleted</span></td><td><span class="icon">↺ ⌫</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">▲ Sortable columns · sticky header · server-side pagination for 10,000+ rows</div>
+
+    <!-- Add/Edit modal -->
+    <div class="block"><h2>Add / Edit company</h2></div>
+    <div class="modal">
+      <div class="frow"><b>Edit RELIANCE</b><span class="muted">✕</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+        <div><div class="muted">Company Name</div><input style="width:100%" value="Reliance Industries Ltd" /></div>
+        <div><div class="muted">NSE Symbol</div><input style="width:100%" value="RELIANCE" /></div>
+        <div><div class="muted">Exchange</div><select style="width:100%"><option>NSE</option><option>BSE</option></select></div>
+        <div><div class="muted">ISIN</div><input style="width:100%" value="INE002A01018" /></div>
+        <div><div class="muted">BSE Symbol</div><input style="width:100%" value="500325" /></div>
+        <div><div class="muted">Sector</div><input style="width:100%" value="Oil &amp; Gas" /></div>
+        <div><div class="muted">Industry</div><input style="width:100%" value="Refining &amp; Petrochemicals" /></div>
+        <div><div class="muted">Market Cap (₹ cr)</div><input style="width:100%" value="1990000" /></div>
+        <div><div class="muted">Face Value</div><input style="width:100%" value="10" /></div>
+        <div><div class="muted">CEO</div><input style="width:100%" /></div>
+        <div><div class="muted">Employees</div><input style="width:100%" /></div>
+        <div><div class="muted">Headquarters</div><input style="width:100%" /></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="btn">Cancel</button><button class="btn primary">Save changes</button>
+      </div>
+    </div>
+
+    <!-- Bulk editor -->
+    <div class="block"><h2>Bulk editor — spreadsheet</h2>
+      <div class="muted">Edit rows in place. A matching ticker updates; a new ticker with a name creates.</div></div>
+    <div class="tablewrap" style="max-height:180px">
+      <table style="min-width:900px">
+        <thead><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Industry</th><th>Market Cap</th><th>Face Value</th><th>Website</th></tr></thead>
+        <tbody>
+          <tr><td>TCS</td><td>Tata Consultancy</td><td>IT</td><td>Consulting</td><td>1408000</td><td>1</td><td>tcs.com</td></tr>
+          <tr><td>INFY</td><td>Infosys</td><td>IT</td><td>Consulting</td><td>672000</td><td>5</td><td>infosys.com</td></tr>
+          <tr><td>NEW1</td><td>New Company</td><td>Energy</td><td>Solar</td><td>50000</td><td>10</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="block"><div class="note">＋ Add row&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;Apply edits</div></div>
+
+    <!-- Version history -->
+    <div class="block"><h2>Version history — RELIANCE</h2></div>
+    <div class="modal" style="width:100%">
+      <div style="display:flex;justify-content:space-between;font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span><b>v3</b> · update · by admin@equitypilot.ai</span><span class="muted">12:40 UTC</span><button class="btn sm">↺ Rollback</button></div>
+      <div style="font-size:11px;color:var(--muted);padding:8px 0;border-bottom:1px solid var(--border)"><span class="muted" style="color:var(--text)">ceo</span>: None → Mukesh Ambani</div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span><b>v2</b> · update · by analyst@equitypilot.ai</span><span class="muted">11:10 UTC</span><button class="btn sm">↺ Rollback</button></div>
+      <div style="font-size:11px;color:var(--muted);padding:8px 0;border-bottom:1px solid var(--border)"><span class="muted" style="color:var(--text)">market_cap</span>: 1950000 → 1990000</div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;padding:8px 0">
+        <span><b>v1</b> · create · by system</span><span class="muted">—</span><button class="btn sm">↺ Rollback</button></div>
+    </div>
+    <div class="note">Every edit is captured as an immutable snapshot; rollback re-applies any version and records a new audit entry.</div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EquityPilot Admin — Phase 1 Preview</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --elev:#151a25; --border:#232b3a;
+    --text:#e6eaf2; --muted:#8b94a7; --accent:#6ea8ff; --accent2:#4d8dff;
+    --gain:#3ecf8e; --loss:#ff6b6b; --warn:#ffb454; --subtle:#1a2030;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:236px;background:var(--elev);border-right:1px solid var(--border);flex-shrink:0;position:sticky;top:0;height:100vh;overflow:auto}
+  .brand{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border)}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--accent);color:#04121f;font-weight:800;font-size:13px;display:grid;place-items:center}
+  .brand .t{font-size:13px;font-weight:700}
+  .brand .s{font-size:10px;color:var(--muted)}
+  nav{padding:8px}
+  .sec{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:12px 10px 4px}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+  .item:hover{background:var(--subtle)}
+  .item.active{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .item.dim{color:rgba(139,148,167,.45);cursor:default}
+  .item .ph{margin-left:auto;font-size:9px;background:var(--subtle);color:var(--muted);border-radius:4px;padding:1px 5px}
+  .main{flex:1;padding:22px 28px;max-width:1180px}
+  h1{font-size:19px;font-weight:700}
+  .sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .block{margin-top:22px}
+  .block h2{font-size:14px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+  .muted{color:var(--muted);font-size:10px}
+  .grid{display:grid;gap:12px;margin-top:10px}
+  .c3{grid-template-columns:repeat(3,1fr)} .c4{grid-template-columns:repeat(4,1fr)} .c6{grid-template-columns:repeat(6,1fr)} .c2{grid-template-columns:repeat(2,1fr)}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .card .v{font-size:20px;font-weight:700;margin-top:4px}
+  .card .h{font-size:10px;color:var(--muted);margin-top:2px}
+  .pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:10px;font-weight:600;text-transform:capitalize}
+  .pill.ok{color:var(--gain);border-color:rgba(62,207,142,.3);background:rgba(62,207,142,.08)}
+  .pill.warn{color:var(--warn);border-color:rgba(255,180,84,.3);background:rgba(255,180,84,.08)}
+  .pill.off{color:var(--muted)}
+  .statrow{display:flex;gap:14px;margin-top:12px}
+  .minicard{background:var(--elev);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;min-width:130px}
+  .minicard .v{font-size:16px;font-weight:700}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12.5px}
+  th{text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);padding:8px 10px}
+  td{border-bottom:1px solid var(--border);padding:9px 10px;vertical-align:middle}
+  .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:7px 12px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  .btn.danger{color:var(--loss);border-color:rgba(255,107,107,.4)}
+  .btn.sm{padding:3px 8px;font-size:11px;border-radius:5px}
+  .row{display:flex;align-items:center;gap:8px}
+  .avatar{width:26px;height:26px;border-radius:50%;background:var(--subtle);display:grid;place-items:center;font-size:11px}
+  .feed{margin-top:10px;border:1px solid var(--border);border-radius:var(--radius)}
+  .feedrow{display:flex;gap:12px;padding:12px 14px;border-bottom:1px solid var(--border)}
+  .feedrow:last-child{border-bottom:none}
+  .dot{width:26px;height:26px;border-radius:50%;background:var(--subtle);display:grid;place-items:center;font-size:11px}
+  .search{display:flex;gap:8px;margin-top:10px}
+  input,select{background:var(--elev);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:7px 10px;font-size:12px}
+  .note{font-size:10px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ======================= SIDEBAR ======================= -->
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">EP</div><div><div class="t">EquityPilot Admin</div><div class="s">Control room</div></div></div>
+    <nav>
+      <div class="sec">Overview</div>
+      <div class="item active">◧ Dashboard</div>
+      <div class="item">◈ Activity History</div>
+      <div class="item">♻ Recycle Bin</div>
+
+      <div class="sec">Content</div>
+      <div class="item dim">🏢 Companies<span class="ph">P2</span></div>
+      <div class="item dim">▤ Financial Statements<span class="ph">P3</span></div>
+      <div class="item dim">◉ Live Market Data<span class="ph">P4</span></div>
+      <div class="item dim">✦ AI Score<span class="ph">P5</span></div>
+      <div class="item dim">📄 Documents<span class="ph">P6</span></div>
+      <div class="item dim">📰 News<span class="ph">P7</span></div>
+      <div class="item dim">⊞ Sectors<span class="ph">P8</span></div>
+
+      <div class="sec">Platform</div>
+      <div class="item dim">👥 Users &amp; Subscriptions<span class="ph">P9</span></div>
+      <div class="item dim">🔑 API Settings<span class="ph">P10</span></div>
+      <div class="item dim">⚙ System Settings<span class="ph">P11</span></div>
+      <div class="item dim">🛢 Database<span class="ph">P12</span></div>
+      <div class="item dim">📜 Logs<span class="ph">P13</span></div>
+
+      <div class="sec">Governance</div>
+      <div class="item">👥 Members</div>
+      <div class="item">💳 Subscription &amp; Billing</div>
+      <div class="item">◔ Usage</div>
+      <div class="item">🔑 API Keys</div>
+      <div class="item">📜 Audit Log</div>
+    </nav>
+  </aside>
+
+  <!-- ======================= MAIN ======================= -->
+  <main class="main">
+
+    <!-- ===== DASHBOARD ===== -->
+    <h1>Enterprise Admin Panel</h1>
+    <div class="sub">The central control room for EquityPilot AI.</div>
+
+    <div class="block">
+      <h2>System status <span class="muted">Market closed · checked 12:34 UTC</span></h2>
+      <div class="grid c6 statrow" style="margin-top:10px">
+        <div class="minicard"><div class="k">Database</div><div class="v" style="color:var(--gain)">● OK</div></div>
+        <div class="minicard"><div class="k">Redis</div><div class="v" style="color:var(--muted)">○ Disabled</div><div class="h">not configured</div></div>
+        <div class="minicard"><div class="k">Railway</div><div class="v" style="color:var(--muted)">○ Local</div></div>
+        <div class="minicard"><div class="k">Market</div><div class="v" style="color:var(--gain)">● OK</div><div class="h">Yahoo Finance</div></div>
+        <div class="minicard"><div class="k">Companies</div><div class="v">20</div></div>
+        <div class="minicard"><div class="k">Users</div><div class="v">1</div></div>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>Organisation overview</h2>
+      <div class="grid c4">
+        <div class="card"><div class="k">Plan</div><div class="v">Enterprise</div><span class="pill ok">active</span></div>
+        <div class="card"><div class="k">Members</div><div class="v">1</div><div class="h">1 total</div></div>
+        <div class="card"><div class="k">Storage</div><div class="v">0 B</div><div class="h">0 documents</div></div>
+        <div class="card"><div class="k">Renews in</div><div class="v">∞</div><div class="h">enterprise</div></div>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>Quota consumption <span class="muted">Current billing period</span></h2>
+      <div class="grid c2">
+        <div class="card"><div class="k">AI Research calls</div><div class="v">0 / 10,000</div></div>
+        <div class="card"><div class="k">Document pages</div><div class="v">0 / 100,000</div></div>
+      </div>
+    </div>
+
+    <div class="block"><div class="note">⬆ Dashboard rendered from <span class="code">GET /api/v1/admin/overview</span> and <span class="code">GET /api/v1/admin/system-status</span>.</div></div>
+
+    <!-- ===== ACTIVITY HISTORY ===== -->
+    <hr style="border:none;border-top:1px solid var(--border);margin:34px 0">
+    <h1>Activity History</h1>
+    <div class="sub">A chronological feed of everything that happened on the platform.</div>
+    <div class="search">
+      <select><option>All categories</option><option>Admin</option><option>Security</option><option>Auth</option></select>
+      <select><option>All outcomes</option><option>Success</option><option>Failure</option></select>
+    </div>
+    <div class="feed">
+      <div class="feedrow"><div class="dot">◈</div><div style="flex:1"><div class="code" style="color:var(--accent)">recycle.soft_deleted</div><div class="muted" style="color:var(--text);font-size:12px;margin-top:2px">Soft-deleted sector 'Demo Technology Sector'</div><div class="row" style="margin-top:4px"><span class="muted">admin@equitypilot.ai</span><span class="pill ok">success</span><span class="pill">sector</span></div></div><div class="muted">12:34 UTC</div></div>
+      <div class="feedrow"><div class="dot">🛡</div><div style="flex:1"><div class="code" style="color:var(--accent)">auth.login.succeeded</div><div class="muted" style="color:var(--text);font-size:12px;margin-top:2px">Sign-in for admin@equitypilot.ai</div><div class="row" style="margin-top:4px"><span class="muted">admin@equitypilot.ai</span><span class="pill ok">success</span></div></div><div class="muted">12:34 UTC</div></div>
+      <div class="feedrow"><div class="dot">◧</div><div style="flex:1"><div class="code" style="color:var(--accent)">system.backup.created</div><div class="muted" style="color:var(--text);font-size:12px;margin-top:2px">Automatic backup completed</div><div class="row" style="margin-top:4px"><span class="muted">system</span><span class="pill ok">success</span></div></div><div class="muted">12:00 UTC</div></div>
+    </div>
+
+    <!-- ===== RECYCLE BIN ===== -->
+    <hr style="border:none;border-top:1px solid var(--border);margin:34px 0">
+    <h1>Recycle Bin</h1>
+    <div class="sub">Review, restore or permanently purge soft-deleted resources.</div>
+    <div class="row" style="margin-top:12px">
+      <input placeholder="Search name or id…" />
+      <select><option>All entries</option><option>Active</option><option>Restored</option></select>
+      <span style="flex:1"></span>
+      <button class="btn primary">♻ Soft delete…</button>
+      <button class="btn danger">🗑 Empty bin</button>
+    </div>
+    <table>
+      <thead><tr><th>Resource</th><th>Deleted by</th><th>State</th><th style="text-align:right">Actions</th></tr></thead>
+      <tbody>
+        <tr><td><div style="font-weight:600">Demo Technology Sector</div><div class="muted">sector · demo-tech</div></td><td><div class="muted">admin@equitypilot.ai</div><div class="muted">12:34 UTC</div></td><td><span class="pill ok">active</span></td><td style="text-align:right"><div class="row" style="justify-content:flex-end"><button class="btn sm">↺ Restore</button><button class="btn sm danger">🗑</button></div></td></tr>
+        <tr><td><div style="font-weight:600">Demo News Item</div><div class="muted">news · n-102</div></td><td><div class="muted">admin@equitypilot.ai</div><div class="muted">11:58 UTC</div></td><td><span class="pill ok">active</span></td><td style="text-align:right"><div class="row" style="justify-content:flex-end"><button class="btn sm">↺ Restore</button><button class="btn sm danger">🗑</button></div></td></tr>
+        <tr><td><div style="font-weight:600">Reliance Industries</div><div class="muted">company · RELIANCE</div></td><td><div class="muted">admin@equitypilot.ai</div><div class="muted">11:40 UTC</div></td><td><span class="pill">restored</span></td><td style="text-align:right"><span class="muted">—</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note">Every soft-delete, restore and purge is written to the append-only audit trail with the acting administrator.</div>
+
+    <!-- ===== CONFIRM MODAL (illustration) ===== -->
+    <hr style="border:none;border-top:1px solid var(--border);margin:34px 0">
+    <h1>Destructive-action confirmation</h1>
+    <div class="sub">Purging a resource requires an explicit confirmation before it is executed.</div>
+    <div class="block" style="max-width:460px;border:1px solid rgba(255,107,107,.35);border-radius:12px;background:var(--bg2);padding:18px">
+      <div class="row" style="justify-content:space-between">
+        <div class="row"><span style="color:var(--loss);font-size:16px">⚠</span><b>Permanently purge this resource?</b></div>
+        <span class="muted">✕</span>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:10px">Purge <b>Demo Technology Sector</b> (sector)? This is <b>irreversible</b> — the snapshot is deleted forever. A permanent-purge is recorded in the audit trail.</div>
+      <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn">Cancel</button><button class="btn danger" style="background:var(--loss);color:#fff;border-color:var(--loss);font-weight:600">Purge permanently</button></div>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>

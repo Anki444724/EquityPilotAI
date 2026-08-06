@@ -742,3 +742,54 @@ class LanguagePreferenceRequest(BaseModel):
 class LanguagePreferenceResponse(BaseModel):
     language: str | None = None
     detail: str = ""
+
+
+# ===========================================================================
+# Recycle bin
+# ===========================================================================
+class RecycleBinOut(ORMModel):
+    """One soft-deleted resource in the recycle bin."""
+
+    id: int
+    resource_type: str
+    resource_id: str
+    display_name: str | None = None
+    payload: dict[str, Any] | None = None
+    deleted_by: str | None = None
+    deleted_by_email: str | None = None
+    deleted_at: datetime
+    restored_by: str | None = None
+    restored_at: datetime | None = None
+    purged_by: str | None = None
+    purged_at: datetime | None = None
+    #: Populated from the model's ``is_active`` property via from_attributes.
+    is_active: bool = True
+
+
+class RecycleSoftDeleteRequest(BaseModel):
+    """Move a resource into the recycle bin."""
+
+    resource_type: str = Field(min_length=1, max_length=32)
+    resource_id: str = Field(min_length=1, max_length=64)
+    display_name: str | None = Field(default=None, max_length=200)
+    payload: dict[str, Any] | None = None
+
+
+# ===========================================================================
+# System status (admin dashboard foundation)
+# ===========================================================================
+class SystemComponentOut(BaseModel):
+    """One dependency's status for the dashboard cards."""
+
+    name: str
+    status: str  # "ok" | "degraded" | "down" | "disabled"
+    detail: str | None = None
+
+
+class SystemStatusOut(BaseModel):
+    components: list[SystemComponentOut]
+    companies: int
+    users: int
+    api_calls: int
+    market_open: str  # "open" | "closed" | "weekend" | "unknown"
+    generated_at: datetime

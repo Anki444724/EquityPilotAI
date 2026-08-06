@@ -89,8 +89,10 @@ from app.schemas.platform import (
     HealthOut, InviteRequest, IssuedApiKeyOut, JobEnqueue, JobOut, LimitOut,
     MessageResponse, MetricsOverviewOut, NotificationOut, Page,
     PlanOut, PlanUpdate, PlatformOverviewOut, QueueDepthOut, QuotaUsageOut,
-    RbacMatrixOut, RoleUpdate, RouteMetricOut, ScheduleOut, StatusUpdate,
-    SubscriptionChange, SubscriptionOut, SubscriptionOverrides, TenantCreate,
+    RbacMatrixOut, RecycleBinOut, RecycleSoftDeleteRequest, RoleUpdate,
+    RouteMetricOut, ScheduleOut, StatusUpdate, SubscriptionChange,
+    SubscriptionOut, SubscriptionOverrides, SystemComponentOut,
+    SystemStatusOut, TenantCreate,
     TenantDetailOut, TenantOut, TenantSettingsUpdate, TenantSuspend,
     TenantUpdate, UsageOverviewOut, UsagePointOut, UsageSeriesOut,
     UserDetailOut, UserOut,
@@ -107,6 +109,7 @@ from app.services.platform.jobs.queue import JobQueue, QueueError
 from app.services.platform.observability import (
     ErrorTracker, HealthService, MetricsService,
 )
+from app.services.platform.recycle_bin import RecycleBinError, RecycleBinService
 from app.services.platform.tenancy import TenantError, TenantService
 
 router = APIRouter(tags=["admin"])
@@ -1525,4 +1528,203 @@ def platform_readiness(db: Session = Depends(get_db)) -> HealthOut:
             }
             for c in report.checks
         ],
+    )
+
+
+# ===========================================================================
+# Recycle bin (soft delete) — Phase 1
+# ===========================================================================
+@router.get(
+    "/admin/recycle-bin", response_model=Page[RecycleBinOut],
+    summary="Soft-deleted resources awaiting review",
+    dependencies=[Depends(require(Permission.RECYCLE_READ))],
+)
+def recycle_bin_list(
+    tenant_id: int = Depends(require_tenant),
+    db: Session = Depends(get_db),
+    status: str | None = Query(default=None, description="active | restored"),
+    resource_type: str | None = None,
+    search: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> Page[RecycleBinOut]:
+    rows, total = RecycleBinService(db).list(
+        status=status, resource_type=resource_type, search=search,
+        offset=(page - 1) * page_size, limit=page_size,
+    )
+    return Page[RecycleBinOut](
+        items=[RecycleBinOut.model_validate(r) for r in rows],
+        total=total, page=page, page_size=page_size,
+    )
+
+
+@router.post(
+    "/admin/recycle-bin", response_model=RecycleBinOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Soft-delete a resource",
+    dependencies=[Depends(require(Permission.RECYCLE_MANAGE))],
+)
+def recycle_soft_delete(
+    request: Request,
+    body: RecycleSoftDeleteRequest,
+    tenant_id: int = Depends(require_tenant),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> RecycleBinOut:
+    entry = RecycleBinService(db).soft_delete(
+        resource_type=body.resource_type,
+        resource_id=body.resource_id,
+        display_name=body.display_name,
+        payload=body.payload,
+        principal=user,
+        context=_context(request),
+    )
+    db.commit()
+    return RecycleBinOut.model_validate(entry)
+
+
+@router.post(
+    "/admin/recycle-bin/{entry_id}/restore", response_model=RecycleBinOut,
+    summary="Restore a soft-deleted resource",
+    dependencies=[Depends(require(Permission.RECYCLE_MANAGE))],
+)
+def recycle_restore(
+    request: Request,
+    entry_id: int,
+    tenant_id: int = Depends(require_tenant),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> RecycleBinOut:
+    try:
+        entry = RecycleBinService(db).restore(
+            entry_id, principal=user, context=_context(request)
+        )
+    except RecycleBinError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+    db.commit()
+    return RecycleBinOut.model_validate(entry)
+
+
+@router.delete(
+    "/admin/recycle-bin/{entry_id}", response_model=RecycleBinOut,
+    summary="Permanently purge a soft-deleted resource",
+    dependencies=[Depends(require(Permission.RECYCLE_MANAGE))],
+)
+def recycle_purge(
+    request: Request,
+    entry_id: int,
+    tenant_id: int = Depends(require_tenant),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> RecycleBinOut:
+    try:
+        entry = RecycleBinService(db).purge(
+            entry_id, principal=user, context=_context(request)
+        )
+    except RecycleBinError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+    db.commit()
+    return RecycleBinOut.model_validate(entry)
+
+
+@router.delete(
+    "/admin/recycle-bin", response_model=MessageResponse,
+    summary="Purge every soft-deleted resource",
+    dependencies=[Depends(require(Permission.RECYCLE_MANAGE))],
+)
+def recycle_purge_all(
+    request: Request,
+    tenant_id: int = Depends(require_tenant),
+    db: Session = Depends(get_db),
+    resource_type: str | None = None,
+    user: CurrentUser = Depends(get_current_user),
+) -> MessageResponse:
+    count = RecycleBinService(db).purge_all(
+        resource_type=resource_type, principal=user, context=_context(request)
+    )
+    db.commit()
+    return MessageResponse(message=f"Purged {count} item(s) from the recycle bin")
+
+
+# ===========================================================================
+# System status (admin dashboard foundation)
+# ===========================================================================
+@router.get(
+    "/admin/system-status", response_model=SystemStatusOut,
+    summary="Aggregate system health for the admin dashboard",
+    dependencies=[Depends(require(Permission.AUDIT_READ))],
+)
+def system_status(
+    tenant_id: int = Depends(require_tenant),
+    db: Session = Depends(get_db),
+) -> SystemStatusOut:
+    from app.data.providers.router import get_router
+    from app.domain.platform.audit import AuditAction
+    from app.models.company import Company
+    from app.models.platform import User
+    from app.services.live_market import market_status
+
+    # Database — reachable if a trivial query succeeds.
+    components: list[SystemComponentOut] = []
+    try:
+        db.execute(select(func.count(Company.id)))
+        components.append(SystemComponentOut(name="database", status="ok"))
+    except Exception:  # noqa: BLE001
+        components.append(SystemComponentOut(name="database", status="down"))
+
+    # Redis — configured or not, and reachable.
+    redis_ok = False
+    if settings.REDIS_URL:
+        try:
+            import redis as _redis
+            client = _redis.Redis.from_url(settings.REDIS_URL, socket_timeout=0.25)
+            redis_ok = bool(client.ping())
+        except Exception:  # noqa: BLE001
+            redis_ok = False
+        components.append(SystemComponentOut(
+            name="redis", status="ok" if redis_ok else "down"))
+    else:
+        components.append(SystemComponentOut(
+            name="redis", status="disabled", detail="not configured"))
+
+    # Railway — this deployment's host reflects the Railway runtime.
+    import os as _os
+    railway = "railway" if _os.environ.get("RAILWAY_ENVIRONMENT") else (
+        "railway" if (settings.DATABASE_URL or "").startswith("postgres") else "local"
+    )
+    components.append(SystemComponentOut(
+        name="railway", status="ok" if railway == "railway" else "disabled",
+        detail=railway))
+
+    # Market data providers.
+    try:
+        engine = get_router()
+        provider_names = ", ".join(
+            p.name for p in engine.providers if p.configured()
+        ) or "none configured"
+        components.append(SystemComponentOut(
+            name="market", status="ok" if provider_names != "none configured"
+            else "degraded", detail=provider_names))
+    except Exception:  # noqa: BLE001
+        components.append(SystemComponentOut(name="market", status="degraded"))
+
+    companies = db.execute(select(func.count(Company.id))).scalar_one()
+    users = db.execute(select(func.count(User.id))).scalar_one()
+    api_calls = 0
+    try:
+        api_calls = AuditService(db).query(
+            tenant_id=None, unrestricted=True,
+            action=AuditAction.APIKEY_USED, since=_utcnow() - timedelta(days=30),
+            offset=0, limit=1,
+        )[1]
+    except Exception:  # noqa: BLE001
+        api_calls = 0
+
+    return SystemStatusOut(
+        components=components,
+        companies=companies,
+        users=users,
+        api_calls=api_calls,
+        market_open=market_status(),
+        generated_at=_utcnow(),
     )

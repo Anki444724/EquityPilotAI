@@ -3,7 +3,7 @@
 import { Badge, Card, CardBody, CardHeader, Skeleton, Stat } from "@/components/ui";
 import { AppShell } from "@/components/layout/app-shell";
 import { ApiError, api } from "@/lib/api";
-import { marketCap, percent, plainNumber, rupees } from "@/lib/format";
+import { marketCap, marketPrice, percent, plainNumber, rupees } from "@/lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Database, TrendingUp, TrendingDown, Brain, FileText, Clock, Target, Search } from "lucide-react";
 import Link from "next/link";
@@ -170,7 +170,7 @@ export default function DashboardPage() {
                       <tr key={c.id} className="cursor-pointer hover:bg-[var(--bg-subtle)]">
                         <td className="sticky-col"><Link href={`/companies/${c.id}`} className="font-medium">{c.ticker}</Link> <span className="text-xs text-[var(--text-muted)]">{c.name}</span></td>
                         <td>{c.sector}</td>
-                        <td className="num">{rupees(c.current_price)}</td>
+                        <td className="num">{rupees(marketPrice(c))}</td>
                         <td className="num font-medium">{marketCap(c.market_cap)}</td>
                       </tr>
                     ))}

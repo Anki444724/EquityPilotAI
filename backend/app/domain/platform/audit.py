@@ -129,6 +129,12 @@ class AuditAction(StrEnum):
     BACKUP_RESTORED = "system.backup.restored"
     SETTINGS_CHANGED = "system.settings.changed"
 
+    # -- recycle bin / soft delete -------------------------------------
+    RECYCLE_SOFT_DELETED = "recycle.soft_deleted"
+    RECYCLE_RESTORED = "recycle.restored"
+    RECYCLE_PURGED = "recycle.purged"
+    RECYCLE_PURGED_ALL = "recycle.purged_all"
+
 
 #: Category and severity, declared once per action.
 _ACTION_META: dict[AuditAction, tuple[AuditCategory, AuditSeverity]] = {
@@ -196,6 +202,11 @@ _ACTION_META: dict[AuditAction, tuple[AuditCategory, AuditSeverity]] = {
     AuditAction.BACKUP_CREATED: (AuditCategory.SYSTEM, AuditSeverity.NOTICE),
     AuditAction.BACKUP_RESTORED: (AuditCategory.SYSTEM, AuditSeverity.CRITICAL),
     AuditAction.SETTINGS_CHANGED: (AuditCategory.SYSTEM, AuditSeverity.NOTICE),
+
+    AuditAction.RECYCLE_SOFT_DELETED: (AuditCategory.ADMIN, AuditSeverity.WARNING),
+    AuditAction.RECYCLE_RESTORED: (AuditCategory.ADMIN, AuditSeverity.NOTICE),
+    AuditAction.RECYCLE_PURGED: (AuditCategory.ADMIN, AuditSeverity.WARNING),
+    AuditAction.RECYCLE_PURGED_ALL: (AuditCategory.ADMIN, AuditSeverity.CRITICAL),
 }
 
 
