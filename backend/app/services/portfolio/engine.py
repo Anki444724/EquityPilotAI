@@ -50,6 +50,10 @@ class HoldingView:
     expected_cagr: float | None = None
     liquidity_days: float | None = None
     max_position_size: float = 0.04
+    #: Provenance of the displayed price, from the shared LiveMarketService.
+    price_source: str | None = None
+    last_updated: str | None = None
+    market_status: str | None = None
 
     @property
     def ticker(self) -> str:

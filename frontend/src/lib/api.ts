@@ -8,6 +8,14 @@ import type {
   PortfolioCommentary, PortfolioView, WatchlistMeta, WatchlistRow,
   GenerateResponse, ReportCapabilities, ReportDetail, ReportJob,
   ReportStatistics, ReportSummary,
+  RecycleBinEntry, SystemStatus, CompanyAdmin, CompanyBulkEditResult,
+  CompanyVersionOut, ImportResult, MergeResult, PaginatedCompaniesAdmin,
+  FinancialStatements, FinancialBulkResult, FinancialVersion,
+  ProviderInfo, ProviderHealth, MarketOverride, MarketDashboard,
+  AIOverride, AIModelInfo, AIPromptInfo, AICostDashboard,
+  DocAdminPage, DocAdmin, DocCompareResult, RAGStats, DocSearchResult,
+  AdminUser, AdminUserPage, UserSession, UserSubscription, UserInvoice,
+  UserAnalytics, RoleInfo,
 } from "./types";
 
 export const API_BASE =
@@ -597,6 +605,34 @@ function query(params: Record<string, string | number | boolean | undefined>) {
   return encoded ? `?${encoded}` : "";
 }
 
+/** Upload a file to an authenticated multipart endpoint. */
+async function uploadFile<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  // No Content-Type: the browser must set multipart/form-data (with boundary).
+  const res = await rawFetch(path, { method: "POST", body: form });
+  if (!res.ok) await raise(res);
+  return res.json() as Promise<T>;
+}
+
+/** Download a file as a blob from an authenticated endpoint. */
+async function downloadFile(path: string): Promise<void> {
+  const res = await rawFetch(path);
+  if (!res.ok) await raise(res);
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  const filename = match?.[1] ?? "download.bin";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* ------------------------------------------------------------- session */
 export const authApi = {
   config: () => request<AuthConfig>("/api/v1/auth/config"),
@@ -778,6 +814,276 @@ export const adminApi = {
       link: string | null; channel: string; read_at: string | null;
       sent_at: string | null; created_at: string;
     }[]>(`${AD}/notifications${query({ unread_only: unreadOnly })}`),
+
+  /* ---- Recycle bin (Phase 1) ---- */
+  recycleBin: (params: {
+    status?: string; resource_type?: string; search?: string;
+    page?: number; page_size?: number;
+  } = {}) => authed<Page<RecycleBinEntry>>(`${AD}/recycle-bin${query(params)}`),
+
+  recycleSoftDelete: (body: {
+    resource_type: string; resource_id: string;
+    display_name?: string; payload?: Record<string, unknown>;
+  }) => authed<RecycleBinEntry>(`${AD}/recycle-bin`, {
+    method: "POST", body: JSON.stringify(body),
+  }),
+
+  recycleRestore: (id: number) =>
+    authed<RecycleBinEntry>(`${AD}/recycle-bin/${id}/restore`, { method: "POST" }),
+
+  recyclePurge: (id: number) =>
+    authed<RecycleBinEntry>(`${AD}/recycle-bin/${id}`, { method: "DELETE" }),
+
+  recyclePurgeAll: (resource_type?: string) =>
+    authed<{ message: string }>(`${AD}/recycle-bin${query({ resource_type })}`, {
+      method: "DELETE",
+    }),
+
+  /* ---- System status (dashboard foundation, Phase 1) ---- */
+  systemStatus: () => authed<SystemStatus>(`${AD}/system-status`),
+
+  /* ---- Phase 2: Company management ---- */
+  companies: {
+    list: (params: {
+      page?: number; page_size?: number; search?: string; sector?: string;
+      industry?: string; exchange?: string; listing_status?: string;
+      market_cap_min?: number; market_cap_max?: number; sort_by?: string;
+      order?: string; include_deleted?: boolean;
+    } = {}) => authed<PaginatedCompaniesAdmin>(`${AD}/companies${query(params)}`),
+
+    filters: () => authed<{ sectors: string[]; industries: string[] }>(
+      `${AD}/companies/filters`),
+
+    get: (id: string) => authed<CompanyAdmin>(`${AD}/companies/${id}`),
+
+    create: (body: Record<string, unknown>) =>
+      authed<CompanyAdmin>(`${AD}/companies`, { method: "POST", body: JSON.stringify(body) }),
+
+    update: (id: string, body: Record<string, unknown>) =>
+      authed<CompanyAdmin>(`${AD}/companies/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+    softDelete: (id: string) =>
+      authed<CompanyAdmin>(`${AD}/companies/${id}`, { method: "DELETE" }),
+
+    restore: (id: string) =>
+      authed<CompanyAdmin>(`${AD}/companies/${id}/restore`, { method: "POST" }),
+
+    permanentDelete: (id: string) =>
+      authed<void>(`${AD}/companies/${id}/permanent`, { method: "DELETE" }),
+
+    bulkEdit: (items: Record<string, unknown>[]) =>
+      authed<CompanyBulkEditResult>(`${AD}/companies/bulk-edit`, {
+        method: "POST", body: JSON.stringify({ items }),
+      }),
+
+    merge: (keepId: string, deleteIds: string[]) => {
+      const p = new URLSearchParams({ keep_id: keepId });
+      deleteIds.forEach((id) => p.append("delete_ids", id));
+      return authed<MergeResult>(`${AD}/companies/merge?${p.toString()}`, { method: "POST" });
+    },
+
+    importCsv: (file: File) => uploadFile<ImportResult>(`${AD}/companies/import/csv`, file),
+    importXlsx: (file: File) => uploadFile<ImportResult>(`${AD}/companies/import/xlsx`, file),
+    exportCsv: () => downloadFile(`${AD}/companies/export/csv`),
+    exportXlsx: () => downloadFile(`${AD}/companies/export/xlsx`),
+
+    versions: (id: string) =>
+      authed<CompanyVersionOut[]>(`${AD}/companies/${id}/versions`),
+
+    rollback: (id: string, version: number) =>
+      authed<CompanyAdmin>(`${AD}/companies/${id}/rollback${query({ version })}`, { method: "POST" }),
+
+    /* ---- Phase 3: financial statements ---- */
+    financials: {
+      statements: (id: string) =>
+        authed<FinancialStatements>(`${FIN}/${id}/statements`),
+      quarterly: (id: string) =>
+        authed<{ items: Record<string, unknown>[] }>(`${FIN}/${id}/quarterly`),
+      shareholding: (id: string) =>
+        authed<{ items: Record<string, unknown>[] }>(`${FIN}/${id}/shareholding`),
+      corporateActions: (id: string) =>
+        authed<{ items: Record<string, unknown>[] }>(`${FIN}/${id}/corporate-actions`),
+
+      upsertFacts: (id: string, facts: Record<string, unknown>[]) =>
+        authed<FinancialBulkResult>(`${FIN}/${id}/facts`, { method: "PUT", body: JSON.stringify(facts) }),
+      upsertQuarterly: (id: string, rows: Record<string, unknown>[]) =>
+        authed<FinancialBulkResult>(`${FIN}/${id}/quarterly`, { method: "PUT", body: JSON.stringify(rows) }),
+      upsertShareholding: (id: string, rows: Record<string, unknown>[]) =>
+        authed<FinancialBulkResult>(`${FIN}/${id}/shareholding`, { method: "PUT", body: JSON.stringify(rows) }),
+
+      deleteQuarterly: (id: string, year: number, quarter: number) =>
+        authed<void>(`${FIN}/${id}/quarterly/${year}/${quarter}`, { method: "DELETE" }),
+
+      addAction: (id: string, body: Record<string, unknown>) =>
+        authed<Record<string, unknown>>(`${FIN}/${id}/corporate-actions`, { method: "POST", body: JSON.stringify(body) }),
+      updateAction: (id: string, aid: number, body: Record<string, unknown>) =>
+        authed<Record<string, unknown>>(`${FIN}/${id}/corporate-actions/${aid}`, { method: "PATCH", body: JSON.stringify(body) }),
+      deleteAction: (id: string, aid: number) =>
+        authed<void>(`${FIN}/${id}/corporate-actions/${aid}`, { method: "DELETE" }),
+
+      bulkImport: (id: string, kind: string, file: File) => {
+        const form = new FormData();
+        form.append("file", file);
+        return rawFetch(`${FIN}/${id}/bulk-import?kind=${kind}`, { method: "POST", body: form })
+          .then(async (res) => { if (!res.ok) await raise(res); return res.json() as Promise<FinancialBulkResult>; });
+      },
+
+      versions: (id: string) =>
+        authed<FinancialVersion[]>(`${FIN}/${id}/versions`),
+      rollback: (id: string, version: number) =>
+        authed<{ status: string }>(`${FIN}/${id}/rollback${query({ version })}`, { method: "POST" }),
+    },
+  },
+};
+
+const FIN = `${AD}/companies`;
+
+/* --------------------------------------------------- market operations (P4) */
+const MKT = "/api/v1/admin/market";
+
+export const marketOpsApi = {
+  providers: () => authed<ProviderInfo[]>(`${MKT}/providers`),
+  providerHealth: () => authed<ProviderHealth[]>(`${MKT}/providers/health`),
+
+  overrides: (activeOnly = true) =>
+    authed<MarketOverride[]>(`${MKT}/overrides${query({ active_only: activeOnly })}`),
+  createOverride: (companyId: string, body: Record<string, unknown>) =>
+    authed<MarketOverride>(`${MKT}/overrides/${companyId}`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  clearOverride: (id: number) =>
+    authed<{ status: string }>(`${MKT}/overrides/${id}`, { method: "DELETE" }),
+  clearAllOverrides: () =>
+    authed<{ status: string; cleared: number }>(`${MKT}/overrides`, { method: "DELETE" }),
+
+  dashboard: () => authed<MarketDashboard>(`${MKT}/dashboard`),
+  clearCache: () => authed<{ status: string }>(`${MKT}/cache/clear`, { method: "POST" }),
+  refreshCache: () => authed<{ status: string }>(`${MKT}/cache/refresh`, { method: "POST" }),
+
+  scheduler: () => authed<Record<string, unknown>>(`${MKT}/scheduler`),
+  sync: () => authed<Record<string, unknown>>(`${MKT}/sync`),
+  websocket: () => authed<Record<string, unknown>>(`${MKT}/websocket`),
+  logs: (level?: string) =>
+    authed<Record<string, unknown>>(`${MKT}/logs${query({ level })}`),
+};
+
+/* --------------------------------------------------- AI operations (P5) */
+const AI = "/api/v1/admin/ai";
+
+export const aiOpsApi = {
+  overrides: (activeOnly = true) =>
+    authed<AIOverride[]>(`${AI}/overrides${query({ active_only: activeOnly })}`),
+  createOverride: (companyId: string, body: Record<string, unknown>) =>
+    authed<AIOverride>(`${AI}/overrides/${companyId}`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  clearOverride: (id: number) =>
+    authed<{ status: string; mode: string }>(`${AI}/overrides/${id}`, { method: "DELETE" }),
+
+  models: () => authed<AIModelInfo[]>(`${AI}/models`),
+  prompts: () => authed<AIPromptInfo[]>(`${AI}/prompts`),
+  cost: (days = 30) => authed<AICostDashboard>(`${AI}/cost${query({ days })}`),
+  queue: () => authed<Record<string, unknown>>(`${AI}/queue`),
+  learning: () => authed<Record<string, unknown>>(`${AI}/learning`),
+  rag: () => authed<Record<string, unknown>>(`${AI}/rag`),
+  logs: (limit = 100) => authed<Record<string, unknown>>(`${AI}/logs${query({ limit })}`),
+};
+
+/* --------------------------------------------------- documents (P6) */
+const DOCADM = "/api/v1/admin/documents";
+
+export const docAdminApi = {
+  list: (params: {
+    company_id?: string; doc_type?: string; approval_status?: string;
+    search?: string; page?: number; page_size?: number;
+  } = {}) => authed<DocAdminPage>(`${DOCADM}${query(params)}`),
+
+  get: (id: number) => authed<DocAdmin>(`${DOCADM}/${id}`),
+
+  setApproval: (id: number, state: string, note?: string) =>
+    authed<DocAdmin>(`${DOCADM}/${id}/approval`, {
+      method: "POST", body: JSON.stringify({ state, note }),
+    }),
+  approve: (id: number) =>
+    authed<DocAdmin>(`${DOCADM}/${id}/approve`, { method: "POST" }),
+  publish: (id: number) =>
+    authed<DocAdmin>(`${DOCADM}/${id}/publish`, { method: "POST" }),
+  reject: (id: number, note?: string) =>
+    authed<DocAdmin>(`${DOCADM}/${id}/reject${query({ note })}`, { method: "POST" }),
+
+  versions: (id: number) => authed<DocAdmin[]>(`${DOCADM}/${id}/versions`),
+  compare: (a: number, b: number) =>
+    authed<DocCompareResult>(`${DOCADM}/${a}/compare/${b}`),
+
+  ragStats: (companyId?: string) =>
+    authed<RAGStats>(`${DOCADM}/rag/stats${query({ company_id: companyId })}`),
+  search: (q: string, companyId?: string) =>
+    authed<{ results: DocSearchResult[] }>(
+      `${DOCADM}/search${query({ q, company_id: companyId })}`),
+
+  delete: (id: number) =>
+    authed<void>(`${DOCADM}/${id}`, { method: "DELETE" }),
+};
+
+/* --------------------------------------------------- users & subs (P7) */
+const UC = "/api/v1/admin/users";
+
+export const userCenterApi = {
+  list: (params: {
+    role?: string; status?: string; search?: string; tenant_id?: number;
+    page?: number; page_size?: number;
+  } = {}) => authed<AdminUserPage>(`${UC}${query(params)}`),
+
+  get: (id: string) => authed<AdminUser>(`${UC}/${id}`),
+  create: (body: Record<string, unknown>) =>
+    authed<AdminUser>(`${UC}`, { method: "POST", body: JSON.stringify(body) }),
+  update: (id: string, body: Record<string, unknown>) =>
+    authed<AdminUser>(`${UC}/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  suspend: (id: string) => authed<AdminUser>(`${UC}/${id}/suspend`, { method: "POST" }),
+  ban: (id: string) => authed<AdminUser>(`${UC}/${id}/ban`, { method: "POST" }),
+  restore: (id: string) => authed<AdminUser>(`${UC}/${id}/restore`, { method: "POST" }),
+  delete: (id: string) => authed<void>(`${UC}/${id}`, { method: "DELETE" }),
+
+  roles: () => authed<{ roles: RoleInfo[]; all_permissions: string[] }>(`${UC}/roles`),
+
+  sessions: (id: string) => authed<UserSession[]>(`${UC}/${id}/sessions`),
+  logoutAll: (id: string) =>
+    authed<{ message: string }>(`${UC}/${id}/sessions/logout-all`, { method: "POST" }),
+  forceLogout: (id: string, sessionId: string) =>
+    authed<{ message: string }>(`${UC}/${id}/sessions/${sessionId}/logout`, { method: "POST" }),
+
+  subscription: (id: string) => authed<UserSubscription>(`${UC}/${id}/subscription`),
+  changeSubscription: (id: string, tier: string, billingPeriod = "monthly") =>
+    authed<UserSubscription>(`${UC}/${id}/subscription${query({ tier, billing_period: billingPeriod })}`, { method: "POST" }),
+  renewSubscription: (id: string) =>
+    authed<UserSubscription>(`${UC}/${id}/subscription/renew`, { method: "POST" }),
+  extendSubscription: (id: string, days: number) =>
+    authed<UserSubscription>(`${UC}/${id}/subscription/extend${query({ days })}`, { method: "POST" }),
+
+  invoices: (id: string) => authed<UserInvoice[]>(`${UC}/${id}/invoices`),
+  issueInvoice: (id: string, planTier: string, amountPaise: number) =>
+    authed<UserInvoice>(`${UC}/${id}/invoices${query({ plan_tier: planTier, amount_paise: amountPaise })}`, { method: "POST" }),
+  payInvoice: (id: string, invoiceId: number) =>
+    authed<UserInvoice>(`${UC}/${id}/invoices/${invoiceId}/pay`, { method: "POST" }),
+  refundInvoice: (id: string, invoiceId: number) =>
+    authed<UserInvoice>(`${UC}/${id}/invoices/${invoiceId}/refund`, { method: "POST" }),
+
+  security: (id: string) =>
+    authed<Record<string, unknown>>(`${UC}/${id}/security`),
+  loginHistory: (id: string) =>
+    authed<{ items: Record<string, unknown>[] }>(`${UC}/${id}/login-history`),
+  resetPassword: (id: string) =>
+    authed<{ message: string }>(`${UC}/${id}/reset-password`, { method: "POST" }),
+  verifyEmail: (id: string) =>
+    authed<{ message: string }>(`${UC}/${id}/verify-email`, { method: "POST" }),
+
+  notify: (id: string, body: Record<string, string | number | boolean>) =>
+    authed<Record<string, unknown>>(`${UC}/${id}/notify${query(body)}`, { method: "POST" }),
+  announce: (subject: string, body = "", channel = "email") =>
+    authed<{ message: string }>(`${UC}/announce${query({ subject, body, channel })}`, { method: "POST" }),
+
+  analytics: (days = 30) =>
+    authed<UserAnalytics>(`${UC}/analytics/summary${query({ days })}`),
 };
 
 /* --------------------------------------------------- operator console */

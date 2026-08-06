@@ -1,5 +1,16 @@
 /** API contracts — mirrors the backend Pydantic schemas. */
 
+export interface LiveMarket {
+  live_price: number | null;
+  current_price: number | null;
+  price_source: string | null;
+  last_updated: string | null;
+  market_status: string;
+  change: number | null;
+  change_percent: number | null;
+  volume: number | null;
+}
+
 export interface CompanySummary {
   id: string;
   name: string;
@@ -9,6 +20,7 @@ export interface CompanySummary {
   industry: string | null;
   market_cap: number | null;
   current_price: number | null;
+  market: LiveMarket | null;
 }
 
 export interface CompanyDetail extends CompanySummary {
@@ -875,7 +887,9 @@ export interface Holding {
   ticker: string; company_id: string | null; name: string;
   sector: string | null; industry: string | null;
   quantity: number; average_cost: number | null; cost: number;
-  current_price: number | null; market_value: number | null;
+  current_price: number | null; price_source: string | null;
+  last_updated: string | null; market_status: string | null;
+  market_value: number | null;
   unrealised_pnl: number | null; unrealised_return: number | null;
   realised_pnl: number; dividends: number; total_pnl: number | null;
   weight: number; target_weight: number | null; drift: number | null;
@@ -995,7 +1009,9 @@ export interface Attribution {
 
 export interface WatchlistRow {
   id: number; ticker: string; company_id: string | null; name: string;
-  sector: string | null; price: number | null; buy_below: number | null;
+  sector: string | null; price: number | null; price_source: string | null;
+  last_updated: string | null; market_status: string | null;
+  buy_below: number | null;
   target_price: number | null; upside: number | null; score: number | null;
   rating: string | null; status: string; note: string | null;
   conviction: string | null; added_on: string | null;
@@ -1307,4 +1323,263 @@ export interface RbacMatrix {
 export interface StorageReport {
   breakdown: Record<string, number>; total_bytes: number; total_mb: number;
   allowance_mb: number; unlimited: boolean; utilisation: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * Enterprise Admin Panel — Phase 1
+ * ------------------------------------------------------------------ */
+export interface RecycleBinEntry {
+  id: number;
+  resource_type: string;
+  resource_id: string;
+  display_name: string | null;
+  payload: Record<string, unknown> | null;
+  deleted_by: string | null;
+  deleted_by_email: string | null;
+  deleted_at: string;
+  restored_by: string | null;
+  restored_at: string | null;
+  purged_by: string | null;
+  purged_at: string | null;
+  is_active: boolean;
+}
+
+export interface SystemComponentStatus {
+  name: string;
+  status: "ok" | "degraded" | "down" | "disabled";
+  detail: string | null;
+}
+
+export interface SystemStatus {
+  components: SystemComponentStatus[];
+  companies: number;
+  users: number;
+  api_calls: number;
+  market_open: "open" | "closed" | "weekend" | "unknown";
+  generated_at: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 2 — Company Management
+ * ------------------------------------------------------------------ */
+export interface CompanyAdmin extends CompanyDetail {
+  bse_code: string | null;
+  listing_status: string;
+  index_membership: string | null;
+  currency: string;
+  reporting_scale: string;
+  face_value: number | null;
+  listing_date: string | null;
+  ceo: string | null;
+  employees: number | null;
+  headquarters: string | null;
+  logo_url: string | null;
+  favicon_url: string | null;
+  deleted_at: string | null;
+}
+
+export interface CompanyVersionOut {
+  id: number;
+  company_id: string;
+  version: number;
+  actor_id: string | null;
+  actor_email: string | null;
+  changes: Record<string, { from: unknown; to: unknown }> | null;
+  change_type: string;
+  summary: string;
+  created_at: string;
+}
+
+export interface CompanyBulkEditResult {
+  updated: number;
+  created: number;
+  errors: { row: string; error: string }[];
+}
+
+export interface ImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: { row: string; error: string }[];
+}
+
+export interface MergeResult {
+  kept_id: string;
+  kept_ticker: string;
+  merged_ids: string[];
+  removed_count: number;
+}
+
+export interface PaginatedCompaniesAdmin {
+  total: number;
+  page: number;
+  page_size: number;
+  results: CompanyAdmin[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 3 — Financial Statements
+ * ------------------------------------------------------------------ */
+export interface FinancialStatements {
+  years: number[];
+  statements: Record<number, {
+    income: Record<string, number | null>;
+    balance: Record<string, number | null>;
+    cashflow: Record<string, number | null>;
+  }>;
+  ratios: Record<string, Array<{ key: string; label: string; unit: string; values: (number | null)[] }>>;
+  fiscal_years: number[];
+}
+
+export interface FinancialBulkResult {
+  updated: number;
+  created: number;
+  errors: { row: string; error: string }[];
+}
+
+export interface FinancialVersion {
+  id: number;
+  company_id: string;
+  version: number;
+  actor_email: string | null;
+  change_type: string;
+  summary: string;
+  created_at: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 4 — Market Operations Center
+ * ------------------------------------------------------------------ */
+export interface ProviderInfo {
+  name: string; priority: number; configured: boolean; implemented: boolean;
+  available: boolean; latency_ms: number | null; last_success: string | null;
+  calls: number; rate_limit_remaining: number | null; status: string;
+}
+
+export interface ProviderHealth {
+  name: string; status: string; configured: boolean; available: boolean;
+  latency_ms: number | null; last_success: string | null; calls: number;
+  rate_limit_remaining: number | null; priority: number;
+}
+
+export interface MarketOverride {
+  id: number; company_id: string; ticker: string;
+  manual_price: number | null; manual_volume: number | null;
+  manual_market_cap: number | null; manual_pe: number | null; manual_pb: number | null;
+  reason: string | null; expires_at: string | null; auto_revert: boolean;
+  created_by_email: string | null; created_at: string; is_active: boolean;
+}
+
+export interface MarketDashboard {
+  connected_symbols: number; cache_size: number; cache_hit_rate: number;
+  ttl_seconds: number; memory_bytes: number;
+  redis: { configured: boolean; backend: string };
+  last_refresh: string; active_overrides: number; providers_available: number;
+  market_status: string; errors: number; api_calls: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 5 — AI Operations Center
+ * ------------------------------------------------------------------ */
+export interface AIOverride {
+  id: number; company_id: string; ticker: string; mode: string;
+  manual_score: number | null; manual_confidence: number | null;
+  manual_risk: number | null; manual_summary: string | null;
+  manual_bull_case: string | null; manual_bear_case: string | null;
+  manual_recommendation: string | null; reason: string | null;
+  expires_at: string | null; created_by_email: string | null;
+  created_at: string; is_active: boolean;
+}
+
+export interface AIModelInfo {
+  name: string; priority: number; configured: boolean; status: string;
+}
+
+export interface AIPromptInfo {
+  key: string; version: number; label: string; task: string;
+  template: string; max_tokens: number; temperature: number;
+  is_active: boolean; is_builtin: boolean; edited_by: string | null;
+}
+
+export interface AICostDashboard {
+  days: number; total_tokens: number; requests: number;
+  avg_latency_ms: number; total_cost_usd: number; daily_cost_usd: number;
+  by_provider: Record<string, { tokens: number; cost: number; requests: number }>;
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 6 — Document Intelligence Center
+ * ------------------------------------------------------------------ */
+export interface DocAdmin {
+  id: number; company_id: string; filename: string; title: string | null;
+  doc_type: string; file_format: string; size_bytes: number; version: number;
+  status: string; approval_status: string; approval_reviewer: string | null;
+  approved_at: string | null; approval_note: string | null;
+  page_count: number; chunk_count: number; fact_count: number;
+  used_ocr: boolean; processed_at: string | null;
+}
+
+export interface DocAdminPage {
+  total: number; page: number; page_size: number; items: DocAdmin[];
+}
+
+export interface DocCompareResult {
+  old: { id: number; version: number; filename: string; processed_at: string | null };
+  new: { id: number; version: number; filename: string; processed_at: string | null };
+  changed_fields: { field: string; old: unknown; new: unknown }[];
+  changed_count: number; old_fact_count: number; new_fact_count: number;
+}
+
+export interface RAGStats {
+  documents: number; chunks: number; embeddings: number; vector_count: number;
+}
+
+export interface DocSearchResult {
+  document_id: number; title: string; chunk_id: number; page: number;
+  text: string; score: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 7 — User Management & Subscription Center
+ * ------------------------------------------------------------------ */
+export interface AdminUser {
+  id: string; email: string; name: string; role: string; status: string;
+  avatar_url: string | null; tenant_id: number | null;
+  email_verified_at: string | null; last_login_at: string | null;
+  last_seen_at: string | null; mfa_method: string; created_at: string;
+  permissions?: string[]; active_sessions?: number;
+  failed_login_count?: number; locked_until?: string | null;
+}
+
+export interface AdminUserPage {
+  total: number; page: number; page_size: number; items: AdminUser[];
+}
+
+export interface UserSession {
+  session_id: string; ip_address: string | null; user_agent: string | null;
+  issued_at: string; expires_at: string;
+}
+
+export interface UserSubscription {
+  id: number; tenant_id: number; plan_tier: string; status: string;
+  billing_period: string; period_start: string; period_end: string;
+  trial_ends_at: string | null; cancel_at_period_end: boolean;
+  cancelled_at: string | null; provider: string | null;
+}
+
+export interface UserInvoice {
+  id: number; tenant_id: number; number: string; plan_tier: string;
+  period_start: string | null; period_end: string | null;
+  subtotal_paise: number; tax_paise: number; total_paise: number;
+  currency: string; status: string; issued_at: string | null; paid_at: string | null;
+}
+
+export interface UserAnalytics {
+  days: number; total_users: number; active_users: number; new_users: number;
+  premium_users: number; free_users: number; revenue_inr: number;
+  tenants: number; retention_pct: number;
+}
+
+export interface RoleInfo {
+  key: string; label: string; permissions: string[];
 }

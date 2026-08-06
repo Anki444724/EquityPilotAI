@@ -82,3 +82,20 @@ export function signClass(value: number | null | undefined): string {
 export function fiscalYear(year: number): string {
   return `FY${String(year).slice(-2)}`;
 }
+
+/**
+ * The price a surface should DISPLAY: the live market figure when present,
+ * else the stored fallback. `market.live_price` comes from the shared
+ * LiveMarketService; `current_price` is the historical DB column and is only
+ * ever a fallback here, never presented as a live quote.
+ */
+export function marketPrice(c: {
+  market?: { live_price: number | null } | null;
+  current_price?: number | null;
+} | null | undefined): number | null {
+  const live = c?.market?.live_price;
+  if (live !== null && live !== undefined && !Number.isNaN(live)) return live;
+  const stored = c?.current_price;
+  if (stored === null || stored === undefined || Number.isNaN(stored)) return null;
+  return stored;
+}

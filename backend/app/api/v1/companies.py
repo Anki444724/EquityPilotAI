@@ -57,10 +57,10 @@ def get_company(
     svc: CompanyService = Depends(_service),
     _: CurrentUser = Depends(get_current_user),
 ) -> CompanyDetail:
-    company = svc.get(company_id)
-    if company is None:
+    detail = svc.get_detail(company_id)
+    if detail is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "company not found")
-    return CompanyDetail.model_validate(company)
+    return detail
 
 
 @router.get(

@@ -134,3 +134,44 @@ class TestDashboard:
     def test_largest_is_reliance(self):
         body = client.get("/api/v1/dashboard/overview").json()
         assert body["largest"][0]["ticker"] == "RELIANCE"
+
+
+class TestLiveMarketEnrichment:
+    """Every price surface carries the shared market view, never the raw DB column."""
+
+    def test_profile_carries_the_market_contract(self):
+        p = client.get(f"/api/v1/companies/{_titan_id()}/profile").json()
+        market = p["market"]
+        assert market is not None
+        for key in ("live_price", "price_source", "last_updated",
+                    "market_status", "change", "change_percent", "volume"):
+            assert key in market
+        # TITAN exists in the seeded DB, so the internal tier serves and labels
+        # itself — the page must see provenance rather than a silent figure.
+        assert market["price_source"] == "Internal Financial Database"
+        assert market["market_status"] == "closed"
+        assert market["live_price"] is not None
+        # company.market is the same object the page reads off CompanyDetail.
+        assert p["company"]["market"]["live_price"] == market["live_price"]
+
+    def test_company_detail_carries_market(self):
+        body = client.get(f"/api/v1/companies/{_titan_id()}").json()
+        assert body["market"] is not None
+        assert body["market"]["price_source"] == "Internal Financial Database"
+
+    def test_list_results_carry_market(self):
+        body = client.get("/api/v1/companies", params={"page_size": 5}).json()
+        for row in body["results"]:
+            assert row["market"] is not None
+            assert row["market"]["live_price"] is not None
+
+    def test_search_results_carry_market(self):
+        body = client.get("/api/v1/companies/search", params={"q": "RELIANCE"}).json()
+        assert body["results"]
+        assert all(r["market"] is not None for r in body["results"])
+
+    def test_dashboard_largest_carries_market(self):
+        body = client.get("/api/v1/dashboard/overview").json()
+        for row in body["largest"]:
+            assert row["market"] is not None
+            assert row["market"]["live_price"] is not None

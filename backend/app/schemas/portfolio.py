@@ -119,6 +119,9 @@ class HoldingOut(BaseModel):
     average_cost: float | None = None
     cost: float
     current_price: float | None = None
+    price_source: str | None = None
+    last_updated: str | None = None
+    market_status: str | None = None
     market_value: float | None = None
     unrealised_pnl: float | None = None
     unrealised_return: float | None = None
@@ -423,6 +426,9 @@ class WatchlistRowOut(BaseModel):
     name: str
     sector: str | None = None
     price: float | None = None
+    price_source: str | None = None
+    last_updated: str | None = None
+    market_status: str | None = None
     buy_below: float | None = None
     target_price: float | None = None
     upside: float | None = None

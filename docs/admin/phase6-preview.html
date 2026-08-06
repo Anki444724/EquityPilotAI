@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EquityPilot Admin — Phase 6 Preview (Document Intelligence Center)</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --elev:#151a25; --border:#232b3a;
+    --text:#e6eaf2; --muted:#8b94a7; --accent:#6ea8ff; --gain:#3ecf8e;
+    --loss:#ff6b6b; --warn:#ffb454; --subtle:#1a2030;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:236px;background:var(--elev);border-right:1px solid var(--border);flex-shrink:0;position:sticky;top:0;height:100vh;overflow:auto}
+  .brand{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border)}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--accent);color:#04121f;font-weight:800;font-size:13px;display:grid;place-items:center}
+  .brand .t{font-size:13px;font-weight:700}.brand .s{font-size:10px;color:var(--muted)}
+  nav{padding:8px}
+  .sec{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:12px 10px 4px}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+  .item.active{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .item.dim{color:rgba(139,148,167,.45);cursor:default}
+  .item .ph{margin-left:auto;font-size:9px;background:var(--subtle);color:var(--muted);border-radius:4px;padding:1px 5px}
+  .main{flex:1;padding:22px 28px;max-width:1280px}
+  h1{font-size:19px;font-weight:700}.sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .block{margin-top:20px}.muted{color:var(--muted);font-size:10px}
+  .tabs{display:flex;gap:6px;margin-top:14px;flex-wrap:wrap}
+  .tab{padding:6px 12px;border-radius:7px;font-size:12px;border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:5px}
+  .tab.on{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:12px}
+  .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  .btn.sm{padding:2px 7px;font-size:11px}
+  .tablewrap{margin-top:10px;border:1px solid var(--border);border-radius:10px;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:var(--elev);text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;padding:8px 10px}
+  th.r,td.r{text-align:right}
+  td{border-top:1px solid var(--border);padding:8px 10px}
+  .pill{display:inline-flex;border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:10px;font-weight:600;text-transform:capitalize}
+  .pill.ok{color:var(--gain);border-color:rgba(62,207,142,.3);background:rgba(62,207,142,.08)}
+  .pill.warn{color:var(--warn);border-color:rgba(255,180,84,.3);background:rgba(255,180,84,.08)}
+  .pill.accent{color:var(--accent);border-color:rgba(110,168,255,.3);background:rgba(110,168,255,.08)}
+  mark{background:var(--warn);color:#04121f;border-radius:2px;padding:0 2px}
+  .note{font-size:10px;color:var(--muted);margin-top:10px}
+  .steps{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:11px}
+  .step{background:var(--subtle);border:1px solid var(--border);border-radius:6px;padding:4px 10px}
+  .step.done{color:var(--gain);border-color:rgba(62,207,142,.3)}
+  .arrow{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">EP</div><div><div class="t">EquityPilot Admin</div><div class="s">Control room</div></div></div>
+    <nav>
+      <div class="sec">Overview</div>
+      <div class="item">◧ Dashboard</div><div class="item">◈ Activity History</div><div class="item">♻ Recycle Bin</div>
+      <div class="sec">Content</div>
+      <div class="item">🏢 Companies</div><div class="item">▤ Financial Statements</div><div class="item">◉ Live Market</div><div class="item">✦ AI Score</div>
+      <div class="item active">📄 Documents</div>
+      <div class="item dim">📰 News<span class="ph">P7</span></div>
+      <div class="item dim">⊞ Sectors<span class="ph">P8</span></div>
+      <div class="sec">Platform</div>
+      <div class="item dim">👥 Users<span class="ph">P9</span></div>
+      <div class="item dim">🔑 API Settings<span class="ph">P10</span></div>
+      <div class="item dim">⚙ System Settings<span class="ph">P11</span></div>
+      <div class="item dim">🛢 Database<span class="ph">P12</span></div>
+      <div class="item dim">📜 Logs<span class="ph">P13</span></div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Document Intelligence Center</h1>
+    <div class="sub">RELIANCE · annual report · AI ingestion &amp; approval</div>
+
+    <div class="tabs">
+      <div class="tab on">📄 Documents</div><div class="tab">☑ Approval Workflow</div>
+      <div class="tab">⇄ Version Compare</div><div class="tab">◉ RAG</div><div class="tab">🔍 Search</div>
+    </div>
+
+    <!-- Approval steps -->
+    <div class="steps">
+      <div class="step done">Uploaded</div><span class="arrow">→</span>
+      <div class="step done">AI Extracted</div><span class="arrow">→</span>
+      <div class="step">Pending Review</div><span class="arrow">→</span>
+      <div class="step">Approved</div><span class="arrow">→</span>
+      <div class="step">Published</div>
+    </div>
+
+    <!-- Documents table -->
+    <div class="card">
+      <div class="k">Documents</div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Document</th><th>Type</th><th>Approval</th><th>Ingestion</th><th class="r">Pages</th><th class="r">Chunks</th><th class="r">Facts</th></tr></thead>
+          <tbody>
+            <tr><td><b>Annual Report 2025</b><div class="muted">v2 · 15:10 UTC</div></td><td>Annual</td><td><span class="pill ok">published</span></td><td>OCR ✓</td><td class="r">220</td><td class="r">1,480</td><td class="r">64</td></tr>
+            <tr><td><b>Annual Report 2024</b><div class="muted">v1 · 12:04 UTC</div></td><td>Annual</td><td><span class="pill ok">approved</span></td><td>OCR ✓</td><td class="r">210</td><td class="r">1,390</td><td class="r">61</td></tr>
+            <tr><td><b>Q1 FY26 Results</b><div class="muted">v1 · 09:30 UTC</div></td><td>Quarterly</td><td><span class="pill warn">pending review</span></td><td>OCR ✓</td><td class="r">42</td><td class="r">310</td><td class="r">28</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Version compare -->
+    <div class="card">
+      <div class="k">Version compare — v1 → v2 · 3 financial differences</div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Field</th><th>Old (2024)</th><th>New (2025)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Revenue</b></td><td style="color:var(--muted);text-decoration:line-through">100.0</td><td style="color:var(--gain)">125.0</td></tr>
+            <tr><td><b>Net profit</b></td><td style="color:var(--muted);text-decoration:line-through">25.0</td><td style="color:var(--gain)">31.25</td></tr>
+            <tr><td><b>Debt</b></td><td style="color:var(--muted);text-decoration:line-through">800.0</td><td style="color:var(--gain)">720.0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">Old report vs new report — every financial difference highlighted.</div>
+    </div>
+
+    <!-- Search highlight -->
+    <div class="card">
+      <div class="k">Search inside documents — "revenue"</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:8px;font-size:12px;line-height:1.7">
+        <mark>Revenue</mark> grew strongly to the reported figure. Debt reduced.
+        Management discussed growth in the Jio platform and retail segments. Consolidated
+        <mark>revenue</mark> for FY2025 rose 11.9% year-on-year.
+      </div>
+      <div class="note">Matched text highlighted · page 4 · score 2</div>
+    </div>
+
+    <!-- RAG stats -->
+    <div class="card">
+      <div class="k">RAG index — RELIANCE</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px">
+        <div class="btn" style="justify-content:center">Documents 2</div>
+        <div class="btn" style="justify-content:center">Chunks 2,870</div>
+        <div class="btn" style="justify-content:center">Embeddings 2,870</div>
+        <div class="btn" style="justify-content:center">Vectors 2,870</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn">↺ Refresh</button><button class="btn">Rebuild</button><button class="btn">🗑 Delete</button></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

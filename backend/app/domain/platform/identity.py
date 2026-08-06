@@ -78,6 +78,8 @@ class Permission(StrEnum):
     AUDIT_READ = "audit:read"
     JOB_READ = "job:read"
     JOB_MANAGE = "job:manage"
+    RECYCLE_READ = "recycle:read"
+    RECYCLE_MANAGE = "recycle:manage"
 
     # -- cross-tenant, operator-only ----------------------------------
     PLATFORM_ADMIN = "platform:admin"
@@ -214,6 +216,7 @@ _ADMIN: frozenset[Permission] = _ANALYST | {
     P.TENANT_READ, P.TENANT_MANAGE,
     P.SUBSCRIPTION_READ, P.SUBSCRIPTION_MANAGE,
     P.USAGE_READ, P.AUDIT_READ, P.JOB_MANAGE,
+    P.RECYCLE_READ, P.RECYCLE_MANAGE,
 }
 
 _SUPER_ADMIN: frozenset[Permission] = _ADMIN | CROSS_TENANT_PERMISSIONS

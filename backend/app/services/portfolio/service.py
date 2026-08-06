@@ -38,6 +38,8 @@ from app.models.portfolio import (
     PortfolioSnapshot, PortfolioTransaction, PriceHistory, Watchlist,
     WatchlistEntry,
 )
+from app.schemas.company import LiveMarket
+from app.services.live_market import LiveMarketService
 from app.services.portfolio.engine import PortfolioEngine, PortfolioView
 
 logger = logging.getLogger(__name__)
@@ -306,7 +308,18 @@ class PortfolioService:
             ).all()
         } if tickers else {}
 
-        prices = {t: c.current_price for t, c in companies.items() if c.current_price}
+        # Live market prices through the same shared service every surface
+        # uses. The stored `Company.current_price` column is never the
+        # displayed price here; `market.live_price` is, so a portfolio holding
+        # and the company/dashboard/watchlist pages can never diverge.
+        live_market = LiveMarketService(self.db)
+        prices: dict[str, float] = {}
+        market_views: dict[str, "LiveMarket"] = {}
+        for ticker, company in companies.items():
+            market = live_market.snapshot(company)
+            market_views[ticker] = market
+            if market.live_price:
+                prices[ticker] = market.live_price
         meta = {
             ticker: {
                 "company_id": c.id, "name": c.name, "sector": c.sector,
@@ -316,7 +329,7 @@ class PortfolioService:
             for ticker, c in companies.items()
         }
 
-        analytics = self._analytics(companies, tickers)
+        analytics = self._analytics(companies, tickers, prices)
         self._attach_liquidity(analytics, prices, transactions)
 
         engine = PortfolioEngine(CostBasisMethod(portfolio.cost_basis))
@@ -332,13 +345,20 @@ class PortfolioService:
             risk_free=portfolio.risk_free_rate,
             max_position_size=portfolio.max_position_size,
         )
+        for holding in view.holdings:
+            market = market_views.get(holding.ticker)
+            if market is not None:
+                holding.price_source = market.price_source
+                holding.last_updated = market.last_updated
+                holding.market_status = market.market_status
         view.analytics_errors = dict(self.analytics_errors)
         self.cache.put(portfolio_id, key, view)
         return view
 
     # ---------------------------------------------------------- inputs
     def _analytics(
-        self, companies: dict[str, Company], tickers: Sequence[str]
+        self, companies: dict[str, Company], tickers: Sequence[str],
+        prices: dict[str, float] | None = None,
     ) -> dict[str, dict]:
         """Pull scores, ratings and valuation from Modules 4 and 5.
 
@@ -351,6 +371,16 @@ class PortfolioService:
         it — which the first version did — makes a broken integration
         indistinguishable from a company that simply has no data.
         """
+        if prices is None:
+            # Standalone callers (e.g. watchlist_view) resolve live prices the
+            # same way rather than falling back to the stored DB column.
+            live_market = LiveMarketService(self.db)
+            prices = {}
+            for _t, _c in companies.items():
+                _m = live_market.snapshot(_c)
+                if _m.live_price:
+                    prices[_t] = _m.live_price
+
         from app.services.analysis_service import AnalysisService
         from app.services.forecast.service import ForecastService
         from app.services.scoring.service import ScoringService
@@ -417,7 +447,8 @@ class PortfolioService:
                     if "risk" in categories:
                         details["risk_score"] = categories["risk"] / 10.0
                     details["expected_cagr"] = self._expected_cagr(
-                        details.get("target_price"), company.current_price
+                        details.get("target_price"),
+                        self._price_for(companies, ticker, prices),
                     )
                     details.update(self._credit_metrics(analysis))
                     details.update(self._governance_metrics(company.id))
@@ -469,6 +500,16 @@ class PortfolioService:
         if row is None:
             return {}
         return {"promoter_pledge": row.promoter_pledged}
+
+    @staticmethod
+    def _price_for(
+        companies: dict[str, Company], ticker: str,
+        prices: dict[str, float] | None,
+    ) -> float | None:
+        """The live price for a ticker, from the shared live-price map."""
+        if prices is not None and ticker in prices:
+            return prices[ticker]
+        return None
 
     @staticmethod
     def _expected_cagr(
@@ -873,11 +914,19 @@ class PortfolioService:
             raise PortfolioError(f"watchlist {watchlist_id} not found")
 
         rows: list[dict] = []
+        live_market = LiveMarketService(self.db)
         for entry in watchlist.entries:
             company = self.db.scalar(
                 select(Company).where(Company.ticker == entry.ticker)
             )
-            price = company.current_price if company else None
+            if company:
+                market = live_market.snapshot(company)
+                price = market.live_price
+                price_source = market.price_source
+                last_updated = market.last_updated
+                market_status = market.market_status
+            else:
+                price = price_source = last_updated = market_status = None
             analytics = self._analytics(
                 {entry.ticker: company} if company else {}, [entry.ticker]
             ).get(entry.ticker, {})
@@ -902,7 +951,9 @@ class PortfolioService:
                 "company_id": entry.company_id,
                 "name": company.name if company else entry.ticker,
                 "sector": company.sector if company else None,
-                "price": price, "buy_below": buy_below, "target_price": target,
+                "price": price, "price_source": price_source,
+                "last_updated": last_updated, "market_status": market_status,
+                "buy_below": buy_below, "target_price": target,
                 "upside": upside, "score": analytics.get("score"),
                 "rating": analytics.get("rating"), "status": status.value,
                 "note": entry.note, "conviction": entry.conviction,

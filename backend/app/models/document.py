@@ -79,6 +79,17 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(20), default="uploaded", index=True)
     stage: Mapped[str] = mapped_column(String(20), default="queued")
     progress: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Phase 6 — approval workflow (parallel to the ingestion `status`):
+    #   uploaded → ai_extracted → pending_review → approved → published.
+    # Kept separate so the ingestion lifecycle and the review lifecycle do not
+    # interfere.
+    approval_status: Mapped[str] = mapped_column(
+        String(20), default="uploaded", server_default="uploaded", nullable=False, index=True,
+    )
+    approval_reviewer: Mapped[str | None] = mapped_column(String(254))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approval_note: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
     #: Ordered processing log: one entry per stage transition, carrying the
     #: stage, a message, elapsed milliseconds and a timestamp. Persisted with

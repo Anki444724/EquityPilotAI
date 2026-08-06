@@ -30,6 +30,7 @@ from app.schemas.forecast import (
 from app.services.analysis_service import AnalysisService, fiscal_label
 from app.services.forecast.metadata import GROUP_ORDER, meta_for
 from app.services.forecast.service import ForecastError, ForecastService
+from app.services.live_market import LiveMarketService
 
 router = APIRouter(prefix="/company", tags=["forecast"])
 
@@ -212,6 +213,7 @@ def get_scenarios(
     forecast_id: str | None = Query(None),
     analysis: AnalysisService = Depends(get_analysis),
     svc: ForecastService = Depends(_service),
+    db: Session = Depends(get_db),
 ) -> ScenarioResponse:
     if not analysis.has_data:
         raise HTTPException(status.HTTP_409_CONFLICT, "no financial history")
@@ -223,7 +225,10 @@ def get_scenarios(
     ctx = svc.build_context(analysis.company, analysis.statements, years=years)
     if horizon:
         saved = None
-    cmp_price = analysis.company.current_price
+    # The scenario upside / verdict is computed against the current market
+    # price from the shared LiveMarketService, so it can never diverge from the
+    # live price shown on every other page.
+    cmp_price = LiveMarketService(db).price_for(analysis.company)
     result = svc.run_all_scenarios(ctx, saved, cmp_price=cmp_price)
 
     base = result.results["base"]

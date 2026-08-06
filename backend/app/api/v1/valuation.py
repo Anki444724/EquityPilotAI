@@ -33,6 +33,7 @@ from app.schemas.valuation import (
 )
 from app.services.analysis_service import AnalysisService
 from app.services.forecast.service import ForecastService
+from app.services.live_market import LiveMarketService
 from app.services.valuation.service import ValuationBundle, ValuationService
 
 router = APIRouter(prefix="/company", tags=["valuation"])
@@ -40,6 +41,11 @@ router = APIRouter(prefix="/company", tags=["valuation"])
 
 def _services(db: Session = Depends(get_db)) -> tuple[ValuationService, ForecastService]:
     return ValuationService(db), ForecastService(db)
+
+
+def _market_price(db: Session, analysis: AnalysisService) -> float | None:
+    """The live (or stored-fallback) current market price for this company."""
+    return LiveMarketService(db).price_for(analysis.company)
 
 
 def _require_data(analysis: AnalysisService) -> None:
@@ -272,6 +278,7 @@ def get_sensitivity(
     terminal_method: TerminalMethod = Query(TerminalMethod.PERPETUAL_GROWTH),
     analysis: AnalysisService = Depends(get_analysis),
     services: tuple[ValuationService, ForecastService] = Depends(_services),
+    db: Session = Depends(get_db),
 ) -> SensitivityOut:
     _require_data(analysis)
     valid = {"wacc", "terminal_growth", "revenue_cagr", "ebit_margin", "exit_multiple"}
@@ -315,7 +322,7 @@ def get_sensitivity(
         dcf_fcff=dcf, dcf_fcfe=dcf, relative=relative,
         ddm=valuation.run_ddm_model(analysis, forecast, wacc_result),
         replacement=valuation.run_replacement(analysis, forecast), sotp=None,
-        current_price=analysis.company.current_price, margin_of_safety=0.20,
+        current_price=_market_price(db, analysis), margin_of_safety=0.20,
     )
     quality = valuation.grade(analysis, forecast, summary, relative, dcf)
 
@@ -343,6 +350,7 @@ def get_simulation(
     convention: DiscountConvention = Query(DiscountConvention.MID_YEAR),
     analysis: AnalysisService = Depends(get_analysis),
     services: tuple[ValuationService, ForecastService] = Depends(_services),
+    db: Session = Depends(get_db),
 ) -> SimulationOut:
     _require_data(analysis)
     valuation, forecast_service = services
@@ -375,7 +383,7 @@ def get_simulation(
         dcf_fcff=dcf, dcf_fcfe=dcf, relative=relative,
         ddm=valuation.run_ddm_model(analysis, forecast, wacc_result),
         replacement=valuation.run_replacement(analysis, forecast), sotp=None,
-        current_price=analysis.company.current_price, margin_of_safety=0.20,
+        current_price=_market_price(db, analysis), margin_of_safety=0.20,
     )
     quality = valuation.grade(analysis, forecast, summary, relative, dcf)
 
@@ -399,6 +407,7 @@ def post_sotp(
     analysis: AnalysisService = Depends(get_analysis),
     services: tuple[ValuationService, ForecastService] = Depends(_services),
     _: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> SOTPOut:
     _require_data(analysis)
     if not body.segments:
@@ -420,7 +429,7 @@ def post_sotp(
         net_debt=balance.net_debt if balance else 0.0,
         holding_discount=body.holding_discount,
         shares_outstanding=income.weighted_shares if income else 0.0,
-        current_price=analysis.company.current_price,
+        current_price=_market_price(db, analysis),
         unallocated_assets=body.unallocated_assets,
     )
 

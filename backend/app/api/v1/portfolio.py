@@ -87,6 +87,8 @@ def _holding_out(holding) -> HoldingOut:
         sector=position.sector, industry=position.industry,
         quantity=position.quantity, average_cost=position.average_cost,
         cost=position.cost, current_price=position.current_price,
+        price_source=holding.price_source, last_updated=holding.last_updated,
+        market_status=holding.market_status,
         market_value=position.market_value,
         unrealised_pnl=position.unrealised_pnl,
         unrealised_return=position.unrealised_return,

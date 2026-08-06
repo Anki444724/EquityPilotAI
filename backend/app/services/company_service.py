@@ -32,6 +32,7 @@ from app.schemas.company import (
     CompanySummary,
     DataCoverage,
 )
+from app.services.live_market import LiveMarketService
 from app.services.platform.cache import Namespace, cache
 
 #: Valid canonical keys, used to skip unknown rows defensively.
@@ -53,6 +54,14 @@ class CompanyService:
     # ------------------------------------------------------------- retrieval
     def get(self, company_id: str) -> Company | None:
         return self.db.get(Company, company_id)
+
+    def get_detail(self, company_id: str) -> CompanyDetail | None:
+        """Company detail with the live market view attached."""
+        company = self.get(company_id)
+        if company is None:
+            return None
+        detail = CompanyDetail.model_validate(company)
+        return LiveMarketService.attach(detail, company, self.db)
 
     def get_by_ticker(self, ticker: str) -> Company | None:
         stmt = select(Company).where(func.upper(Company.ticker) == ticker.upper())
@@ -93,7 +102,13 @@ class CompanyService:
             return bucket, -(c.market_cap or 0)
 
         ranked = sorted(rows, key=rank)[:limit]
-        return [CompanySummary.model_validate(c) for c in ranked]
+        market = LiveMarketService(self.db).attach_many(ranked)
+        return [
+            CompanySummary.model_validate(c).model_copy(
+                update={"market": market.get(c.ticker)}
+            )
+            for c in ranked
+        ]
 
     def list_companies(
         self,
@@ -116,7 +131,13 @@ class CompanyService:
             .scalars()
             .all()
         )
-        return total, [CompanySummary.model_validate(c) for c in rows]
+        market = LiveMarketService(self.db).attach_many(rows)
+        return total, [
+            CompanySummary.model_validate(c).model_copy(
+                update={"market": market.get(c.ticker)}
+            )
+            for c in rows
+        ]
 
     def sectors(self) -> list[str]:
         stmt = (
@@ -197,10 +218,15 @@ class CompanyService:
             items_populated=populated,
         )
 
+        market = LiveMarketService(self.db).snapshot(ctx.company)
+        detail = CompanyDetail.model_validate(ctx.company).model_copy(
+            update={"market": market}
+        )
         profile = CompanyProfile(
-            company=CompanyDetail.model_validate(ctx.company),
+            company=detail,
             coverage=coverage,
             latest_fiscal_year=fin.latest_year,
+            market=market,
         )
         if not fin.has_data() or fin.latest_year is None:
             return profile

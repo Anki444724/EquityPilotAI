@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EquityPilot Admin — Phase 7 Preview (Users &amp; Subscriptions)</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#10141d; --elev:#151a25; --border:#232b3a;
+    --text:#e6eaf2; --muted:#8b94a7; --accent:#6ea8ff; --gain:#3ecf8e;
+    --loss:#ff6b6b; --warn:#ffb454; --subtle:#1a2030;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:236px;background:var(--elev);border-right:1px solid var(--border);flex-shrink:0;position:sticky;top:0;height:100vh;overflow:auto}
+  .brand{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--border)}
+  .brand .logo{width:30px;height:30px;border-radius:7px;background:var(--accent);color:#04121f;font-weight:800;font-size:13px;display:grid;place-items:center}
+  .brand .t{font-size:13px;font-weight:700}.brand .s{font-size:10px;color:var(--muted)}
+  nav{padding:8px}
+  .sec{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:12px 10px 4px}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+  .item.active{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .item.dim{color:rgba(139,148,167,.45);cursor:default}
+  .item .ph{margin-left:auto;font-size:9px;background:var(--subtle);color:var(--muted);border-radius:4px;padding:1px 5px}
+  .main{flex:1;padding:22px 28px;max-width:1280px}
+  h1{font-size:19px;font-weight:700}.sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .tabs{display:flex;gap:6px;margin-top:14px;flex-wrap:wrap}
+  .tab{padding:6px 12px;border-radius:7px;font-size:12px;border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:5px}
+  .tab.on{background:rgba(110,168,255,.12);color:var(--accent);font-weight:600}
+  .card{background:var(--elev);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:12px}
+  .card .k{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  .btn.sm{padding:2px 7px;font-size:11px}
+  .tablewrap{margin-top:10px;border:1px solid var(--border);border-radius:10px;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:var(--elev);text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;padding:8px 10px}
+  th.r,td.r{text-align:right}
+  td{border-top:1px solid var(--border);padding:8px 10px}
+  .pill{display:inline-flex;border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:10px;font-weight:600;text-transform:capitalize}
+  .pill.ok{color:var(--gain);border-color:rgba(62,207,142,.3);background:rgba(62,207,142,.08)}
+  .pill.warn{color:var(--warn);border-color:rgba(255,180,84,.3);background:rgba(255,180,84,.08)}
+  .pill.accent{color:var(--accent);border-color:rgba(110,168,255,.3);background:rgba(110,168,255,.08)}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(4,1fr);margin-top:10px}
+  .note{font-size:10px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">EP</div><div><div class="t">EquityPilot Admin</div><div class="s">Control room</div></div></div>
+    <nav>
+      <div class="sec">Overview</div>
+      <div class="item">◧ Dashboard</div><div class="item">◈ Activity History</div><div class="item">♻ Recycle Bin</div>
+      <div class="sec">Content</div>
+      <div class="item">🏢 Companies</div><div class="item">▤ Financial Statements</div><div class="item">◉ Live Market</div><div class="item">✦ AI Score</div><div class="item">📄 Documents</div>
+      <div class="item active">👥 Users &amp; Subscriptions</div>
+      <div class="item dim">📰 News<span class="ph">P8</span></div>
+      <div class="item dim">⊞ Sectors<span class="ph">P9</span></div>
+      <div class="sec">Platform</div>
+      <div class="item dim">🔑 API Settings<span class="ph">P10</span></div>
+      <div class="item dim">⚙ System Settings<span class="ph">P11</span></div>
+      <div class="item dim">🛢 Database<span class="ph">P12</span></div>
+      <div class="item dim">📜 Logs<span class="ph">P13</span></div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <h1>Users &amp; Subscription Center</h1>
+    <div class="sub">Enterprise user platform — accounts, roles, billing, sessions, security, analytics.</div>
+
+    <div class="tabs">
+      <div class="tab on">👥 Users</div><div class="tab">🔑 Subscriptions</div>
+      <div class="tab">💳 Payments</div><div class="tab">◈ Sessions</div>
+      <div class="tab">🛡 Security</div><div class="tab">🔔 Notifications</div>
+      <div class="tab">▦ Roles &amp; Permissions</div><div class="tab">◔ Analytics</div>
+    </div>
+
+    <!-- Users table -->
+    <div class="card">
+      <div class="k">Users</div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>User</th><th>Role</th><th>Status</th><th>2FA</th><th>Last login</th><th class="r">Actions</th></tr></thead>
+          <tbody>
+            <tr><td><button class="btn sm primary">Rahul Sharma</button><div class="muted">rahul@equitypilot.ai</div></td><td><span class="pill accent">Super Admin</span></td><td><span class="pill ok">active</span></td><td>2FA ✓</td><td>15:30 UTC</td><td class="r"><button class="btn sm">Suspend</button></td></tr>
+            <tr><td><button class="btn sm">Priya Patel</button><div class="muted">priya@equitypilot.ai</div></td><td><span class="pill">Analyst</span></td><td><span class="pill ok">active</span></td><td>—</td><td>14:12 UTC</td><td class="r"><button class="btn sm">Suspend</button></td></tr>
+            <tr><td><button class="btn sm">Arjun Mehta</button><div class="muted">arjun@equitypilot.ai</div></td><td><span class="pill">Premium</span></td><td><span class="pill warn">suspended</span></td><td>—</td><td>09:40 UTC</td><td class="r"><button class="btn sm">Restore</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- User detail -->
+    <div class="card">
+      <div class="k">User detail — rahul@equitypilot.ai</div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn sm">Overview</button><button class="btn sm">Subscription</button>
+        <button class="btn sm">Sessions</button><button class="btn sm">Billing</button><button class="btn sm">Security</button>
+        <button class="btn sm danger" style="color:var(--loss)">Delete</button>
+      </div>
+      <div class="grid">
+        <div><div class="k">Status</div><div style="font-size:16px;font-weight:600">active</div></div>
+        <div><div class="k">Plan</div><div style="font-size:16px;font-weight:600">Enterprise</div></div>
+        <div><div class="k">Active sessions</div><div style="font-size:16px;font-weight:600">3</div></div>
+        <div><div class="k">Failed logins</div><div style="font-size:16px;font-weight:600">0</div></div>
+      </div>
+    </div>
+
+    <!-- Subscription controls -->
+    <div class="card">
+      <div class="k">Subscription — upgrade / downgrade / renew / extend</div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn">Free</button><button class="btn">Premium</button><button class="btn">Pro</button>
+        <button class="btn primary">Enterprise</button><button class="btn">↺ Renew</button><button class="btn">⇥ Extend</button>
+      </div>
+    </div>
+
+    <!-- Payments -->
+    <div class="card">
+      <div class="k">Payments &amp; invoices</div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Invoice</th><th class="r">Amount</th><th>Status</th><th class="r">Actions</th></tr></thead>
+          <tbody>
+            <tr><td><b>INV-1-1786030483</b><div class="muted">pro · monthly</div></td><td class="r">₹4,999.00</td><td><span class="pill ok">paid</span></td><td class="r"><button class="btn sm">Refund</button></td></tr>
+            <tr><td><b>INV-1-1786029001</b><div class="muted">enterprise · annual</div></td><td class="r">₹49,900.00</td><td><span class="pill warn">issued</span></td><td class="r"><button class="btn sm">Mark paid</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary">＋ Issue invoice</button><span class="muted" style="align-self:center">Razorpay · Stripe · Manual</span></div>
+    </div>
+
+    <!-- Sessions & security -->
+    <div class="card">
+      <div class="k">Active devices — 3 sessions</div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>IP</th><th>Device</th><th>Issued</th><th class="r"></th></tr></thead>
+          <tbody>
+            <tr><td>203.0.113.10</td><td>Chrome · macOS</td><td>15:30 UTC</td><td class="r"><button class="btn sm danger">Logout</button></td></tr>
+            <tr><td>198.51.100.42</td><td>Safari · iPhone</td><td>11:20 UTC</td><td class="r"><button class="btn sm danger">Logout</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:8px"><button class="btn sm danger">Logout all</button></div>
+      <div class="k" style="margin-top:12px">Security — 2FA ready · email verified · password reset &amp; login/IP history</div>
+    </div>
+
+    <!-- Analytics -->
+    <div class="card">
+      <div class="k">Analytics (30d)</div>
+      <div class="grid">
+        <div><div class="k">Total users</div><div style="font-size:18px;font-weight:700">1,240</div></div>
+        <div><div class="k">Active</div><div style="font-size:18px;font-weight:700">980</div></div>
+        <div><div class="k">New</div><div style="font-size:18px;font-weight:700">86</div></div>
+        <div><div class="k">Premium</div><div style="font-size:18px;font-weight:700">412</div></div>
+        <div><div class="k">Free</div><div style="font-size:18px;font-weight:700">828</div></div>
+        <div><div class="k">Revenue</div><div style="font-size:18px;font-weight:700">₹8,40,000</div></div>
+        <div><div class="k">Tenants</div><div style="font-size:18px;font-weight:700">94</div></div>
+        <div><div class="k">Retention</div><div style="font-size:18px;font-weight:700">78%</div></div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

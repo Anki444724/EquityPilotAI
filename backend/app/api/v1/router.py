@@ -2,12 +2,18 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
-    admin, ai, ai_scoring, analysis, auth, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
+    admin, admin_ai, admin_companies, admin_documents, admin_financials, admin_market, admin_users, ai, ai_scoring, analysis, auth, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
 )
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(admin.router)
+api_router.include_router(admin_companies.router)
+api_router.include_router(admin_financials.router)
+api_router.include_router(admin_market.router)
+api_router.include_router(admin_ai.router)
+api_router.include_router(admin_documents.router)
+api_router.include_router(admin_users.router)
 api_router.include_router(companies.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(analysis.router)

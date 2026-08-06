@@ -41,6 +41,7 @@ from app.domain.valuation.wacc import (
 from app.models.company import FinancialFact
 from app.services.analysis_service import AnalysisService
 from app.services.forecast.service import ForecastService
+from app.services.live_market import LiveMarketService
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +107,18 @@ DEFAULT_METHOD_WEIGHTS = {
 class ValuationService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self._market = LiveMarketService(db)
+
+    def _market_price(self, analysis: AnalysisService) -> float | None:
+        """The current market price this valuation computes and displays against.
+
+        Resolved once through the shared, cached LiveMarketService, so the
+        "current price" shown on the valuation page — and the upside / buy-zone /
+        recommendation derived from it — can never diverge from the live market
+        view used by every other page. Falls back to the stored column only when
+        no live figure is available.
+        """
+        return self._market.price_for(analysis.company)
 
     # ------------------------------------------------------------- inputs
     def build_wacc(
@@ -173,7 +186,7 @@ class ValuationService:
             minority_interest=balance.minority_interest if balance else 0.0,
             associate_investments=balance.lt_investments_associates if balance else 0.0,
             shares_outstanding=base.shares_outstanding,
-            current_price=analysis.company.current_price,
+            current_price=self._market_price(analysis),
             margin_of_safety=margin_of_safety,
         ))
 
@@ -197,7 +210,7 @@ class ValuationService:
                 terminal_method=TerminalMethod.PERPETUAL_GROWTH,
                 convention=convention,
                 shares_outstanding=base.shares_outstanding,
-                current_price=analysis.company.current_price,
+                current_price=self._market_price(analysis),
                 margin_of_safety=margin_of_safety,
             ),
             equity_model=True,
@@ -228,7 +241,7 @@ class ValuationService:
         )
 
         return run_relative_valuation(RelativeInputs(
-            current_price=company.current_price,
+            current_price=self._market_price(analysis),
             shares_outstanding=base.shares_outstanding,
             market_cap=company.market_cap or 0.0,
             gross_debt=base.gross_debt,
@@ -284,7 +297,7 @@ class ValuationService:
             high_growth=forecast.assumptions.revenue_growth.value,
             high_growth_years=min(5, len(forecast.years)),
             half_life_years=max(1, len(forecast.years) // 2),
-            current_price=analysis.company.current_price,
+            current_price=self._market_price(analysis),
         ))
 
     def run_replacement(
@@ -297,7 +310,7 @@ class ValuationService:
             net_debt=base.gross_debt - base.cash,
             shares_outstanding=base.shares_outstanding,
             market_cap=analysis.company.market_cap,
-            current_price=analysis.company.current_price,
+            current_price=self._market_price(analysis),
         )
 
     # ------------------------------------------------------------ summary
@@ -468,7 +481,7 @@ class ValuationService:
                 cash_and_equivalents=base.cash,
                 minority_interest=balance.minority_interest if balance else 0.0,
                 shares_outstanding=base.shares_outstanding,
-                current_price=analysis.company.current_price,
+                current_price=self._market_price(analysis),
             ))
             return result.intrinsic_value_per_share
 
@@ -476,7 +489,7 @@ class ValuationService:
             row_key=row_key, col_key=col_key,
             row_base=base_map[row_key], col_base=base_map[col_key],
             revalue=revalue, steps=steps,
-            current_price=analysis.company.current_price,
+            current_price=self._market_price(analysis),
         )
 
     def monte_carlo(
@@ -518,7 +531,7 @@ class ValuationService:
 
         return run_simulation(
             variables, revalue, trials=trials, seed=seed,
-            current_price=analysis.company.current_price,
+            current_price=self._market_price(analysis),
         )
 
     # ------------------------------------------------------------- bundle
@@ -578,7 +591,7 @@ class ValuationService:
         summary = self.summarise(
             dcf_fcff=fcff, dcf_fcfe=fcfe, relative=relative, ddm=ddm,
             replacement=replacement, sotp=None,
-            current_price=analysis.company.current_price,
+            current_price=self._market_price(analysis),
             margin_of_safety=margin_of_safety,
         )
         quality = self.grade(analysis, forecast, summary, relative, fcff)
