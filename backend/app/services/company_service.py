@@ -131,13 +131,12 @@ class CompanyService:
             .scalars()
             .all()
         )
-        market = LiveMarketService(self.db).attach_many(rows)
-        return total, [
-            CompanySummary.model_validate(c).model_copy(
-                update={"market": market.get(c.ticker)}
-            )
-            for c in rows
-        ]
+        # Performance fix: /companies list was fetching live market data for
+        # up to 25 companies via Yahoo Finance per request, causing minutes
+        # of latency due to rate-limiting. List view now returns lightweight
+        # CompanySummary without live market, using stored current_price via
+        # marketPrice() fallback in frontend. Detail page still uses live.
+        return total, [CompanySummary.model_validate(c) for c in rows]
 
     def sectors(self) -> list[str]:
         stmt = (

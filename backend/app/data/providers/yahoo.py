@@ -52,21 +52,63 @@ class YahooProvider(BaseMarketProvider):
 
         try:
             holder = yahoo_source.CompanyFinancials(ticker=symbol.split(".")[0])
-            price, market_cap, shares = yahoo_source._fetch_quote(  # noqa: SLF001
-                symbol, holder,
+            # Single Yahoo chart API call per fetch to avoid 429
+            # Fetch full details once, then reuse for price/shares/market_cap
+            details = {}
+            try:
+                details = yahoo_source.fetch_quote_details(symbol)
+            except Exception:
+                details = {}
+            # Fixed tuple order: _fetch_quote returns price, shares, market_cap
+            # Pass prefetched details to avoid second HTTP request
+            price, shares, market_cap = yahoo_source._fetch_quote(  # noqa: SLF001
+                symbol, holder, prefetched_details=details,
             )
+
             raw["quote"] = {
-                "symbol": symbol, "price": price,
-                "market_cap": market_cap, "shares": shares,
+                "symbol": symbol,
+                "price": price,
+                "market_cap": market_cap,
+                "shares": shares,
+                "details": details,
             }
-            snapshot.quote = Quote(price=to_float(price, zero_is_absent=True))
+
+            # Populate Quote with all available Yahoo fields
+            # Mapping Yahoo fields to Quote model:
+            # regularMarketPrice -> price
+            # regularMarketChange -> change
+            # regularMarketChangePercent -> percent_change
+            # regularMarketVolume -> volume
+            # regularMarketDayHigh -> day_high
+            # regularMarketDayLow -> day_low
+            # regularMarketDayOpen -> day_open
+            # chartPreviousClose -> previous_close
+            snapshot.quote = Quote(
+                price=to_float(details.get("regularMarketPrice") or price, zero_is_absent=True),
+                change=to_float(details.get("regularMarketChange")),
+                percent_change=to_float(details.get("regularMarketChangePercent")),
+                volume=to_float(details.get("regularMarketVolume")),
+                day_high=to_float(details.get("regularMarketDayHigh"), zero_is_absent=True),
+                day_low=to_float(details.get("regularMarketDayLow"), zero_is_absent=True),
+                day_open=to_float(details.get("regularMarketDayOpen"), zero_is_absent=True),
+                previous_close=to_float(details.get("chartPreviousClose"), zero_is_absent=True),
+            )
+
             snapshot.profile = CompanyProfile(
                 name=getattr(holder, "long_name", None),
                 exchange="NSE" if symbol.endswith(".NS") else None,
                 currency="INR" if symbol.endswith(".NS") else None,
-                market_cap=to_float(market_cap, zero_is_absent=True),
+                market_cap=to_float(details.get("marketCap") or market_cap, zero_is_absent=True),
                 shares_outstanding=to_float(shares, zero_is_absent=True),
             )
+
+            # Populate key_metrics with 52-week high/low if available
+            # These are already supported by existing MarketSnapshot.key_metrics dict
+            if details.get("fiftyTwoWeekHigh") is not None:
+                snapshot.key_metrics["week52_high"] = to_float(details.get("fiftyTwoWeekHigh"))
+            if details.get("fiftyTwoWeekLow") is not None:
+                snapshot.key_metrics["week52_low"] = to_float(details.get("fiftyTwoWeekLow"))
+
             if not snapshot.has_quote:
                 snapshot.unavailable.append("quote: Yahoo returned no price")
         except Exception as exc:  # noqa: BLE001

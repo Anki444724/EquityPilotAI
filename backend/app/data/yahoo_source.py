@@ -48,10 +48,11 @@ _BASE = "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/
 _QUOTE = "https://query1.finance.yahoo.com/v8/finance/chart"
 _HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 #: Yahoo field → canonical line item.
@@ -427,18 +428,24 @@ def _sign_normalise(data: CompanyFinancials) -> None:
             data.facts[item][year] = abs(value)
 
 
-def _fetch_quote(symbol: str, data: CompanyFinancials) -> tuple[float | None, float | None, float | None]:
+def _fetch_quote(
+    symbol: str,
+    data: CompanyFinancials,
+    prefetched_details: dict[str, float | None] | None = None,
+) -> tuple[float | None, float | None, float | None]:
     """Live price and share count.
 
     Failure here is tolerated: a company with financials but no quote is still
     worth ingesting, and the missing price is recorded as a warning rather
     than aborting the row.
+
+    prefetched_details allows YahooProvider to pass already-fetched chart
+    data to avoid a second HTTP request (Yahoo 429 protection).
     """
     try:
-        payload = _http_json(f"{_QUOTE}/{symbol}?interval=1d&range=5d", retries=2)
-        meta = payload["chart"]["result"][0]["meta"]
-        price = meta.get("regularMarketPrice")
-        currency = meta.get("currency", "INR")
+        details = prefetched_details if prefetched_details is not None else fetch_quote_details(symbol)
+        price = details.get("regularMarketPrice")
+        currency = details.get("currency", "INR")
         if currency != "INR":
             data.warnings.append(f"quote currency is {currency}, not INR")
     except Exception as exc:  # noqa: BLE001
@@ -449,14 +456,79 @@ def _fetch_quote(symbol: str, data: CompanyFinancials) -> tuple[float | None, fl
     shares = None
     if latest is not None:
         raw = data.ctx("annualOrdinarySharesNumber", latest)
-        # Share counts came through the same /CRORE conversion as money, which
-        # is arithmetically what we want — a count in crore — but it is worth
-        # naming, because a stray factor of 1e7 here silently destroys every
-        # per-share figure downstream.
         shares = raw
 
-    market_cap = price * shares if (price and shares) else None
+    market_cap = price * shares if (price and shares) else details.get("marketCap")
     return price, shares, market_cap
+
+
+def fetch_quote_details(symbol: str) -> dict[str, float | None]:
+    """Fetch full live quote details from Yahoo chart API.
+
+    Returns dict with keys:
+    - regularMarketPrice
+    - regularMarketChange
+    - regularMarketChangePercent
+    - regularMarketVolume
+    - regularMarketDayHigh
+    - regularMarketDayLow
+    - regularMarketDayOpen
+    - chartPreviousClose
+    - fiftyTwoWeekHigh
+    - fiftyTwoWeekLow
+    - marketCap
+    - currency
+
+    Used by YahooProvider to populate Quote with change, volume, etc.
+    """
+    try:
+        payload = _http_json(f"{_QUOTE}/{symbol}?interval=1d&range=5d", retries=2)
+        result = payload["chart"]["result"][0]
+        meta = result.get("meta", {})
+        indicators = (result.get("indicators", {}).get("quote") or [{}])[0]
+
+        price = meta.get("regularMarketPrice")
+        prev_close = meta.get("chartPreviousClose")
+        change = meta.get("regularMarketChange")
+        change_percent = meta.get("regularMarketChangePercent")
+
+        if change is None and price is not None and prev_close is not None:
+            try:
+                change = float(price) - float(prev_close)
+            except Exception:
+                change = None
+        if change_percent is None and change is not None and prev_close:
+            try:
+                change_percent = (float(change) / float(prev_close)) * 100.0
+            except Exception:
+                change_percent = None
+
+        opens = indicators.get("open") or []
+        day_open = None
+        if opens:
+            for val in reversed(opens):
+                if val is not None:
+                    day_open = val
+                    break
+
+        return {
+            "regularMarketPrice": meta.get("regularMarketPrice"),
+            "regularMarketChange": change,
+            "regularMarketChangePercent": change_percent,
+            "regularMarketVolume": meta.get("regularMarketVolume"),
+            "regularMarketDayHigh": meta.get("regularMarketDayHigh"),
+            "regularMarketDayLow": meta.get("regularMarketDayLow"),
+            "regularMarketDayOpen": day_open,
+            "chartPreviousClose": prev_close,
+            "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"),
+            "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow"),
+            "marketCap": meta.get("marketCap"),
+            "currency": meta.get("currency", "INR"),
+        }
+    except Exception:
+        return {}
+
+
 
 
 def fetch_price_history(ticker: str, *, days: int = 800,

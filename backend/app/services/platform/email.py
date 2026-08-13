@@ -93,9 +93,17 @@ class EmailService:
                     at=message.at, transport="failed",
                 )
         else:
-            log.info("email (console transport)", to=to, subject=subject)
+            # In production, console transport means email will never arrive.
+            # Log at error level so degraded health is visible, but do not
+            # raise - user still sees neutral message to avoid enumeration.
+            if settings.is_production:
+                log.error("email requested but no SMTP host configured - email not delivered", to=to, subject=subject)
+            else:
+                log.info("email (console transport)", to=to, subject=subject)
             for line in body.splitlines():
                 if "http" in line:
+                    # Never log full reset tokens at info in production console
+                    # - they are already protected by _dev_link guard.
                     log.info("email link", link=line.strip())
 
         outbox.add(message)
@@ -108,11 +116,20 @@ class EmailService:
         message["Subject"] = subject
         message.set_content(body)
 
-        with smtplib.SMTP(settings.SMTP_HOST or "", settings.SMTP_PORT, timeout=15) as client:
-            client.starttls()
-            if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
-                client.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            client.send_message(message)
+        # Port 465 is implicit TLS (SMTP_SSL). Port 587 and others are explicit
+        # STARTTLS. Supporting both avoids a common production misconfiguration
+        # where 465 is set but STARTTLS is still attempted, which fails.
+        if settings.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST or "", settings.SMTP_PORT, timeout=15) as client:
+                if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
+                    client.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                client.send_message(message)
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST or "", settings.SMTP_PORT, timeout=15) as client:
+                client.starttls()
+                if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
+                    client.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                client.send_message(message)
 
     # ==================================================================
     # The three flows

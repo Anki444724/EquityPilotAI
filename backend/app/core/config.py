@@ -322,6 +322,16 @@ class Settings(BaseSettings):
             return problems
         if not self.email_configured:
             problems.append("No SMTP host — verification and reset emails cannot be delivered.")
+        # Production-safe reset links must use the production domain over HTTPS.
+        # The default localhost value works for development but would generate
+        # useless links in production and leak internal hostnames.
+        if self.EMAIL_LINK_BASE == "http://localhost:3000":
+            problems.append("EMAIL_LINK_BASE is still localhost — reset links will not reach users. Set to https://equitypilot.in")
+        elif not self.EMAIL_LINK_BASE.startswith("https://"):
+            problems.append(f"EMAIL_LINK_BASE should be HTTPS in production — currently {self.EMAIL_LINK_BASE}")
+        # SMTP_FROM default is for local dev — production should use its own domain to pass SPF/DKIM.
+        if self.SMTP_FROM == "no-reply@ierp.local":
+            problems.append("SMTP_FROM is still the development default — set to no-reply@equitypilot.in or similar")
         if not self.ai_configured:
             problems.append("No AI provider key — the analyst serves offline template output.")
         return problems

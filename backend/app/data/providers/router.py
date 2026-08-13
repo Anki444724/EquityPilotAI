@@ -224,16 +224,18 @@ class MarketDataRouter:
     def _chain_for(self, resolved) -> list[str]:
         """Tier order for this listing.
 
-        Different markets deserve different orders, which is the substance of
-        the brief rather than a detail. For an Indian company the platform's
-        own screener pipeline holds twelve years of validated, consolidated
-        statements that no free external tier will serve, so it leads; the
-        externals are there for a live price. For a US company the platform
-        holds nothing, so the externals lead and there is no internal tier
-        worth trying first.
+        Previously Indian listings preferred internal DB first because the
+        platform holds 12 years of validated statements that externals don't
+        serve. However for LIVE market price, internal (Company.current_price)
+        is stale and must NOT be presented as live. All markets now try
+        external providers first for a genuine live quote, then fall back to
+        internal DB (explicitly labelled as non-live) and documents.
+
+        This fixes the company-page stale price bug where RELIANCE showed
+        ₹2,945 from Company.current_price and never reached Yahoo/FMP/Finnhub.
         """
-        if resolved.is_indian:
-            return ["internal", "documents", "external"]
+        # Always prefer external live providers first for price.
+        # Internal is fallback only, labelled as non-live by LiveMarketService.
         return ["external", "internal", "documents"]
 
     def fetch(
