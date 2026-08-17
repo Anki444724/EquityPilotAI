@@ -25,6 +25,11 @@ import { SignIn } from "./sign-in";
 //
 // They now resolve against the company the user is currently looking at, and
 // fall back to the company list when there is none.
+//
+// AUDIT FIX: Primary navigation now shows only core sections (Dashboard,
+// Companies, Portfolio, Watchlist, Reports, Documents). Per-company research
+// (Financials, Valuation, Scoring, Forecast, AI) lives in CompanyTabs, not top rail,
+// to reduce overload. This implements progressive disclosure: Simple → Advanced.
 /** Roles that may see the tenant administration console. */
 const ADMIN_ROLES = ["super_admin", "admin"] as const;
 /** Cross-tenant operator console. Super admin only. */
@@ -33,15 +38,10 @@ const OPERATOR_ROLES = ["super_admin"] as const;
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "d" },
   { href: "/companies", label: "Companies", icon: Building2, key: "c" },
-  { href: "/financials", label: "Financials", icon: BarChart3, perCompany: "financials" },
-  { href: "/valuation", label: "Valuation", icon: TrendingUp, perCompany: "valuation" },
-  { href: "/scoring", label: "Scoring", icon: Gauge, perCompany: "scoring" },
-  { href: "/forecast", label: "Forecast", icon: LineChart, perCompany: "forecast" },
-  { href: "/ai", label: "AI Research", icon: Sparkles, perCompany: "ai" },
-  { href: "/documents", label: "Documents", icon: FileSearch },
-  { href: "/portfolio", label: "Portfolio", icon: Briefcase },
-  { href: "/watchlist", label: "Watchlist", icon: Eye },
-  { href: "/reports", label: "Reports", icon: FileText },
+  { href: "/portfolio", label: "Portfolio", icon: Briefcase, key: "p" },
+  { href: "/watchlist", label: "Watchlist", icon: Eye, key: "w" },
+  { href: "/reports", label: "Reports", icon: FileText, key: "r" },
+  { href: "/documents", label: "Documents", icon: FileSearch, key: "o" },
   // Module 10. The operator console is a separate entry rather than a tab
   // inside Administration: they answer to different permissions, and putting
   // them together invites someone to assume an org admin can reach both.

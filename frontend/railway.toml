@@ -1,5 +1,4 @@
 # Railway service definition for the Next.js frontend.
-#
 # Without this file Railway falls back to Railpack auto-detection, which
 # ignores the multi-stage Dockerfile — and with it the standalone output and
 # the NEXT_PUBLIC_API_URL build argument.
@@ -11,6 +10,8 @@ dockerfilePath = "Dockerfile"
 # read at run time. Setting the API URL as a runtime variable alone would
 # leave the browser calling http://localhost:8000 — the Dockerfile's ARG
 # default — and every request would fail once the page reached a real user.
+# Current production on Railway: backend-production-18956.up.railway.app
+# For custom domain migration, change to https://api.equitypilot.in via env.
 [build.args]
 NEXT_PUBLIC_API_URL = "https://backend-production-18956.up.railway.app"
 

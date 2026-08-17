@@ -131,7 +131,11 @@ class CompanyService:
             .scalars()
             .all()
         )
-        market = LiveMarketService(self.db).attach_many(rows)
+        # Lightweight non-blocking path: cache/internal fallback immediately,
+        # single bounded background refresh worker with inflight dedup.
+        # Do NOT restore attach_many for the companies list.
+        live_service = LiveMarketService(self.db)
+        market = live_service.bulk_quotes(rows)
         return total, [
             CompanySummary.model_validate(c).model_copy(
                 update={"market": market.get(c.ticker)}

@@ -23,16 +23,17 @@ import { Plus } from "lucide-react";
 
 const TABS = [
   { segment: "", label: "Overview" },
-  { segment: "financials", label: "Financials" },
+  { segment: "investment", label: "AI Investment View" },
+  { segment: "financials", label: "Financial Health" },
   { segment: "valuation", label: "Valuation" },
   { segment: "scoring", label: "Scoring" },
   { segment: "ai", label: "AI Analysis" },
   { segment: "forecast", label: "Forecast" },
   { segment: "documents", label: "Documents" },
   { segment: "charts", label: "Charts" },
-  { segment: "peers", label: "Peer Comparison" },
+  { segment: "peers", label: "Peers" },
   { segment: "news", label: "News" },
-  { segment: "timeline", label: "Knowledge Timeline" },
+  { segment: "timeline", label: "Timeline" },
 ] as const;
 
 export function CompanyTabs({ companyId }: { companyId: string }) {

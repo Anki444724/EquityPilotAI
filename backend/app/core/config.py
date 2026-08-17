@@ -77,12 +77,16 @@ class Settings(BaseSettings):
     # With no SMTP host configured the platform uses a console transport that
     # records the message and logs the link, so verification, reset and magic
     # link all work end-to-end in development.
+    # Production SES (ap-south-1): email-smtp.ap-south-1.amazonaws.com:587
+    # Non-secret production values: SMTP_FROM=no-reply@equitypilot.in,
+    # SMTP_FROM_NAME=EquityPilot, EMAIL_LINK_BASE=https://equitypilot.in
+    # SMTP_USERNAME/PASSWORD must come from env (SES SMTP credentials), never hardcoded.
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 587
     SMTP_USERNAME: str | None = None
     SMTP_PASSWORD: str | None = None
-    SMTP_FROM: str = "no-reply@ierp.local"
-    SMTP_FROM_NAME: str = "Equity Research Platform"
+    SMTP_FROM: str = "no-reply@equitypilot.in"
+    SMTP_FROM_NAME: str = "EquityPilot"
     EMAIL_LINK_BASE: str = "http://localhost:3000"
 
     # --- multi-tenancy --------------------------------------------------
@@ -208,7 +212,10 @@ class Settings(BaseSettings):
     DEFAULT_RESPONSE_LANGUAGE: str = "english"
     #: Sent as HTTP-Referer / X-Title. OpenRouter attributes usage with these
     #: and rate-limits anonymous traffic more aggressively.
-    OPENROUTER_SITE_URL: str = "https://frontend-production-1a313.up.railway.app"
+    #: Platform-independent default: uses EMAIL_LINK_BASE or the production domain.
+    OPENROUTER_SITE_URL: str = Field(
+        default_factory=lambda: __import__("os").environ.get("EMAIL_LINK_BASE") or "https://equitypilot.in"
+    )
     OPENROUTER_APP_NAME: str = "EquityPilotAI"
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None

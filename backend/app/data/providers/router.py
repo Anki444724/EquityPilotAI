@@ -128,14 +128,15 @@ class TTLCache:
             _mirror_stat(hit=True, news=_is_news_key(key))
             return entry.value
 
-    def put(self, key: str, value: "MarketDataResult") -> None:
+    def put(self, key: str, value: "MarketDataResult", ttl_seconds: float | None = None) -> None:
         with self._lock:
             if len(self._data) >= self.capacity:
                 # Evict whatever expires soonest. Approximate LRU is enough
                 # for a cache this size and avoids tracking access order.
                 oldest = min(self._data, key=lambda k: self._data[k].expires_at)
                 del self._data[oldest]
-            self._data[key] = _Entry(value, time.monotonic() + self.ttl)
+            ttl = ttl_seconds if ttl_seconds is not None else self.ttl
+            self._data[key] = _Entry(value, time.monotonic() + ttl)
 
     def clear(self) -> None:
         with self._lock:
@@ -270,7 +271,18 @@ class MarketDataRouter:
                 latency_ms=elapsed, raw=raw or {}, resolved=resolved,
             )
             if use_cache:
-                self.cache.put(key, result)
+                # 15s NSE live price / 300s default: only external (live)
+                # Indian quotes are short-lived; internal/documents fallback
+                # keeps the long TTL so dashboard/company/detail/watchlist/
+                # portfolio share the same snapshot for seeded companies.
+                try:
+                    from app.core.config import settings as _settings
+                    default_ttl = float(_settings.MARKET_CACHE_TTL_SECONDS)
+                except Exception:
+                    default_ttl = self.cache.ttl
+                is_live_external = source not in (SOURCE_INTERNAL, SOURCE_DOCUMENTS, SOURCE_NONE)
+                ttl = 15.0 if (resolved.is_indian and is_live_external) else default_ttl
+                self.cache.put(key, result, ttl_seconds=ttl)
             log.info("market data served", ticker=resolved.canonical,
                      source=source, market=resolved.market,
                      ms=round(elapsed, 1))

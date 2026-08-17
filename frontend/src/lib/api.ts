@@ -1183,6 +1183,62 @@ export const platformApi = {
 };
 
 /* ------------------------------------------------------------- system */
+export const filingsApi = {
+  get: (ticker: string, limit = 10) =>
+    request<{
+      ticker: string;
+      market: string;
+      source_category: string | null;
+      provider: string | null;
+      confidence_score: number;
+      filing_count: number;
+      filings: {
+        category: string;
+        filing_type: string;
+        title: string;
+        reference: string | null;
+        filed_on: string | null;
+        period: string | null;
+        url: string | null;
+        summary: string | null;
+        exchange: string | null;
+        confidence: number;
+        citation: string;
+      }[];
+      citations: string[];
+      providers_attempted: { provider: string; outcome: string; reason?: string; ms?: number }[];
+      latency_ms: number;
+    }>(`/api/v1/filings/${encodeURIComponent(ticker)}?limit=${limit}`),
+};
+
+export const marketApi = {
+  // Uses existing endpoint GET /api/v1/market/{ticker}
+  // price_history is returned when history=true (default)
+  snapshot: (ticker: string, opts: { news?: boolean; history?: boolean; earnings?: boolean; refresh?: boolean } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.news !== undefined) p.set("news", String(opts.news));
+    if (opts.history !== undefined) p.set("history", String(opts.history));
+    if (opts.earnings !== undefined) p.set("earnings", String(opts.earnings));
+    if (opts.refresh !== undefined) p.set("refresh", String(opts.refresh));
+    const q = p.toString();
+    return request<{
+      ticker: string;
+      source: string;
+      meta: { provider: string; currency: string; exchange: string; market: string; last_updated: string; confidence: number };
+      profile: { name: string | null; exchange: string | null; currency: string | null; market_cap: number | null };
+      quote: { price: number | null; change: number | null; percent_change: number | null; volume: number | null };
+      price_history: { date: string; close: number | null }[];
+      news: { title: string; publishedDate?: string; url?: string; site?: string }[];
+      key_metrics: Record<string, any>;
+      ratios: Record<string, any>;
+      unavailable: string[];
+      providers_attempted: any[];
+      latency_ms: number;
+      cached: boolean;
+    }>(`/api/v1/market/${encodeURIComponent(ticker)}${q ? `?${q}` : ""}`);
+  },
+};
+
 export const systemApi = {
   live: () => request<{ status: string; version: string; uptime_seconds: number }>("/health/live"),
   ready: () => request<HealthReport>("/health/ready"),

@@ -10,6 +10,9 @@ Resolution is deliberately explicit rather than heuristic. A bare symbol is
 Indian only if it is in the platform's own NSE universe; anything else is
 assumed to be a US listing, because that is the other market these providers
 cover and guessing wrong is cheap to detect and expensive to debug.
+
+Updated to handle broader Indian universe (Nifty500, BSE codes) without
+hardcoding individual symbols, while preserving the AAPL fix.
 """
 from __future__ import annotations
 
@@ -92,7 +95,19 @@ def _indian_universe() -> frozenset[str]:
 
 @lru_cache(maxsize=4096)
 def resolve(ticker: str) -> ResolvedSymbol:
-    """Resolve any spelling into one canonical listing."""
+    """Resolve any spelling into one canonical listing.
+
+    Authoritative Indian identification uses the Company's exchange/bse_code/ISIN
+    where available (see LiveMarketService._canonical_for_company). This resolver
+    is the fallback for bare ticker strings without company context and is
+    intentionally explicit to preserve the AAPL bug fix while expanding coverage:
+
+    - Numeric tickers (BSE scrip codes) -> BSE .BO, India
+    - Ticklers in NSE_UNIVERSE -> NSE .NS, India
+    - Bare symbols containing digits, '-' or '&', or longer than 5 chars -> NSE .NS, India
+      (covers 20MICRONS, 21STCENMGM, BHARATCP etc. without hardcoding)
+    - Otherwise bare short alphabetic -> US (preserves AAPL fix)
+    """
     raw = (ticker or "").strip()
     if not raw:
         raise ValueError("empty ticker")
@@ -118,12 +133,27 @@ def resolve(ticker: str) -> ResolvedSymbol:
             # worse than passing through what the user meant.
             base, _, _ = upper.partition(".")
             canonical = upper
+        elif upper.isdigit():
+            # BSE scrip code: numeric, Yahoo uses <code>.BO, market India.
+            # Do NOT blindly append .NS to BSE numeric codes.
+            base, suffix, canonical = upper, ".BO", f"{upper}.BO"
         elif upper in _indian_universe():
             base, suffix, canonical = upper, ".NS", f"{upper}.NS"
         else:
-            # A bare symbol not in the Indian universe is a US listing.
-            # This is the AAPL fix: never append ".NS" by default.
-            base, canonical = upper, upper
+            # Broader Indian heuristic without hardcoding the six symbols.
+            # - Contains digit (20MICRONS, 21STCENMGM) => NSE Indian
+            # - Contains '-' or '&' (BAJAJ-AUTO, M&M) => NSE Indian
+            # - Length >5 (BHARATCP etc.) => likely NSE Indian, not US
+            # Pure short alphabetic not in universe stays US (AAPL fix).
+            has_digit = any(ch.isdigit() for ch in upper)
+            has_special = ("-" in upper) or ("&" in upper)
+            is_long = len(upper) > 5
+            if has_digit or has_special or is_long:
+                base, suffix, canonical = upper, ".NS", f"{upper}.NS"
+            else:
+                # A bare symbol not in the Indian universe is a US listing.
+                # This is the AAPL fix: never append ".NS" by default.
+                base, canonical = upper, upper
 
     exchange, market, currency, timezone = resolve_market(canonical)
     venue_label = (
