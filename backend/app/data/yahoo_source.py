@@ -45,11 +45,12 @@ from app.domain.financials.line_items import LineItem as LI
 CRORE = 1e7
 
 _BASE = "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries"
-_QUOTE = "https://query1.finance.yahoo.com/v8/finance/chart"
+_QUOTE = "https://query2.finance.yahoo.com/v8/finance/chart"
 _HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json",
 }
@@ -173,7 +174,7 @@ class CompanyFinancials:
 #: first ingestion attempt hit it on request one. This is a public endpoint
 #: being used courteously, not a quota we have bought, so the client throttles
 #: itself rather than discovering the limit repeatedly.
-MIN_INTERVAL = 4.0
+MIN_INTERVAL = 0.75
 
 _last_request_at = 0.0
 
@@ -203,55 +204,67 @@ def _throttle() -> None:
     _last_request_at = time.monotonic()
 
 
-def _http_json(url: str, *, retries: int = 4, backoff: float = 2.0) -> dict:
-    """GET with throttling and 429-aware retries.
+def _http_json(url: str, *, retries: int = 4, backoff: float = 3.0) -> dict:
+    """GET JSON from Yahoo with conservative throttling and 429 handling."""
+    global _consecutive_429, MIN_INTERVAL
 
-    A public endpoint will refuse or rate-limit occasionally; a single failure
-    must not abort a 120-company ingestion run halfway through. A 429 is
-    backed off far harder than a network blip, because retrying into a rate
-    limit at the same cadence simply extends it.
-    """
-    global _consecutive_429
     if not provider_available():
-        raise FetchError("provider circuit open — too many 429s this run")
+        raise FetchError("provider circuit open — too many 429s")
 
     last: Exception | None = None
+
     for attempt in range(retries):
         _throttle()
+
         try:
-            # nosec B310 — the scheme is fixed https and the host is a
-            # module constant (Yahoo Finance); `url` is assembled here from a
-            # ticker, never taken from a request. No file:// or custom
-            # scheme can reach this call.
-            request = urllib.request.Request(url, headers=_HEADERS)  # noqa: S310
+            request = urllib.request.Request(
+                url,
+                headers={
+                    **_HEADERS,
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                },
+                method="GET",
+            )
+
             with urllib.request.urlopen(request, timeout=30) as response:
                 payload = json.loads(response.read())
+
             _consecutive_429 = 0
             return payload
+
         except urllib.error.HTTPError as exc:
             last = exc
+
             if exc.code == 429:
                 _consecutive_429 += 1
-                # Back off hard and lengthen the floor for every subsequent
-                # request in this process — the provider has told us our
-                # cadence is wrong, and one slow run beats a failed one.
-                global MIN_INTERVAL
-                MIN_INTERVAL = min(MIN_INTERVAL * 1.5, 10.0)
-                if not provider_available():
-                    raise FetchError("provider circuit open") from exc
-                time.sleep(min(4.0 * (attempt + 1) ** 2, 30.0))
-            elif exc.code in (404, 401, 403):
-                # A delisted or renamed ticker will never succeed. Fail now
-                # rather than spending four retries proving it.
-                raise FetchError(f"HTTP {exc.code} for {url.split('?')[0]}") from exc
-            else:
-                time.sleep(backoff ** (attempt + 1))
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last = exc
-            if attempt < retries - 1:
-                time.sleep(backoff ** (attempt + 1))
-    raise FetchError(f"{type(last).__name__}: {last}")
 
+                # Yahoo is rate-limiting this IP. Increase the interval
+                # aggressively instead of retrying immediately.
+                MIN_INTERVAL = min(max(MIN_INTERVAL * 2.0, 5.0), 30.0)
+
+                if attempt < retries - 1:
+                    delay = min(backoff * (2 ** attempt), 30.0)
+                    time.sleep(delay)
+                    continue
+
+            elif 500 <= exc.code < 600:
+                if attempt < retries - 1:
+                    time.sleep(min(backoff * (2 ** attempt), 15.0))
+                    continue
+
+            break
+
+        except Exception as exc:
+            last = exc
+
+            if attempt < retries - 1:
+                time.sleep(min(backoff * (2 ** attempt), 15.0))
+                continue
+
+            break
+
+    raise FetchError(f"{type(last).__name__}: {last}")
 
 def _fiscal_year(as_of: str) -> int:
     """Indian fiscal year ending 31 March.

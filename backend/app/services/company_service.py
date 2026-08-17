@@ -102,11 +102,11 @@ class CompanyService:
             return bucket, -(c.market_cap or 0)
 
         ranked = sorted(rows, key=rank)[:limit]
-        market = LiveMarketService(self.db).attach_many(ranked)
+
+        # Company search must remain fast. Live market providers are
+        # resolved on the company detail page, not once per search result.
         return [
-            CompanySummary.model_validate(c).model_copy(
-                update={"market": market.get(c.ticker)}
-            )
+            CompanySummary.model_validate(c)
             for c in ranked
         ]
 
@@ -131,11 +131,11 @@ class CompanyService:
             .scalars()
             .all()
         )
-        market = LiveMarketService(self.db).attach_many(rows)
+        # Do not resolve external market providers for every row in the
+        # paginated company list. This endpoint must be DB-fast.
+        # Live market data is resolved on the individual company page.
         return total, [
-            CompanySummary.model_validate(c).model_copy(
-                update={"market": market.get(c.ticker)}
-            )
+            CompanySummary.model_validate(c)
             for c in rows
         ]
 

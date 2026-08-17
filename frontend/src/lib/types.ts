@@ -40,6 +40,23 @@ export interface DataCoverage {
   items_populated: number;
 }
 
+export interface FilingItem {
+  title: string;
+  filed_on: string | null;
+  url: string | null;
+  summary: string | null;
+  source: string | null;
+  exchange: string | null;
+  confidence: number | null;
+}
+
+export interface FilingsResponse {
+  ticker: string;
+  market: string | null;
+  sources: string[];
+  filings: FilingItem[];
+}
+
 export interface CompanyProfile {
   company: CompanyDetail;
   coverage: DataCoverage;

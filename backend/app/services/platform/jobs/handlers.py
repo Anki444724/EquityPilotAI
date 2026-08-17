@@ -641,6 +641,76 @@ def handle_memory_enrichment(db: Session, payload: dict[str, Any]) -> dict[str, 
 
 
 # ===========================================================================
+# Indian market refresh
+# ===========================================================================
+def handle_market_refresh(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Refresh market prices for all active Indian/NSE companies.
+
+    Uses the existing LiveMarketService/MarketDataRouter pipeline so the
+    scheduled path has exactly the same provider/fallback behaviour as the
+    normal application surfaces.
+    """
+    from app.models.company import Company
+    from app.services.live_market import LiveMarketService
+
+    companies = list(
+        db.scalars(
+            select(Company)
+            .where(
+                Company.listing_status == "active",
+                Company.exchange.in_(["NSE", "NSE/BSE"]),
+                Company.deleted_at.is_(None),
+            )
+            .order_by(Company.ticker)
+        )
+    )
+
+    if not companies:
+        return {
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "updated": 0,
+        }
+
+    service = LiveMarketService(db)
+    snapshots = service.attach_many(companies)
+
+    success = 0
+    failed = 0
+    updated = 0
+
+    for company in companies:
+        market = snapshots.get(company.ticker)
+
+        if market is None or market.live_price is None:
+            failed += 1
+            continue
+
+        success += 1
+
+        # Persist the externally resolved quote as the DB fallback value.
+        # Do not overwrite it with an unavailable/internal fallback.
+        if market.price_source not in {
+            "Internal Financial Database",
+            "Document Snapshot",
+            "No Market Data",
+        }:
+            company.current_price = market.live_price
+            updated += 1
+
+    db.commit()
+
+    return {
+        "total": len(companies),
+        "success": success,
+        "failed": failed,
+        "updated": updated,
+    }
+
+
+
+# ===========================================================================
 # Hybrid storage replication
 # ===========================================================================
 def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -668,6 +738,8 @@ def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str
 
 
 HANDLERS: dict[JobKind, Handler] = {
+    JobKind.MARKET_REFRESH: handle_market_refresh,
+
     JobKind.REPORT_GENERATION: handle_report_generation,
     JobKind.DOCUMENT_PROCESSING: handle_document_processing,
     JobKind.EMBEDDING: handle_embedding,

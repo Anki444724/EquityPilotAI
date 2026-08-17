@@ -380,7 +380,6 @@ def normalise_symbol(ticker: str, *, default_suffix: str = ".NS") -> str:
         return symbol
     from app.data.nse_universe import NSE_UNIVERSE  # local: avoids a cycle
 
-    if symbol in {row[0] for row in NSE_UNIVERSE}:
-        return f"{symbol}{default_suffix}"
-    # Not in the Indian universe: treat it as already fully qualified.
-    return symbol
+    # India-only platform:
+    # Any bare ticker is treated as an NSE ticker.
+    return f"{symbol}{default_suffix}"

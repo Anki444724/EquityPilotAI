@@ -41,6 +41,12 @@ export default function CompanyProfilePage({
     enabled: !!data,
   });
 
+  const filings = useQuery({
+    queryKey: ["company-filings", data?.company?.ticker],
+    queryFn: () => api.filings(data!.company.ticker, 10, true),
+    enabled: !!data?.company?.ticker,
+  });
+
   const addToWatchlist = useMutation({
     mutationFn: (watchlistId: number) =>
       watchlistApi.add(watchlistId, {
@@ -158,6 +164,90 @@ export default function CompanyProfilePage({
               </button>
             </div>
           </div>
+        </CardBody>
+      </Card>
+
+      {/* Latest official exchange announcements */}
+      <Card className="mb-5">
+        <CardHeader
+          title="Latest News"
+          subtitle="Official corporate announcements from NSE/BSE"
+        />
+
+        <CardBody>
+          {filings.isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-16" />
+              ))}
+            </div>
+          ) : filings.error ? (
+            <div className="rounded border border-[var(--border)] p-4 text-xs text-[var(--text-muted)]">
+              Unable to load latest corporate announcements.
+            </div>
+          ) : !filings.data?.filings?.length ? (
+            <EmptyState
+              icon={<Info size={24} />}
+              title="No recent announcements"
+              description="No official exchange filings were found for this company."
+            />
+          ) : (
+            <div className="divide-y divide-[var(--border)]">
+              {filings.data.filings.map((item, index) => (
+                <div
+                  key={`${item.filed_on ?? "filing"}-${item.title}-${index}`}
+                  className="py-3 first:pt-0 last:pb-0"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 flex flex-wrap items-center gap-2">
+                        {item.filed_on && (
+                          <span className="num text-[0.6875rem] text-[var(--text-muted)]">
+                            {new Date(item.filed_on).toLocaleDateString("en-IN", {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                            })}
+                          </span>
+                        )}
+
+                        {item.exchange && (
+                          <Badge variant="accent">{item.exchange}</Badge>
+                        )}
+
+                        {item.source && (
+                          <span className="text-[0.625rem] text-[var(--text-muted)]">
+                            {item.source}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="text-sm font-medium">
+                        {item.title}
+                      </div>
+
+                      {item.summary && (
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-muted)]">
+                          {item.summary}
+                        </p>
+                      )}
+                    </div>
+
+                    {item.url && (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-[0.6875rem] text-accent-500 hover:bg-accent-500/5"
+                      >
+                        Official filing <ExternalLink size={10} />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardBody>
       </Card>
 

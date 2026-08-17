@@ -121,9 +121,11 @@ def resolve(ticker: str) -> ResolvedSymbol:
         elif upper in _indian_universe():
             base, suffix, canonical = upper, ".NS", f"{upper}.NS"
         else:
-            # A bare symbol not in the Indian universe is a US listing.
-            # This is the AAPL fix: never append ".NS" by default.
-            base, canonical = upper, upper
+            # India-only platform:
+            # Every bare ticker is treated as an NSE listing.
+            base = upper
+            suffix = ".NS"
+            canonical = f"{upper}.NS"
 
     exchange, market, currency, timezone = resolve_market(canonical)
     venue_label = (

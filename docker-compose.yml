@@ -15,15 +15,13 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ierp
       POSTGRES_PASSWORD: ierp_local_password
       POSTGRES_DB: ierp
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       # `pg_isready` rather than a TCP check: the port opens before the
       # database is able to answer, and dependent containers that start on the
@@ -38,8 +36,6 @@ services:
     command: redis-server --save 60 1 --loglevel warning
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -58,13 +54,15 @@ services:
       # Local-only values. A real deployment injects these from a secret
       # store; committing them here would be the exact mistake the AI Settings
       # sheet warns about.
-      SECRET_KEY: local-development-signing-key-not-for-production-use
-      ENCRYPTION_KEY: local-development-envelope-key-not-for-production
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+      FMP_API_KEY: ${FMP_API_KEY}
       NATIVE_AUTH: "true"
       LOG_FORMAT: json
-      CORS_ORIGINS: '["http://localhost:3000"]'
-      EMAIL_LINK_BASE: http://localhost:3000
-      OAUTH_REDIRECT_BASE: http://localhost:3000
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      EMAIL_LINK_BASE: ${EMAIL_LINK_BASE}
+      OAUTH_REDIRECT_BASE: ${OAUTH_REDIRECT_BASE}
       # The API serves requests; the worker container runs the jobs.
       WORKER_ENABLED: "false"
       SCHEDULER_ENABLED: "false"
@@ -72,7 +70,7 @@ services:
     volumes:
       - backups:/app/backups
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,12 +82,16 @@ services:
     build:
       context: ./backend
     command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
     environment:
       ENVIRONMENT: production
       DATABASE_URL: postgresql+psycopg://ierp:ierp_local_password@postgres:5432/ierp
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: local-development-signing-key-not-for-production-use
-      ENCRYPTION_KEY: local-development-envelope-key-not-for-production
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+      FMP_API_KEY: ${FMP_API_KEY}
       LOG_FORMAT: json
       BACKUP_DIR: /app/backups
       # Exactly one process in the deployment runs the scheduler; more than
@@ -110,9 +112,9 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
     restart: unless-stopped

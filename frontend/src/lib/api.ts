@@ -1,6 +1,6 @@
 /** Typed API client. Single place that knows the backend URL. */
 import type {
-  CompanyDetail, CompanyProfile, CoverageResponse, DashboardOverview,
+  CompanyDetail, CompanyProfile, CoverageResponse, DashboardOverview, FilingsResponse,
   DocCapabilities, DocChunk, DocEntity, DocFact, DocSearchResponse,
   DocStatistics, DocTable, DocumentDetail, DocumentSummary, GraphResponse,
   PaginatedCompanies, SearchResponse, SessionUser, UploadResponse,
@@ -110,6 +110,11 @@ export const api = {
 
   companyProfile: (id: string) =>
     request<CompanyProfile>(`/api/v1/companies/${id}/profile`),
+
+  filings: (ticker: string, limit = 10, allSources = true) =>
+    request<FilingsResponse>(
+      `/api/v1/filings/${encodeURIComponent(ticker)}?limit=${limit}&all_sources=${allSources}`,
+    ),
 
   dashboard: () => request<DashboardOverview>("/api/v1/dashboard/overview"),
 };

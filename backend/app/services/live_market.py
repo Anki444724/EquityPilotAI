@@ -15,6 +15,7 @@ a live quote.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -85,7 +86,14 @@ class LiveMarketService:
             return fallback
 
         try:
-            result = self._router.fetch(company.ticker, db=self.db, use_cache=True)
+            result = self._router.fetch(
+                company.ticker,
+                db=self.db,
+                use_cache=True,
+                include_news=False,
+                include_history=False,
+                include_earnings=False,
+            )
         except Exception:  # noqa: BLE001 - market data must never fail the page
             return fallback
 
@@ -124,13 +132,81 @@ class LiveMarketService:
 
     # -- batch -----------------------------------------------------------
     def attach_many(self, companies: list[Company]) -> dict[str, LiveMarket]:
-        """Map ticker -> LiveMarket for a list of companies.
+        """Resolve market snapshots for a batch of companies.
 
-        Each entry goes through the same cached router path, so a batch list
-        (dashboard largest, companies page) stays consistent with the profile
-        page for the same ticker.
+        Uses the shared cached router while avoiding unnecessary heavy
+        market payloads for list/search/dashboard surfaces.
         """
-        return {c.ticker: self.snapshot(c) for c in companies if c}
+        result: dict[str, LiveMarket] = {}
+
+        for company in companies:
+            if not company:
+                continue
+
+            stored = company.current_price
+
+            fallback = LiveMarket(
+                live_price=stored,
+                current_price=stored,
+                price_source=SOURCE_INTERNAL,
+                market_status="closed",
+            )
+
+            try:
+                market_result = self._router.fetch(
+                    company.ticker,
+                    db=self.db,
+                    use_cache=True,
+                    include_news=False,
+                    include_history=False,
+                    include_earnings=False,
+                )
+            except Exception:
+                result[company.ticker] = fallback
+                continue
+
+            if market_result is None or market_result.source == SOURCE_NONE:
+                result[company.ticker] = fallback
+                continue
+
+            quote = market_result.snapshot.quote
+            meta = market_result.snapshot.meta
+
+            status = (
+                "closed"
+                if (
+                    market_result.source in _NON_LIVE_TIERS
+                    or quote is None
+                    or not quote.price
+                )
+                else market_status()
+            )
+
+            market = LiveMarket(
+                live_price=quote.price if quote else stored,
+                current_price=stored,
+                price_source=market_result.source,
+                last_updated=meta.last_updated if meta else None,
+                market_status=status,
+                change=quote.change if quote else None,
+                change_percent=quote.percent_change if quote else None,
+                volume=quote.volume if quote else None,
+            )
+
+            try:
+                from app.services.market_ops import MarketOpsService
+
+                overridden = MarketOpsService(self.db).apply_override(
+                    company, market
+                )
+                if overridden is not None:
+                    market = overridden
+            except Exception:
+                pass
+
+            result[company.ticker] = market
+
+        return result
 
     @staticmethod
     def attach(summary: Any, company: Company, db: Session) -> Any:

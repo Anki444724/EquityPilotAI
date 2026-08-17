@@ -38,6 +38,7 @@ class JobKind(StrEnum):
     EMBEDDING = "embedding"
     NOTIFICATION = "notification"
     PORTFOLIO_REFRESH = "portfolio_refresh"
+    MARKET_REFRESH = "market_refresh"
     # Automated Indian filing collection.
     STORAGE_REPLICATION = "storage_replication"
     FILING_CRAWL = "filing_crawl"
@@ -78,6 +79,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.EMBEDDING: "Embedding",
     JobKind.NOTIFICATION: "Notification",
     JobKind.PORTFOLIO_REFRESH: "Scheduled portfolio update",
+    JobKind.MARKET_REFRESH: "Indian market data refresh",
     JobKind.STORAGE_REPLICATION: "Storage replication",
     JobKind.FILING_CRAWL: "Filing collection crawl",
     JobKind.FILING_POST_PROCESS: "Filing post-processing",
@@ -229,6 +231,7 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     JobKind.EMBEDDING: RetryPolicy(max_attempts=3, base_seconds=5),
     JobKind.NOTIFICATION: RetryPolicy(max_attempts=5, base_seconds=2, factor=3),
     JobKind.PORTFOLIO_REFRESH: RetryPolicy(max_attempts=3, base_seconds=30),
+    JobKind.MARKET_REFRESH: RetryPolicy(max_attempts=3, base_seconds=60),
     # A crawl that fails is usually the exchange rate-limiting us, and the
     # right response is to back off substantially rather than hammer it.
     # Object storage being briefly unavailable is the common failure, and the
@@ -327,6 +330,12 @@ class ScheduleSpec:
 
 #: The platform's standing schedule.
 SCHEDULES: tuple[ScheduleSpec, ...] = (
+    ScheduleSpec(
+        # Refresh Indian market prices every 15 minutes.
+        # The job uses the existing market router and Yahoo fallback.
+        JobKind.MARKET_REFRESH, 15 * 60,
+        "Refresh market prices for all active Indian/NSE companies.",
+    ),
     ScheduleSpec(
         # Every 10 minutes: frequent enough that a new upload is replicated
         # while it is still topical, infrequent enough that a bucket outage
