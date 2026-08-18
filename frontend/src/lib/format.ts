@@ -99,3 +99,24 @@ export function marketPrice(c: {
   if (stored === null || stored === undefined || Number.isNaN(stored)) return null;
   return stored;
 }
+
+export function isLivePrice(source: string | null | undefined): boolean {
+  return Boolean(source && !source.includes("Internal") && !source.includes("Uploaded") && source !== "Unavailable");
+}
+
+export function priceSourceLabel(source: string | null | undefined): string {
+  if (!source || source === "Unavailable") return "Price unavailable";
+  if (source.includes("Yahoo")) return "Yahoo Finance";
+  if (source.includes("Internal")) return "Stored company data";
+  if (source.includes("Uploaded")) return "Company filing";
+  return source;
+}
+
+export function lastUpdated(value: string | null | undefined): string {
+  if (!value) return "Not available";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not available";
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium", timeStyle: "short",
+  });
+}

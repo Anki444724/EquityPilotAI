@@ -73,7 +73,7 @@ def overview(
         select(Company).order_by(Company.created_at.desc()).limit(8)
     ).scalars().all()
 
-    market = LiveMarketService(db).attach_many(list(largest) + list(recent))
+    market = LiveMarketService(db).bulk_quotes(list(largest) + list(recent))
     largest_out = [
         CompanySummary.model_validate(c).model_copy(
             update={"market": market.get(c.ticker)}

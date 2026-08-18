@@ -91,8 +91,15 @@ def _indian_universe() -> frozenset[str]:
 
 
 @lru_cache(maxsize=4096)
-def resolve(ticker: str) -> ResolvedSymbol:
-    """Resolve any spelling into one canonical listing."""
+def resolve(ticker: str, exchange: str | None = None) -> ResolvedSymbol:
+    """Resolve any spelling into one canonical listing.
+
+    ``exchange`` is authoritative when it comes from a Company row. The
+    original resolver only knew the repository's old 120-symbol seed tuple,
+    so most of the imported Nifty 500 was incorrectly treated as US-listed
+    and sent to Yahoo without ``.NS``. Callers without company metadata keep
+    the conservative bare-symbol behaviour that protects AAPL.
+    """
     raw = (ticker or "").strip()
     if not raw:
         raise ValueError("empty ticker")
@@ -118,11 +125,15 @@ def resolve(ticker: str) -> ResolvedSymbol:
             # worse than passing through what the user meant.
             base, _, _ = upper.partition(".")
             canonical = upper
+        elif (exchange or "").upper() in {"NSE", "NSE/BSE"}:
+            base, suffix, canonical = upper, ".NS", f"{upper}.NS"
+        elif (exchange or "").upper() == "BSE":
+            base, suffix, canonical = upper, ".BO", f"{upper}.BO"
         elif upper in _indian_universe():
             base, suffix, canonical = upper, ".NS", f"{upper}.NS"
         else:
-            # A bare symbol not in the Indian universe is a US listing.
-            # This is the AAPL fix: never append ".NS" by default.
+            # A bare symbol without exchange metadata and outside the bundled
+            # seed universe is a US listing. This preserves the AAPL fix.
             base, canonical = upper, upper
 
     exchange, market, currency, timezone = resolve_market(canonical)

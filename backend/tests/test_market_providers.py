@@ -473,6 +473,14 @@ class TestSymbolResolver:
         assert resolve("NASDAQ:AAPL").canonical == "AAPL"
         assert resolve("NSE:RELIANCE").canonical == "RELIANCE.NS"
 
+    def test_company_exchange_resolves_imported_nifty500_symbols(self):
+        from app.data.providers.symbols import resolve
+
+        # 360ONE is imported from NSE and is not in the old 120-row seed tuple.
+        assert resolve("360ONE").canonical == "360ONE"
+        assert resolve("360ONE", exchange="NSE").canonical == "360ONE.NS"
+        assert resolve("360ONE", exchange="BSE").canonical == "360ONE.BO"
+
     def test_a_suffix_is_never_doubled(self):
         from app.data.providers.symbols import resolve
 
@@ -503,13 +511,13 @@ class TestProviderMetadata:
 
 
 class TestMarketAwareRouting:
-    def test_indian_listings_prefer_the_internal_pipeline(self):
+    def test_indian_market_requests_try_live_providers_first(self):
         from app.data.providers.router import MarketDataRouter
         from app.data.providers.symbols import resolve
 
         chain = MarketDataRouter()._chain_for(resolve("RELIANCE.NS"))
-        assert chain[0] == "internal"
-        assert chain.index("internal") < chain.index("external")
+        assert chain[0] == "external"
+        assert chain.index("external") < chain.index("internal")
 
     def test_us_listings_prefer_the_external_providers(self):
         from app.data.providers.router import MarketDataRouter

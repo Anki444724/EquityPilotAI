@@ -102,7 +102,7 @@ class CompanyService:
             return bucket, -(c.market_cap or 0)
 
         ranked = sorted(rows, key=rank)[:limit]
-        market = LiveMarketService(self.db).attach_many(ranked)
+        market = LiveMarketService(self.db).bulk_quotes(ranked)
         return [
             CompanySummary.model_validate(c).model_copy(
                 update={"market": market.get(c.ticker)}
@@ -131,7 +131,7 @@ class CompanyService:
             .scalars()
             .all()
         )
-        market = LiveMarketService(self.db).attach_many(rows)
+        market = LiveMarketService(self.db).bulk_quotes(rows)
         return total, [
             CompanySummary.model_validate(c).model_copy(
                 update={"market": market.get(c.ticker)}
