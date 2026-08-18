@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.data.nse_universe import NSE_UNIVERSE, is_financial
@@ -28,6 +29,11 @@ from app.data.yahoo_source import CompanyFinancials, FetchError, fetch_financial
 from app.domain.financials.canonical import Precedence
 from app.domain.financials.line_items import LineItem as LI
 from app.models.company import Company, FinancialFact
+from app.models.financials import FinancialFactVersion
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 #: Screener's row labels → canonical line items. Only the unambiguous ones;
 #: anything needing arithmetic is derived below with the reasoning written out.
@@ -405,6 +411,7 @@ def ingest_company(
         f"(consolidated) and Yahoo Finance."
     )
 
+    source_label = "screener.in+yahoo" if yahoo else "screener.in"
     written = 0
     for item, series in facts.items():
         for year, value in series.items():
@@ -414,9 +421,44 @@ def ingest_company(
                 fiscal_year=year,
                 value=float(value),
                 precedence=int(Precedence.STORE),
-                source="screener.in+yahoo" if yahoo else "screener.in",
+                source=source_label,
             ))
             written += 1
+
+    # Every successful ingestion records an immutable version snapshot, in the
+    # same shape the financial editor writes (`financial_admin_service._bump`):
+    # `{"facts": [...], "quarterly": [], "shareholding": [], "actions": []}`.
+    # Annual ingestion only writes canonical facts, so the other three keys are
+    # empty, and each fact row carries its `source` provenance. The snapshot is
+    # built from the in-memory canonical facts, not re-read, so it is exactly
+    # what this run persisted. Nothing is written here on the failure paths
+    # above, which is what keeps "failed/no-facts ⇒ zero facts, zero version".
+    snapshot_facts = [
+        {"fiscal_year": year, "line_item": item.value, "value": float(value),
+         "precedence": int(Precedence.STORE), "source": source_label}
+        for item, series in facts.items()
+        for year, value in series.items()
+    ]
+    next_ver = (
+        db.execute(
+            select(func.coalesce(func.max(FinancialFactVersion.version), 0))
+            .where(FinancialFactVersion.company_id == company_id)
+        ).scalar_one() + 1
+    )
+    db.add(FinancialFactVersion(
+        company_id=company_id, version=next_ver,
+        actor_id=None, actor_email=None,
+        snapshot={
+            "facts": snapshot_facts,
+            "quarterly": [], "shareholding": [], "actions": [],
+        },
+        change_type="import",
+        summary=(
+            f"Imported {written} annual fact(s) from {source_label} across "
+            f"{len(screener.fiscal_years)} fiscal year(s)"
+        ),
+        created_at=_utcnow(),
+    ))
 
     db.commit()
 

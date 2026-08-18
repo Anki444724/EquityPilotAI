@@ -30,9 +30,11 @@ truthful rather than being papered over with zeroes.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Sequence
+from enum import StrEnum
+from typing import Callable, Sequence
 
 import structlog
 from sqlalchemy import func, select
@@ -54,6 +56,85 @@ DEFAULT_DELAY_SECONDS = 0.4
 #: treating it as coverage would inflate the headline number while leaving the
 #: statements unusable.
 MIN_USEFUL_YEARS = 2
+
+#: The safe default bound for one scheduled sweep run. Processing the whole
+#: uncovered universe in a single job would hold a worker for a long time and
+#: hammer Screener.in; a 25-company pass is short and the sweep is resumable by
+#: construction, so the next scheduled run simply picks up the next 25.
+DEFAULT_SWEEP_LIMIT = 25
+
+
+class FailureKind(StrEnum):
+    """Whether a per-company failure should be retried.
+
+    Transient failures (HTTP 429, timeouts, connection/reset/network errors)
+    are worth retrying with bounded backoff at the job level. Permanent ones
+    (HTTP 404, a genuine no-data result) will fail identically on every retry,
+    so retrying them endlessly only burns provider quota.
+    """
+
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+
+
+class TransientIngestionFailure(Exception):
+    """Raised when a run encountered at least one transient provider failure.
+
+    The worker translates this into a job `fail`, which schedules a bounded
+    retry with backoff via the kind's `RetryPolicy`. Without this, per-company
+    failures were swallowed inside `run()` and the job-level retry policy was
+    never triggered.
+    """
+
+    def __init__(self, *, transient: int, attempted: int) -> None:
+        self.transient = transient
+        self.attempted = attempted
+        super().__init__(
+            f"{transient} of {attempted} company(ies) hit a transient provider "
+            "error (429/timeout/connection); retrying with bounded backoff"
+        )
+
+
+#: HTTP status codes that are safe to retry: rate limiting and server errors.
+#: 4xx client errors are permanent — the request itself is wrong.
+_RETRYABLE_STATUS = re.compile(r"\b(?:429|5\d\d)\b")
+
+#: Keyword signals in an error string for a transient transport/provider fault.
+_TRANSIENT_HINTS = (
+    "too many requests", "rate limit", "timeout", "timed out", "connection",
+    "reset by peer", "network", "socket", "read timed", "temporarily",
+    "service unavailable", "gateway", "refused", "urlerror",
+    "connectionreseterror", "timeouterror", "operationalerror",
+)
+
+#: Keyword signals for a clearly permanent provider response. Anything that is
+#: not recognised as transient defaults to permanent, so an unknown error is
+#: never retried into an endless loop.
+_PERMANENT_HINTS = (
+    "not listed", "not found", "no canonical facts derived", "no data",
+    "does not exist", "invalid", "bad request",
+)
+
+
+def classify_ingest_failure(error: str | None) -> FailureKind:
+    """Classify a per-company failure as retryable (transient) or permanent.
+
+    Deterministic and string-based so it is unit-testable without a network:
+    the classifier reads exactly the `IngestResult.error` text the service
+    records, which is the same text a real 429/404/timeout produces.
+    """
+    text = (error or "").lower()
+    if not text:
+        return FailureKind.PERMANENT
+    status = _RETRYABLE_STATUS.search(text)
+    if status:
+        code = int(status.group(0))
+        return FailureKind.TRANSIENT if (code == 429 or 500 <= code <= 599) else FailureKind.PERMANENT
+    if any(hint in text for hint in _TRANSIENT_HINTS):
+        return FailureKind.TRANSIENT
+    if any(hint in text for hint in _PERMANENT_HINTS):
+        return FailureKind.PERMANENT
+    return FailureKind.PERMANENT
 
 
 @dataclass(slots=True)
@@ -83,6 +164,10 @@ class BackfillOutcome:
     #: "Reason for every missing company" is a deliverable, so a generic
     #: "failed" here would be a defect.
     reason: str | None = None
+    #: Transient vs permanent, only set for a failure. Lets the worker retry a
+    #: run that hit a 429/timeout/connection error without retrying a company
+    #: that genuinely has no data (which would fail forever).
+    failure_kind: FailureKind | None = None
     warnings: list[str] = field(default_factory=list)
     seconds: float = 0.0
 
@@ -99,6 +184,18 @@ class BackfillReport:
     @property
     def failed(self) -> list[BackfillOutcome]:
         return [o for o in self.outcomes if not o.ok]
+
+    @property
+    def transient_failures(self) -> list[BackfillOutcome]:
+        return [o for o in self.outcomes if o.failure_kind is FailureKind.TRANSIENT]
+
+    @property
+    def permanent_failures(self) -> list[BackfillOutcome]:
+        return [o for o in self.outcomes if o.failure_kind is FailureKind.PERMANENT]
+
+    @property
+    def had_transient_failures(self) -> bool:
+        return any(o.failure_kind is FailureKind.TRANSIENT for o in self.outcomes)
 
     def reasons(self) -> dict[str, int]:
         """Failure reasons grouped by their leading clause."""
@@ -193,6 +290,38 @@ class FinancialsBackfillService:
             for company, _years in self.db.execute(stmt).all()
         ]
 
+    def companies_by_tickers(
+        self, tickers: Sequence[str],
+    ) -> list[CompanyTarget]:
+        """Resolve explicit tickers to database companies for targeted ingest.
+
+        This is how an operator ingests a specific company (e.g. NHPC) *before*
+        or instead of the general universe sweep. It reads the existing
+        `companies` table — the same database-driven source a normal sweep uses
+        — and never consults the hard-coded `NSE_UNIVERSE`. The caller passes
+        the returned targets straight to `run(targets=...)`, so a targeted
+        company is not subject to the sweep's batching limit.
+        """
+        if not tickers:
+            return []
+        clean = [str(t).strip().upper() for t in tickers if str(t).strip()]
+        if not clean:
+            return []
+        rows = self.db.execute(
+            select(Company).where(Company.ticker.in_(clean))
+        ).scalars().all()
+        return [
+            CompanyTarget(
+                company_id=company.id,
+                ticker=company.ticker,
+                name=company.name,
+                sector=company.sector,
+                industry=company.industry,
+                market_cap_category=company.market_cap_category,
+            )
+            for company in rows
+        ]
+
     # --------------------------------------------------------------- running
     def run(
         self,
@@ -243,6 +372,9 @@ class FinancialsBackfillService:
                 fact_count=result.fact_count,
                 coverage=result.coverage,
                 reason=result.error,
+                failure_kind=(
+                    None if result.ok else classify_ingest_failure(result.error)
+                ),
                 warnings=list(result.warnings),
                 seconds=round(elapsed, 2),
             )

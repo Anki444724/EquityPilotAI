@@ -70,6 +70,11 @@ class JobKind(StrEnum):
     #: (the twelve-month news window, filing freshness), so a company's score
     #: changes through the passage of time alone with no new document.
     AI_SCORE_REFRESH = "ai_score_refresh"
+    #: Ingest canonical annual financials for companies in the universe that
+    #: have none. Runs the same `FinancialsBackfillService` the manual
+    #: `deploy/backfill_financials.py` drives, so the scheduled sweep and an
+    #: on-demand run share one implementation rather than drifting apart.
+    FINANCIALS_BACKFILL = "financials_backfill"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -90,6 +95,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.QUALITY_REFRESH: "Data quality refresh",
     JobKind.EMBEDDING_BACKFILL: "Embedding backfill",
     JobKind.AI_SCORE_REFRESH: "AI score refresh",
+    JobKind.FINANCIALS_BACKFILL: "Financials backfill",
 }
 
 
@@ -177,6 +183,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.QUALITY_REFRESH: JobPriority.BACKGROUND,
     JobKind.EMBEDDING_BACKFILL: JobPriority.BACKGROUND,
     JobKind.AI_SCORE_REFRESH: JobPriority.BACKGROUND,
+    JobKind.FINANCIALS_BACKFILL: JobPriority.BACKGROUND,
 }
 
 
@@ -254,6 +261,12 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # a transient connection loss rather than a rate limit. Retry quickly,
     # twice.
     JobKind.AI_SCORE_REFRESH: RetryPolicy(max_attempts=3, base_seconds=60),
+    # The usual failure is the source provider rate-limiting or returning a
+    # transient error. Back off substantially so a retry is not a fresh
+    # request into the same throttle. The sweep is resumable by construction
+    # — the target set is recomputed from the database — so a short run is
+    # not a lost run.
+    JobKind.FINANCIALS_BACKFILL: RetryPolicy(max_attempts=2, base_seconds=900),
 }
 
 
@@ -401,6 +414,15 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         JobKind.AI_SCORE_REFRESH, 24 * 3600,
         "Recalculate the ten-module AI score across the universe, recording "
         "a new permanent version only where the evidence has actually moved.",
+    ),
+    ScheduleSpec(
+        # Daily. A company only gets selected while it lacks a usable financial
+        # history, so once the universe is covered a pass is one cheap COUNT
+        # and nothing to write. An interval short enough to fill a newly-added
+        # company quickly, long enough not to hammer the source provider.
+        JobKind.FINANCIALS_BACKFILL, 24 * 3600,
+        "Ingest canonical annual financials for universe companies that "
+        "still lack a usable history.",
     ),
     ScheduleSpec(
         JobKind.USAGE_ROLLUP, 900,
