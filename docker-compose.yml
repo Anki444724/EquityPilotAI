@@ -62,9 +62,9 @@ services:
       ENCRYPTION_KEY: local-development-envelope-key-not-for-production
       NATIVE_AUTH: "true"
       LOG_FORMAT: json
-      CORS_ORIGINS: '["http://localhost:3000"]'
-      EMAIL_LINK_BASE: http://localhost:3000
-      OAUTH_REDIRECT_BASE: http://localhost:3000
+      CORS_ORIGINS: '["https://equitypilot.in","https://www.equitypilot.in"]'
+      EMAIL_LINK_BASE: https://equitypilot.in
+      OAUTH_REDIRECT_BASE: https://equitypilot.in
       # The API serves requests; the worker container runs the jobs.
       WORKER_ENABLED: "false"
       SCHEDULER_ENABLED: "false"
@@ -84,6 +84,12 @@ services:
     build:
       context: ./backend
     command: ["python", "-m", "app.worker"]
+    # The backend image HEALTHCHECK curls /health/ready on :8000. That is
+    # correct for the API, but this process is `python -m app.worker` and
+    # does not expose an HTTP server, so the inherited check marks a
+    # working job processor unhealthy. Disable here; do not weaken the API.
+    healthcheck:
+      disable: true
     environment:
       ENVIRONMENT: production
       DATABASE_URL: postgresql+psycopg://ierp:ierp_local_password@postgres:5432/ierp
