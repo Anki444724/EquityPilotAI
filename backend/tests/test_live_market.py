@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+from app.schemas.company import LiveMarket
 from app.services.live_market import LiveMarketService, market_status
 
 
@@ -35,3 +37,47 @@ class TestSnapshotFallback:
         assert market.current_price is None
         assert market.market_status == "closed"
         assert market.price_source == "Internal Financial Database"
+
+
+class TestNonBlockingQuotePath:
+    @staticmethod
+    def _company(ticker="360ONE", price=987.0):
+        return SimpleNamespace(
+            ticker=ticker, exchange="NSE", current_price=price, id="company-id",
+        )
+
+    def test_cache_miss_returns_stored_price_and_queues_nse_symbol(
+        self, monkeypatch,
+    ):
+        import app.services.live_market as module
+
+        scheduled = []
+        monkeypatch.setattr(module.cache, "get", lambda *args: None)
+        monkeypatch.setattr(module._REFRESHER, "schedule", scheduled.append)
+
+        result = LiveMarketService(None).bulk_quotes([self._company()])["360ONE"]
+
+        assert result.live_price == 987.0
+        assert result.price_source == "Internal Financial Database"
+        assert scheduled == ["360ONE.NS"]
+
+    def test_cached_live_quote_is_shared_and_does_not_schedule(self, monkeypatch):
+        import app.services.live_market as module
+
+        live = LiveMarket(
+            live_price=1012.5, price_source="Yahoo Finance (Fallback)",
+            last_updated="2026-08-18T10:00:00+00:00", market_status="open",
+        )
+        scheduled = []
+        monkeypatch.setattr(module.cache, "get", lambda *args: live)
+        monkeypatch.setattr(module._REFRESHER, "schedule", scheduled.append)
+        company = self._company()
+        service = LiveMarketService(None)
+
+        first = service.snapshot(company)
+        second = service.bulk_quotes([company])["360ONE"]
+
+        assert first.live_price == second.live_price == 1012.5
+        assert first.last_updated == second.last_updated
+        assert first.current_price == 987.0
+        assert scheduled == []

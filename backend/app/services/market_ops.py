@@ -210,12 +210,15 @@ class MarketOpsService:
     # ==================================================================
     def clear_cache(self) -> int:
         cache().clear()
-        return 0
+        # Company pages use the unified cache so Redis can share background
+        # Yahoo snapshots across workers. Clear both market cache backends.
+        from app.services.platform.cache import Namespace, cache as shared_cache
+        return shared_cache.invalidate(Namespace.MARKET_DATA)
 
     def refresh_cache(self) -> int:
-        # Invalidate the in-memory market cache so the next read re-fetches.
-        cache().clear()
-        return 0
+        # A following company read returns its stored fallback immediately and
+        # queues a bounded background refresh; it never fetches in the request.
+        return self.clear_cache()
 
     # ==================================================================
     # Scheduler / sync / websocket / logs — lightweight state

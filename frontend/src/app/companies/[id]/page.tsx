@@ -3,10 +3,10 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { CompanyTabs } from "@/components/layout/company-tabs";
 import { Badge, Card, CardBody, CardHeader, EmptyState, Skeleton, Stat } from "@/components/ui";
-import { api, scoringApi, watchlistApi } from "@/lib/api";
-import { crore, fiscalYear, marketCap, marketPrice, percent, plainNumber, rupees, signClass } from "@/lib/format";
+import { api, watchlistApi } from "@/lib/api";
+import { crore, fiscalYear, isLivePrice, lastUpdated, marketCap, marketPrice, percent, plainNumber, priceSourceLabel, rupees, signClass } from "@/lib/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Database, ExternalLink, Info, Plus, Star } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, ExternalLink, Info, Plus } from "lucide-react";
 import Link from "next/link";
 import { use } from "react";
 import { useState } from "react";
@@ -31,13 +31,6 @@ export default function CompanyProfilePage({
   const watchlists = useQuery({
     queryKey: ["watchlists"],
     queryFn: () => watchlistApi.list(),
-    enabled: !!data,
-  });
-
-  // Single shared scoring query (removes duplicate API call)
-  const score = useQuery({
-    queryKey: ["scoring", id],
-    queryFn: () => scoringApi.get(id),
     enabled: !!data,
   });
 
@@ -123,8 +116,12 @@ export default function CompanyProfilePage({
                 {c.incorporated_year && <> · Est. {c.incorporated_year}</>}
               </p>
             </div>
-            <div className="text-right">
-              <div className="num text-2xl font-semibold">{rupees(marketPrice(c))}</div>
+            <div className="min-w-[12rem] text-left sm:text-right">
+              <div className="text-xs font-medium text-[var(--text-muted)]">Current Price</div>
+              <div className="mt-0.5 flex items-center gap-2 sm:justify-end">
+                <div className="num text-2xl font-semibold">{rupees(marketPrice(c))}</div>
+                {isLivePrice(c.market?.price_source) && <Badge variant="gain">Live</Badge>}
+              </div>
               {c.market && c.market.change !== null && c.market.change !== undefined && (
                 <div className={`mt-0.5 text-[0.6875rem] font-medium ${signClass(c.market.change)}`}>
                   {c.market.change >= 0 ? "+" : ""}{rupees(c.market.change)}{" "}
@@ -132,14 +129,15 @@ export default function CompanyProfilePage({
                   {percent(c.market.change_percent)})
                 </div>
               )}
-              <div className="mt-0.5 text-[0.6875rem] uppercase tracking-wider text-[var(--text-muted)]">
-                {marketCap(c.market_cap)} market cap
+              <div className="mt-1 text-[0.6875rem] text-[var(--text-muted)]">
+                Source: {priceSourceLabel(c.market?.price_source)}
               </div>
-              {c.market?.price_source && (
-                <div className="mt-0.5 text-[0.625rem] text-[var(--text-muted)]">
-                  {c.market.price_source}{c.market.market_status ? ` · ${c.market.market_status}` : ""}
-                </div>
-              )}
+              <div className="text-[0.6875rem] text-[var(--text-muted)]">
+                Last Updated: {lastUpdated(c.market?.last_updated)}
+              </div>
+              <div className="mt-1 text-[0.6875rem] text-[var(--text-muted)]">
+                Market Cap: {marketCap(c.market_cap)}
+              </div>
               {c.website && (
                 <a
                   href={c.website}
@@ -299,7 +297,7 @@ export default function CompanyProfilePage({
               </Card>
 
               <Card>
-                <CardHeader title="About" />
+                <CardHeader title="Company Overview" />
                 <CardBody>
                   <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                     {c.description ?? "No description available."}

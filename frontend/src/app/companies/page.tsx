@@ -3,7 +3,7 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, EmptyState, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
-import { marketCap, marketPrice, rupees } from "@/lib/format";
+import { isLivePrice, marketCap, marketPrice, priceSourceLabel, rupees } from "@/lib/format";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Building2, Search } from "lucide-react";
 import Link from "next/link";
@@ -86,7 +86,7 @@ export default function CompaniesPage() {
                 <tr>
                   <th>Ticker</th><th className="!text-left">Company</th>
                   <th className="!text-left">Sector</th><th className="!text-left">Industry</th>
-                  <th>Price</th><th>Market cap</th>
+                  <th>Current Price</th><th>Market cap</th>
                 </tr>
               </thead>
               <tbody>
@@ -104,7 +104,12 @@ export default function CompaniesPage() {
                     </td>
                     <td className="!text-left text-xs text-[var(--text-muted)]">{c.sector ?? "—"}</td>
                     <td className="!text-left text-xs text-[var(--text-muted)]">{c.industry ?? "—"}</td>
-                    <td className="num">{rupees(marketPrice(c))}</td>
+                    <td className="num">
+                      <div>{rupees(marketPrice(c))}</div>
+                      <div className="mt-0.5 text-[0.625rem] font-normal text-[var(--text-muted)]">
+                        {isLivePrice(c.market?.price_source) ? "Live · " : ""}{priceSourceLabel(c.market?.price_source)}
+                      </div>
+                    </td>
                     <td className="num font-medium">{marketCap(c.market_cap)}</td>
                   </tr>
                 ))}

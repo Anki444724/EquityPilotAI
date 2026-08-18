@@ -37,6 +37,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # The zero-config container uses SQLite unless a deployment injects its
+    # production Postgres DSN. /app is intentionally not writable by the
+    # runtime user, so the default database belongs in the writable data area.
+    DATABASE_URL=sqlite+pysqlite:////data/database/ierp.db \
     # matplotlib writes a font cache on first use; without a writable home it
     # fails inside a read-only container.
     MPLCONFIGDIR=/tmp/matplotlib
@@ -74,7 +78,7 @@ COPY --chown=ierp:ierp . .
 # mounted onto a path that does not exist is created owned by root, leaving
 # the app unable to write a single byte. Every upload then fails with
 # PermissionError, which surfaces to the client as a bare HTTP 500.
-RUN mkdir -p /app/backups /tmp/matplotlib /data/documents \
+RUN mkdir -p /app/backups /tmp/matplotlib /data/documents /data/database \
     && chown -R ierp:ierp /app/backups /tmp/matplotlib /data
 
 # su-exec drops privileges in the entrypoint. gosu is the Debian equivalent;

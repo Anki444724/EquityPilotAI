@@ -222,18 +222,16 @@ class MarketDataRouter:
         self.cache = ttl_cache or _CACHE
 
     def _chain_for(self, resolved) -> list[str]:
-        """Tier order for this listing.
+        """Provider order for an explicit market-data request.
 
-        Different markets deserve different orders, which is the substance of
-        the brief rather than a detail. For an Indian company the platform's
-        own screener pipeline holds twelve years of validated, consolidated
-        statements that no free external tier will serve, so it leads; the
-        externals are there for a live price. For a US company the platform
-        holds nothing, so the externals lead and there is no internal tier
-        worth trying first.
+        A market endpoint is asking for current market data, so external
+        providers must precede stored fundamentals for every market. The
+        previous Indian-only order returned the internal row immediately and
+        made the external branch unreachable whenever a company had a name or
+        stored price. User-facing company pages do not use this blocking path;
+        ``LiveMarketService`` serves cache/fallback and refreshes in the
+        background.
         """
-        if resolved.is_indian:
-            return ["internal", "documents", "external"]
         return ["external", "internal", "documents"]
 
     def fetch(
