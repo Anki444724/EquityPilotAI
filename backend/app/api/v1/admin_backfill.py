@@ -8,8 +8,10 @@ scheduled daily pass and an on-demand operator run share one implementation.
 
     -- operator console ----------------------------------------------
     GET  /platform/financials/backfill    coverage + most recent run
-    POST /platform/financials/backfill    enqueue a sweep (optionally bounded)
+    POST /platform/financials/backfill    enqueue a run
 
+The POST body either targets specific tickers (``{"tickers": ["NHPC"]}``) or,
+with no tickers, runs the next bounded universe sweep (default 25 companies).
 All routes are operator-only. Reads require `SYSTEM_READ`; writes additionally
 require `JOB_MANAGE` — the same guard the generic job endpoints use.
 """
@@ -81,6 +83,8 @@ def enqueue_financials_backfill(
     payload: dict[str, object] = {}
     if body.limit is not None:
         payload["limit"] = body.limit
+    if body.tickers:
+        payload["tickers"] = body.tickers
     job = JobQueue(db).enqueue(
         JobKind.FINANCIALS_BACKFILL, payload=payload, tenant_id=user.tenant_id,
     )

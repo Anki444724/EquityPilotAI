@@ -553,11 +553,28 @@ class JobEnqueue(BaseModel):
 
 
 class FinancialsBackfillTrigger(BaseModel):
-    """Ask for a financials backfill sweep. Optional limit bounds one run so a
-    long sweep is interrupted gracefully; the remainder is picked up by the
-    next scheduled pass."""
+    """Ask for a financials backfill run.
+
+    With ``tickers`` set, only those companies are ingested (targeted, e.g.
+    ``{"tickers": ["NHPC"]}``), independent of the sweep's batching limit. With
+    no tickers it is a universe sweep bounded by ``limit``, defaulting to 25 at
+    the worker so a scheduled run can never sweep the whole universe in one job.
+    """
 
     limit: int | None = Field(default=None, ge=1)
+    tickers: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator("tickers")
+    @classmethod
+    def _normalise_tickers(cls, value: list[str]) -> list[str]:
+        seen: set[str] = set()
+        clean: list[str] = []
+        for raw in value:
+            ticker = str(raw).strip().upper()
+            if ticker and ticker not in seen:
+                seen.add(ticker)
+                clean.append(ticker)
+        return clean
 
 
 class FinancialsBackfillCoverage(BaseModel):

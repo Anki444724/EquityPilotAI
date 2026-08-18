@@ -147,6 +147,38 @@ def test_enqueue_without_limit_bounds_nothing(secured):
         assert row.payload == {}
 
 
+def test_enqueue_targets_tickers(secured):
+    from app.models.platform import BackgroundJob
+
+    response = secured["client"].post(
+        f"{PREFIX}/platform/financials/backfill",
+        headers=secured["operator_headers"], json={"tickers": ["NHPC"]},
+    )
+    assert response.status_code == 201, response.text
+    job = response.json()
+    assert job["kind"] == "financials_backfill"
+    assert job["status"] == "queued"
+
+    with secured["session"]() as db:
+        row = db.get(BackgroundJob, job["id"])
+        assert row.payload == {"tickers": ["NHPC"]}
+
+
+def test_enqueue_normalises_and_dedupes_tickers(secured):
+    from app.models.platform import BackgroundJob
+
+    response = secured["client"].post(
+        f"{PREFIX}/platform/financials/backfill",
+        headers=secured["operator_headers"],
+        json={"tickers": ["  nhpc  ", "NHPC", "tcs"]},
+    )
+    assert response.status_code == 201, response.text
+
+    with secured["session"]() as db:
+        row = db.get(BackgroundJob, response.json()["id"])
+        assert row.payload == {"tickers": ["NHPC", "TCS"]}
+
+
 def test_enqueue_rejects_a_zero_limit(secured):
     response = secured["client"].post(
         f"{PREFIX}/platform/financials/backfill",

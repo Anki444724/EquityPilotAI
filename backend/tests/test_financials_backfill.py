@@ -14,7 +14,8 @@ import pytest
 from app.data.ingest import IngestResult
 from app.models.company import Company, FinancialFact
 from app.services.universe.financials_backfill import (
-    MIN_USEFUL_YEARS, FinancialsBackfillService,
+    DEFAULT_SWEEP_LIMIT, MIN_USEFUL_YEARS, FailureKind,
+    FinancialsBackfillService, classify_ingest_failure,
 )
 
 
@@ -246,3 +247,164 @@ def test_identity_columns_are_passed_through_not_invented(db):
     assert captured["name"] == "IDENT Ltd."
     assert captured["sector"] == "Testing"
     assert db.query(Company).filter_by(ticker="IDENT").count() == 1
+
+
+# ===================================================== error classification
+class TestFailureClassification:
+    def test_http_429_is_transient(self):
+        assert classify_ingest_failure("screener: HTTP Error 429: Too Many Requests") \
+            is FailureKind.TRANSIENT
+
+    def test_timeout_is_transient(self):
+        assert classify_ingest_failure(
+            "screener: TimeoutError: timed out"
+        ) is FailureKind.TRANSIENT
+
+    def test_connection_reset_is_transient(self):
+        assert classify_ingest_failure(
+            "screener: ConnectionResetError: [Errno 104] Connection reset by peer"
+        ) is FailureKind.TRANSIENT
+
+    def test_http_5xx_is_transient(self):
+        assert classify_ingest_failure(
+            "screener: HTTP Error 503: Service Unavailable"
+        ) is FailureKind.TRANSIENT
+
+    def test_http_404_is_permanent(self):
+        assert classify_ingest_failure(
+            "screener: not listed: https://www.screener.in/company/NOPE/"
+        ) is FailureKind.PERMANENT
+
+    def test_no_canonical_facts_is_permanent(self):
+        assert classify_ingest_failure(
+            "no canonical facts derived"
+        ) is FailureKind.PERMANENT
+
+    def test_unknown_error_defaults_to_permanent(self):
+        assert classify_ingest_failure("weird: something unexpected") \
+            is FailureKind.PERMANENT
+
+    def test_none_defaults_to_permanent(self):
+        assert classify_ingest_failure(None) is FailureKind.PERMANENT
+
+
+# ===================================================== transient/permanent run
+def test_run_classifies_transient_and_permanent_failures(db):
+    _company(db, "T429")
+    _company(db, "T404")
+    _company(db, "NODATA")
+
+    def classify(_db, ticker, *_a, **_k):
+        if ticker == "T429":
+            return IngestResult(
+                ticker=ticker, ok=False, error="screener: HTTP Error 429: Too Many Requests")
+        if ticker == "T404":
+            return IngestResult(
+                ticker=ticker, ok=False, error="screener: not listed: ...")
+        return IngestResult(ticker=ticker, ok=False, error="no canonical facts derived")
+
+    report = FinancialsBackfillService(db, delay_seconds=0, ingest=classify).run(progress=False)
+
+    assert len(report.transient_failures) == 1
+    assert report.transient_failures[0].ticker == "T429"
+    assert len(report.permanent_failures) == 2
+    assert report.had_transient_failures is True
+
+
+def test_run_with_only_permanent_failures_has_no_transients(db):
+    _company(db, "ONLY404")
+    report = FinancialsBackfillService(
+        db, delay_seconds=0,
+        ingest=lambda _db, ticker, *_a, **_k: IngestResult(
+            ticker=ticker, ok=False, error="screener: not listed: ..."),
+    ).run(progress=False)
+    assert report.had_transient_failures is False
+    assert len(report.transient_failures) == 0
+
+
+# ===================================================== targeted ticker ingest
+def test_companies_by_tickers_resolves_from_the_database(db):
+    """Targeted ingest reads the companies table, not NSE_UNIVERSE."""
+    _company(db, "NHPC", category="largecap")
+    _company(db, "OTHER")
+
+    service = FinancialsBackfillService(db, delay_seconds=0)
+    targets = service.companies_by_tickers(["NHPC"])
+
+    assert [t.ticker for t in targets] == ["NHPC"]
+    assert targets[0].name == "NHPC Ltd."
+    assert targets[0].market_cap_category == "largecap"
+
+
+def test_companies_by_tickers_is_case_and_whitespace_insensitive(db):
+    _company(db, "NHPC")
+    targets = FinancialsBackfillService(db, delay_seconds=0).companies_by_tickers(
+        ["  nhpc  "])
+    assert [t.ticker for t in targets] == ["NHPC"]
+
+
+def test_companies_by_tickers_returns_empty_for_unknown_tickers(db):
+    _company(db, "NHPC")
+    targets = FinancialsBackfillService(db, delay_seconds=0).companies_by_tickers(
+        ["ZZZZ"])
+    assert targets == []
+
+
+def test_targeted_run_ingests_only_the_requested_ticker(db):
+    """A targeted run passes explicit targets to `run`, so it is independent of
+    the 25-company sweep limit and touches only the requested company."""
+    _company(db, "NHPC")
+    _company(db, "SOMETHINGELSE")
+    seen: list[str] = []
+
+    def ingest(_db, ticker, *_a, **_k):
+        seen.append(ticker)
+        return IngestResult(ticker=ticker, ok=True,
+                            fiscal_years=[2023, 2024], fact_count=40)
+
+    service = FinancialsBackfillService(db, delay_seconds=0, ingest=ingest)
+    targets = service.companies_by_tickers(["NHPC"])
+    report = service.run(targets=targets, progress=False)
+
+    assert seen == ["NHPC"]
+    assert len(report.succeeded) == 1
+    assert report.succeeded[0].ticker == "NHPC"
+
+
+# ===================================================== resumable batching
+def test_batched_runs_resume_with_the_next_uncovered_companies(db):
+    """Run 1 covers the first batch, run 2 the next — because selection is
+    recomputed from the database and covered companies are skipped."""
+    for ticker in ("A", "B", "C", "D", "E"):
+        _company(db, ticker)
+
+    def ingest(_db, ticker, *_a, **_k):
+        # Persist real facts so the company counts as covered and is excluded
+        # from the next run's selection — what `ingest_company` does for real.
+        company = _db.query(Company).filter_by(ticker=ticker).one()
+        for year in (2023, 2024):
+            _db.add(FinancialFact(
+                company_id=company.id, fiscal_year=year,
+                line_item="revenue", value=100.0, precedence=2,
+            ))
+        _db.commit()
+        return IngestResult(ticker=ticker, ok=True,
+                            fiscal_years=[2023, 2024], fact_count=40)
+
+    service = FinancialsBackfillService(db, delay_seconds=0, ingest=ingest)
+    first = service.run(limit=2, progress=False)
+    second = service.run(limit=2, progress=False)
+    third = service.run(limit=2, progress=False)
+
+    # Run 1 → first 2, run 2 → next 2, run 3 → last 1. Selection is recomputed
+    # from the database each run and covered companies are skipped.
+    assert [o.ticker for o in first.succeeded] == ["A", "B"]
+    assert [o.ticker for o in second.succeeded] == ["C", "D"]
+    assert [o.ticker for o in third.succeeded] == ["E"]
+    # Everything is now covered and excluded from future selection.
+    assert service.companies_without_financials() == []
+
+
+def test_default_sweep_limit_is_twenty_five():
+    """The safe default for a scheduled sweep is exactly 25 companies."""
+    assert DEFAULT_SWEEP_LIMIT == 25

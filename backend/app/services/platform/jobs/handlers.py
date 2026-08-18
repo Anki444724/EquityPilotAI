@@ -650,26 +650,47 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
     drives manually, so the scheduled sweep and an on-demand admin run share one
     implementation instead of a second one drifting from the first.
 
-    The run is resumable by construction: the target set is recomputed from the
-    database, so a sweep truncated by the payload limit makes progress through
-    the universe and the rest is picked up on the next pass. Coverage is read
-    back from the database before and after, so the job result records real
-    progress rather than the run's own tally.
+    Two modes:
+
+    * **Targeted** (`payload["tickers"]`) — resolves those exact tickers (e.g.
+      ``["NHPC"]``) from the database and ingests only them, so a specific
+      company can be ingested before or independently of the universe sweep.
+      A targeted run is *not* bounded by the sweep batching limit.
+    * **Sweep** (no tickers) — ingests the next uncovered batch. The run is
+      bounded by ``payload["limit"]`` or, when absent, the safe default of 25,
+      so a scheduled job can never perform an unbounded full-universe sweep.
+      The target set is recomputed from the database each run, so a truncated
+      run makes progress and the next run picks up the next uncovered batch.
+
+    If any company hit a *transient* provider failure (429/timeout/connection),
+    this raises :class:`TransientIngestionFailure` so the worker fails the job
+    and the kind's bounded retry policy runs — per-company failures are no
+    longer swallowed. Permanent failures (404, no data) never trip the retry.
+    Coverage is read back from the database before and after, so the job result
+    records real progress rather than the run's own tally.
     """
     from app.services.universe.financials_backfill import (
-        FinancialsBackfillService,
+        DEFAULT_SWEEP_LIMIT, FinancialsBackfillService,
+        TransientIngestionFailure,
     )
 
-    limit = payload.get("limit")
+    tickers = [str(t) for t in (payload.get("tickers") or []) if str(t).strip()]
+
     service = FinancialsBackfillService(db)
     before = service.coverage_snapshot()
-    report = service.run(
-        limit=int(limit) if limit else None,
-        progress=False,
-    )
+
+    if tickers:
+        targets = service.companies_by_tickers(tickers)
+        found = {t.ticker for t in targets}
+        missing = [t for t in tickers if t not in found]
+        report = service.run(targets=targets, progress=False)
+    else:
+        limit = int(payload.get("limit") or DEFAULT_SWEEP_LIMIT)
+        report = service.run(limit=limit, progress=False)
+
     after = service.coverage_snapshot()
 
-    return {
+    result: dict[str, Any] = {
         "attempted": len(report.outcomes),
         "succeeded": len(report.succeeded),
         "failed": len(report.failed),
@@ -677,6 +698,21 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
         "coverage_after": after,
         "failure_reasons": report.reasons(),
     }
+    if tickers:
+        result["targeted"] = True
+        result["tickers"] = tickers
+        result["missing_tickers"] = missing
+    else:
+        result["targeted"] = False
+        result["limit"] = limit
+
+    if report.had_transient_failures:
+        raise TransientIngestionFailure(
+            transient=len(report.transient_failures),
+            attempted=len(report.outcomes),
+        )
+
+    return result
 
 
 # ===========================================================================

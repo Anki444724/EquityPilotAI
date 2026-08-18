@@ -323,6 +323,7 @@ def test_handle_financials_backfill(mock_service, mock_db):
     mock_report.outcomes.__len__ = lambda self: 10
     mock_report.succeeded.__len__ = lambda self: 8
     mock_report.failed.__len__ = lambda self: 2
+    mock_report.had_transient_failures = False
 
     instance = mock_service.return_value
     instance.coverage_snapshot.side_effect = [mock_coverage, mock_coverage]
@@ -337,6 +338,121 @@ def test_handle_financials_backfill(mock_service, mock_db):
     assert res["coverage_before"]["companies"] == 500
     assert res["coverage_after"] is mock_coverage
     assert res["failure_reasons"] == {"screener: HTTP 404": 2}
+    assert res["targeted"] is False
+    assert res["limit"] == 25
+
+
+@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
+def test_handle_financials_backfill_defaults_to_a_25_company_sweep(
+        mock_service, mock_db):
+    """The scheduled job (payload carries only {"scheduled": True}) must be
+    bounded to 25 companies — never an unbounded full-universe sweep."""
+
+    mock_report = MagicMock()
+    mock_report.outcomes.__len__ = lambda self: 25
+    mock_report.succeeded.__len__ = lambda self: 25
+    mock_report.failed.__len__ = lambda self: 0
+    mock_report.reasons.return_value = {}
+    mock_report.had_transient_failures = False
+
+    instance = mock_service.return_value
+    instance.coverage_snapshot.return_value = {
+        "companies": 0, "with_financials": 0, "without_financials": 0,
+        "coverage_pct": 0.0, "by_category": {},
+    }
+    instance.run.return_value = mock_report
+
+    res = handle_financials_backfill(mock_db, {"scheduled": True})
+
+    instance.run.assert_called_once_with(limit=25, progress=False)
+    assert res["limit"] == 25
+    assert res["targeted"] is False
+
+
+@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
+def test_handle_financials_backfill_targets_tickers_ignoring_the_batch_limit(
+        mock_service, mock_db):
+    """A targeted run resolves exact tickers from the database and is NOT
+    bounded by the sweep's 25-company limit."""
+
+    mock_target = MagicMock()
+    mock_target.ticker = "NHPC"
+    mock_service.return_value.companies_by_tickers.return_value = [mock_target]
+
+    mock_report = MagicMock()
+    mock_report.outcomes.__len__ = lambda self: 1
+    mock_report.succeeded.__len__ = lambda self: 1
+    mock_report.failed.__len__ = lambda self: 0
+    mock_report.reasons.return_value = {}
+    mock_report.had_transient_failures = False
+    mock_service.return_value.run.return_value = mock_report
+    mock_service.return_value.coverage_snapshot.return_value = {
+        "companies": 0, "with_financials": 0, "without_financials": 0,
+        "coverage_pct": 0.0, "by_category": {},
+    }
+
+    res = handle_financials_backfill(
+        mock_db, {"tickers": ["NHPC"], "limit": 999})
+
+    mock_service.return_value.companies_by_tickers.assert_called_once_with(["NHPC"])
+    # `run` is called with the resolved targets, not with a limit — so a
+    # targeted ingestion is never truncated by the 25-company batching.
+    mock_service.return_value.run.assert_called_once_with(
+        targets=[mock_target], progress=False)
+    assert res["targeted"] is True
+    assert res["tickers"] == ["NHPC"]
+    assert res["missing_tickers"] == []
+
+
+@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
+def test_handle_financials_backfill_reports_missing_targeted_tickers(
+        mock_service, mock_db):
+    """A ticker absent from the database is reported, not silently ignored."""
+
+    mock_service.return_value.companies_by_tickers.return_value = []
+
+    mock_report = MagicMock()
+    mock_report.outcomes.__len__ = lambda self: 0
+    mock_report.succeeded.__len__ = lambda self: 0
+    mock_report.failed.__len__ = lambda self: 0
+    mock_report.reasons.return_value = {}
+    mock_report.had_transient_failures = False
+    mock_service.return_value.run.return_value = mock_report
+    mock_service.return_value.coverage_snapshot.return_value = {
+        "companies": 0, "with_financials": 0, "without_financials": 0,
+        "coverage_pct": 0.0, "by_category": {},
+    }
+
+    res = handle_financials_backfill(mock_db, {"tickers": ["ZZZZ"]})
+    assert res["missing_tickers"] == ["ZZZZ"]
+    mock_service.return_value.run.assert_called_once_with(targets=[], progress=False)
+
+
+@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
+def test_handle_financials_backfill_raises_on_transient_failures(
+        mock_service, mock_db):
+    """Transient provider failures surface as a raised job failure so the
+    worker's bounded RetryPolicy runs, instead of being swallowed inside the
+    run."""
+
+    mock_report = MagicMock()
+    mock_report.outcomes.__len__ = lambda self: 25
+    mock_report.succeeded.__len__ = lambda self: 24
+    mock_report.failed.__len__ = lambda self: 1
+    mock_report.reasons.return_value = {"screener: HTTP 429": 1}
+    mock_report.had_transient_failures = True
+    mock_report.transient_failures = [MagicMock()]
+    mock_service.return_value.run.return_value = mock_report
+    mock_service.return_value.coverage_snapshot.return_value = {
+        "companies": 0, "with_financials": 0, "without_financials": 0,
+        "coverage_pct": 0.0, "by_category": {},
+    }
+
+    from app.services.universe.financials_backfill import TransientIngestionFailure
+    with pytest.raises(TransientIngestionFailure) as exc:
+        handle_financials_backfill(mock_db, {"scheduled": True})
+    assert exc.value.transient == 1
+    assert exc.value.attempted == 25
 
 
 def test_financials_backfill_is_registered_everywhere():
@@ -352,29 +468,6 @@ def test_financials_backfill_is_registered_everywhere():
     assert kind in RETRY_POLICIES
     assert handler_for(kind) is handle_financials_backfill
     assert any(s.kind == kind for s in SCHEDULES)
-
-
-@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
-def test_handle_financials_backfill_without_limit(mock_service, mock_db):
-    """Without a payload limit the sweep is unbounded."""
-
-    mock_report = MagicMock()
-    mock_report.outcomes.__len__ = lambda self: 0
-    mock_report.succeeded.__len__ = lambda self: 0
-    mock_report.failed.__len__ = lambda self: 0
-    mock_report.reasons.return_value = {}
-
-    instance = mock_service.return_value
-    instance.coverage_snapshot.return_value = {
-        "companies": 0, "with_financials": 0, "without_financials": 0,
-        "coverage_pct": 0.0, "by_category": {},
-    }
-    instance.run.return_value = mock_report
-
-    res = handle_financials_backfill(mock_db, {})
-
-    instance.run.assert_called_once_with(limit=None, progress=False)
-    assert res["attempted"] == 0
 
 
 @patch("app.services.quality.service.QualitySnapshotService")
