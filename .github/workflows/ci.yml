@@ -67,13 +67,57 @@ jobs:
 
       - name: System dependencies
         # tesseract for Module 7's OCR path; DejaVu because Module 9's PDF
-        # tests assert that a rupee sign survives into the extracted text, and
-        # base-14 Helvetica has no such glyph.
+        # tests assert that a rupee sign survives into the extracted text.
+        timeout-minutes: 8
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            tesseract-ocr tesseract-ocr-eng fonts-dejavu-core
+          set -euo pipefail
 
+          required=(
+            tesseract-ocr
+            tesseract-ocr-eng
+            fonts-dejavu-core
+          )
+
+          missing=()
+
+          for package in "${required[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
+                | grep -qx 'install ok installed'; then
+              missing+=("$package")
+            fi
+          done
+
+          if ((${#missing[@]} == 0)); then
+            echo "Required OCR and font packages are already installed."
+            exit 0
+          fi
+
+          echo "Installing missing packages: ${missing[*]}"
+
+          apt_retry() {
+            local attempt
+
+            for attempt in 1 2 3; do
+              if sudo env DEBIAN_FRONTEND=noninteractive \
+                  timeout --kill-after=10s 120s apt-get \
+                  -o Acquire::Retries=2 \
+                  -o Acquire::http::Timeout=20 \
+                  -o Acquire::https::Timeout=20 \
+                  -o DPkg::Lock::Timeout=30 \
+                  "$@"; then
+                return 0
+              fi
+
+              echo "apt attempt ${attempt} failed or timed out" >&2
+              sleep $((attempt * 5))
+            done
+
+            return 1
+          }
+
+          apt_retry update
+          apt_retry install -y --no-install-recommends "${missing[@]}"
       - name: Install
         working-directory: backend
         run: |
