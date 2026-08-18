@@ -641,6 +641,45 @@ def handle_memory_enrichment(db: Session, payload: dict[str, Any]) -> dict[str, 
 
 
 # ===========================================================================
+# Financials backfill
+# ===========================================================================
+def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Ingest canonical annual financials for companies that lack them.
+
+    Runs the same `FinancialsBackfillService` that `deploy/backfill_financials.py`
+    drives manually, so the scheduled sweep and an on-demand admin run share one
+    implementation instead of a second one drifting from the first.
+
+    The run is resumable by construction: the target set is recomputed from the
+    database, so a sweep truncated by the payload limit makes progress through
+    the universe and the rest is picked up on the next pass. Coverage is read
+    back from the database before and after, so the job result records real
+    progress rather than the run's own tally.
+    """
+    from app.services.universe.financials_backfill import (
+        FinancialsBackfillService,
+    )
+
+    limit = payload.get("limit")
+    service = FinancialsBackfillService(db)
+    before = service.coverage_snapshot()
+    report = service.run(
+        limit=int(limit) if limit else None,
+        progress=False,
+    )
+    after = service.coverage_snapshot()
+
+    return {
+        "attempted": len(report.outcomes),
+        "succeeded": len(report.succeeded),
+        "failed": len(report.failed),
+        "coverage_before": before,
+        "coverage_after": after,
+        "failure_reasons": report.reasons(),
+    }
+
+
+# ===========================================================================
 # Hybrid storage replication
 # ===========================================================================
 def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -685,6 +724,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.QUALITY_REFRESH: handle_quality_refresh,
     JobKind.EMBEDDING_BACKFILL: handle_embedding_backfill,
     JobKind.AI_SCORE_REFRESH: handle_ai_score_refresh,
+    JobKind.FINANCIALS_BACKFILL: handle_financials_backfill,
 }
 
 

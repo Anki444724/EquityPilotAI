@@ -32,6 +32,7 @@ from app.services.platform.jobs.handlers import (
     handle_quality_refresh,
     handle_ir_discovery,
     handle_memory_enrichment,
+    handle_financials_backfill,
 )
 
 @pytest.fixture
@@ -302,6 +303,78 @@ def test_handle_embedding_backfill(mock_service, mock_db):
     mock_service.return_value.run.return_value.as_dict.return_value = {"completed": True}
     res = handle_embedding_backfill(mock_db, {})
     assert res["completed"] is True
+
+
+@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
+def test_handle_financials_backfill(mock_service, mock_db):
+    """Delegates to the service (never reimplementing the sweep) and reports
+    coverage read back from the database, with the run bounded by the payload
+    limit and progress disabled inside the worker."""
+
+    mock_coverage = {"companies": 500, "with_financials": 490,
+                     "without_financials": 10, "coverage_pct": 98.0,
+                     "by_category": {"largecap": {"total": 100, "covered": 99}}}
+
+    mock_report = MagicMock()
+    mock_report.outcomes = MagicMock()
+    mock_report.succeeded = MagicMock()
+    mock_report.failed = MagicMock()
+    mock_report.reasons.return_value = {"screener: HTTP 404": 2}
+    mock_report.outcomes.__len__ = lambda self: 10
+    mock_report.succeeded.__len__ = lambda self: 8
+    mock_report.failed.__len__ = lambda self: 2
+
+    instance = mock_service.return_value
+    instance.coverage_snapshot.side_effect = [mock_coverage, mock_coverage]
+    instance.run.return_value = mock_report
+
+    res = handle_financials_backfill(mock_db, {"limit": 25})
+
+    instance.run.assert_called_once_with(limit=25, progress=False)
+    assert res["attempted"] == 10
+    assert res["succeeded"] == 8
+    assert res["failed"] == 2
+    assert res["coverage_before"]["companies"] == 500
+    assert res["coverage_after"] is mock_coverage
+    assert res["failure_reasons"] == {"screener: HTTP 404": 2}
+
+
+def test_financials_backfill_is_registered_everywhere():
+    """JOB-001 guard: a kind missing from any registry raises on enqueue."""
+    from app.domain.platform.jobs import (
+        DEFAULT_PRIORITY, JOB_LABELS, RETRY_POLICIES, SCHEDULES, JobKind,
+    )
+    from app.services.platform.jobs.handlers import handler_for
+
+    kind = JobKind.FINANCIALS_BACKFILL
+    assert kind in JOB_LABELS
+    assert kind in DEFAULT_PRIORITY
+    assert kind in RETRY_POLICIES
+    assert handler_for(kind) is handle_financials_backfill
+    assert any(s.kind == kind for s in SCHEDULES)
+
+
+@patch("app.services.universe.financials_backfill.FinancialsBackfillService")
+def test_handle_financials_backfill_without_limit(mock_service, mock_db):
+    """Without a payload limit the sweep is unbounded."""
+
+    mock_report = MagicMock()
+    mock_report.outcomes.__len__ = lambda self: 0
+    mock_report.succeeded.__len__ = lambda self: 0
+    mock_report.failed.__len__ = lambda self: 0
+    mock_report.reasons.return_value = {}
+
+    instance = mock_service.return_value
+    instance.coverage_snapshot.return_value = {
+        "companies": 0, "with_financials": 0, "without_financials": 0,
+        "coverage_pct": 0.0, "by_category": {},
+    }
+    instance.run.return_value = mock_report
+
+    res = handle_financials_backfill(mock_db, {})
+
+    instance.run.assert_called_once_with(limit=None, progress=False)
+    assert res["attempted"] == 0
 
 
 @patch("app.services.quality.service.QualitySnapshotService")

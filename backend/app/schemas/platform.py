@@ -552,6 +552,32 @@ class JobEnqueue(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class FinancialsBackfillTrigger(BaseModel):
+    """Ask for a financials backfill sweep. Optional limit bounds one run so a
+    long sweep is interrupted gracefully; the remainder is picked up by the
+    next scheduled pass."""
+
+    limit: int | None = Field(default=None, ge=1)
+
+
+class FinancialsBackfillCoverage(BaseModel):
+    """Universe financial coverage, read back from the database."""
+
+    companies: int
+    with_financials: int
+    without_financials: int
+    coverage_pct: float
+    by_category: dict[str, dict[str, int]]
+
+
+class FinancialsBackfillStatus(BaseModel):
+    """Current financial coverage plus the most recent backfill job, so the
+    operator console can show both the state and whether a sweep is in flight."""
+
+    coverage: FinancialsBackfillCoverage
+    latest_job: JobOut | None = None
+
+
 class QueueDepthOut(BaseModel):
     queued: int
     running: int
