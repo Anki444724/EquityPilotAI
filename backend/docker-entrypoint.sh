@@ -13,6 +13,7 @@
 set -e
 
 STORAGE_PATH="${DOCUMENT_STORAGE_PATH:-/data/documents}"
+SQLITE_DATA_PATH="${SQLITE_DATA_PATH:-/data/database}"
 APP_USER="${APP_USER:-ierp}"
 
 if [ "$(id -u)" = "0" ]; then
@@ -24,11 +25,19 @@ if [ "$(id -u)" = "0" ]; then
         echo "entrypoint: WARNING could not chown $STORAGE_PATH; uploads may fail" >&2
     fi
 
+    # The zero-config image stores SQLite under /data rather than beside the
+    # read-only application source. This also repairs ownership when a user
+    # mounts a fresh volume over the image's build-time directory.
+    mkdir -p "$SQLITE_DATA_PATH" 2>/dev/null || true
+    if ! chown -R "$APP_USER":"$APP_USER" "$SQLITE_DATA_PATH" 2>/dev/null; then
+        echo "entrypoint: WARNING could not chown $SQLITE_DATA_PATH; SQLite may fail" >&2
+    fi
+
     # Backups live on the same principle.
     mkdir -p /app/backups 2>/dev/null || true
     chown -R "$APP_USER":"$APP_USER" /app/backups 2>/dev/null || true
 
-    echo "entrypoint: storage $STORAGE_PATH owned by $APP_USER; dropping privileges"
+    echo "entrypoint: writable data paths prepared; dropping privileges to $APP_USER"
     exec su-exec "$APP_USER" "$@"
 fi
 
