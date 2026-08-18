@@ -8,9 +8,15 @@
  * page. Durability across reloads comes from the refresh token, which the
  * backend sets as an httpOnly cookie the browser sends automatically — so on
  * mount we simply ask /auth/refresh whether there is a live session.
+ *
+ * That restore goes through the same single-flight lock as the API client's
+ * 401 retry. Two independent refresh calls would rotate the cookie twice and
+ * the backend would revoke the family.
  */
 
-import { ApiError, authApi, currentAccessToken, setSession } from "@/lib/api";
+import {
+  ApiError, authApi, restoreSession, setSession, subscribeSession,
+} from "@/lib/api";
 import type { SessionUserFull } from "@/lib/types";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -40,13 +46,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initialising, setInitialising] = useState(true);
   const queryClient = useQueryClient();
 
+  // If a 401 retry later fails refresh, drop the signed-in view once — do
+  // not start another restore loop.
+  useEffect(() => subscribeSession((session) => {
+    if (!session) setUser(null);
+  }), []);
+
   // Restore a session on first load. A 401 here is the normal "not signed in"
   // answer, not an error worth surfacing.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        if (!currentAccessToken()) await authApi.refresh();
+        await restoreSession();
         const me = await authApi.me();
         if (!cancelled) {
           setUser(me);
