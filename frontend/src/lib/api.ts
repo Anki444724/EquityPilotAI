@@ -17,16 +17,14 @@ import type {
   AdminUser, AdminUserPage, UserSession, UserSubscription, UserInvoice,
   UserAnalytics, RoleInfo,
 } from "./types";
+import {
+  API_BASE, ApiError, apiFetch, raise, refreshSession, setSession,
+} from "./auth-session";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-export class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+export {
+  API_BASE, ApiError, refreshSession, restoreSession, setSession,
+  currentAccessToken, subscribeSession,
+} from "./auth-session";
 
 /**
  * Every read in the application goes through here.
@@ -54,26 +52,8 @@ export class ApiError extends Error {
  * `application/json` alongside a FormData body makes the server fail to parse
  * it.
  */
-async function rawFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
-    credentials: "include",
-    cache: "no-store",
-  });
-}
-
-/** Throw a typed ApiError carrying the server's `detail` when present. */
-async function raise(res: Response): Promise<never> {
-  let detail: unknown = res.statusText;
-  try {
-    detail = (await res.json()).detail ?? res.statusText;
-  } catch { /* non-JSON error body */ }
-  throw new ApiError(
-    res.status,
-    typeof detail === "string" ? detail : JSON.stringify(detail),
-  );
-}
+/** 401 retries share AuthProvider's refresh lock via `apiFetch`. */
+const rawFetch = apiFetch;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await rawFetch(path, {
@@ -561,34 +541,9 @@ import type {
 } from "./types";
 
 /**
- * The access token for the current session.
+ * Session tokens live in `auth-session.ts`. Re-exported above so existing
+ * imports of `setSession` / `currentAccessToken` keep working.
  *
- * Held in memory rather than in localStorage: a token in localStorage is
- * readable by any script on the page, which turns an XSS bug into a stolen
- * session. The refresh token is an httpOnly cookie the browser sends
- * automatically and script cannot read, so a page reload recovers the session
- * through `/auth/refresh` without the access token ever being persisted.
- */
-let accessToken: string | null = null;
-let csrfToken: string | null = null;
-
-export function setSession(tokens: { access_token: string; csrf_token: string } | null) {
-  accessToken = tokens?.access_token ?? null;
-  csrfToken = tokens?.csrf_token ?? null;
-}
-
-export function currentAccessToken(): string | null {
-  return accessToken;
-}
-
-function authHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-  if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-  return headers;
-}
-
-/**
  * Retained as a distinct name because the session calls read better as
  * `authed(...)`, but there is now exactly one code path: every request in
  * this module carries credentials, so no future endpoint can be added
@@ -665,11 +620,8 @@ export const authApi = {
       method: "POST", body: JSON.stringify(body),
     }),
 
-  refresh: async () => {
-    const tokens = await authed<TokenResponse>("/api/v1/auth/refresh", { method: "POST" });
-    setSession(tokens);
-    return tokens;
-  },
+  /** Same single-flight lock as the 401 interceptor. */
+  refresh: refreshSession,
 
   logout: async () => {
     try {
