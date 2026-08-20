@@ -697,3 +697,303 @@ class TestIsinTransferRules:
             assert self._rows(conn) == {
                 "can": None, "dup": PROD_ISIN, "other": PROD_ISIN,
             }
+
+
+# ==========================================================================
+# The production (ticker, exchange) identity conflict
+# ==========================================================================
+
+def _relax_identity_constraint(engine: sa.Engine) -> None:
+    """Rebuild `companies` without uq_company_ticker_exchange.
+
+    Production reached a state the constraint should have prevented: two rows
+    with the same (ticker, exchange). SQLite cannot add or drop a table
+    constraint in place, and it will not let the violating pair be inserted
+    while the constraint stands, so the empty table is recreated from its own
+    DDL with that one clause removed. Its indexes are recreated as they were.
+
+    This reproduces the *data* state production is in. Enforcement behaviour is
+    reproduced separately by `_install_pg_identity_semantics`.
+    """
+    import re
+
+    with engine.begin() as conn:
+        ddl = conn.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='companies'"
+        )).scalar()
+        indexes = [
+            r[0] for r in conn.execute(sa.text(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='companies' AND sql IS NOT NULL"
+            ))
+        ]
+        relaxed, count = re.subn(
+            r",\s*CONSTRAINT uq_company_ticker_exchange UNIQUE \([^)]*\)",
+            "", ddl,
+        )
+        assert count == 1, "uq_company_ticker_exchange not found in the DDL"
+        conn.execute(sa.text("DROP TABLE companies"))
+        conn.execute(sa.text(relaxed))
+        for index_sql in indexes:
+            if "uq_companies_exchange_ticker_ci" in index_sql:
+                continue  # the migration under test creates this one
+            conn.execute(sa.text(index_sql))
+
+
+def _install_pg_identity_semantics(engine: sa.Engine) -> None:
+    """Make SQLite reject writes the way PostgreSQL's unique index does.
+
+    In PostgreSQL a UNIQUE constraint is a unique *index*, and an index is
+    maintained on write. An UPDATE that cannot be applied as a heap-only tuple
+    inserts a fresh entry into every index; if the key that entry carries is
+    already held by another live row, the write is rejected — whatever column
+    the UPDATE actually changed. That is why
+
+        UPDATE companies SET isin = NULL WHERE id = :dup
+
+    failed in production with
+
+        duplicate key value violates unique constraint
+        "uq_company_ticker_exchange"
+        DETAIL:  Key (ticker, exchange)=(M&M, NSE) already exists.
+
+    The trigger below applies exactly that rule: a row may be written only if
+    the (ticker, exchange) it *will* carry is not held by another row. An
+    update that changes the key to something unique is allowed, which is
+    precisely the escape the fix uses.
+    """
+    with engine.begin() as conn:
+        conn.execute(sa.text("""
+            CREATE TRIGGER pg_unique_index_semantics
+            BEFORE UPDATE ON companies
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'duplicate key value violates unique constraint uq_company_ticker_exchange'
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM companies other
+                    WHERE other.id <> NEW.id
+                      AND other.ticker = NEW.ticker
+                      AND other.exchange = NEW.exchange
+                );
+            END
+        """))
+
+
+class TestProductionIdentityAndIsinConflict:
+    """Both rows on NSE with the same ticker, and the duplicate owns the ISIN.
+
+    The second production incident. The first fix moved the ISIN before the
+    duplicate released it; this shape shows that the pair could not be written
+    to *at all* while they shared an identity, because every UPDATE re-inserts
+    the (ticker, exchange) key into the unique index.
+
+    Seeded verbatim from the incident report: same ids, same ticker, same
+    exchange on both rows, same ISIN on the duplicate, history on the
+    canonical row.
+    """
+
+    @pytest.fixture()
+    def migrated(self, tmp_path):
+        from app.core.config import settings
+
+        url = f"sqlite:///{tmp_path / 'identity_clash.db'}"
+        engine = _prev_schema_engine(url, settings)
+        _relax_identity_constraint(engine)
+
+        can_t = datetime(2026, 8, 19, tzinfo=timezone.utc)
+        dup_t = datetime(2026, 8, 17, tzinfo=timezone.utc)
+        with engine.begin() as conn:
+            session_factory = sa.orm.sessionmaker(bind=conn)
+            with session_factory() as db:
+                db.add(Company(
+                    id=PROD_CANONICAL_ID, name="Mahindra & Mahindra Ltd",
+                    ticker="M&M", exchange="NSE", isin=None,
+                    sector="Automobile", listing_status="active",
+                    data_version=2, created_at=can_t, updated_at=can_t,
+                ))
+                db.add(Company(
+                    id=PROD_DUPLICATE_ID, name="Mahindra and Mahindra",
+                    ticker="M&M", exchange="NSE", isin=PROD_ISIN,
+                    industry="Passenger Vehicles", listing_status="active",
+                    data_version=1, created_at=dup_t, updated_at=dup_t,
+                ))
+                db.flush()
+                for offset in range(9):
+                    db.add(FinancialFact(
+                        company_id=PROD_CANONICAL_ID, fiscal_year=2017 + offset,
+                        line_item="revenue", value=100_000.0 + offset,
+                        precedence=2, source="screener.in",
+                        created_at=can_t, updated_at=can_t,
+                    ))
+                db.add(Document(
+                    company_id=PROD_DUPLICATE_ID, filename="ar.pdf",
+                    doc_type="annual_report", file_format="pdf",
+                    content_hash="dup-h1", created_at=dup_t, updated_at=dup_t,
+                ))
+                db.commit()
+
+        # Both rows now share (M&M, NSE) exactly as production does.
+        _install_pg_identity_semantics(engine)
+        _upgrade(_config(url), "head", settings)
+        return engine
+
+    def test_the_upgrade_completes_under_postgres_identity_semantics(
+        self, migrated,
+    ):
+        """Before the fix this aborted on uq_company_ticker_exchange."""
+        with migrated.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM companies"
+            )).scalar() == 1
+
+    def test_the_canonical_row_survives_with_its_identity_intact(self, migrated):
+        with migrated.connect() as conn:
+            row = conn.execute(sa.text(
+                "SELECT id, ticker, exchange, isin, industry FROM companies"
+            )).one()
+            assert row.id == PROD_CANONICAL_ID
+            assert row.ticker == "M&M"          # never renamed
+            assert row.exchange == "NSE"
+            assert row.isin == PROD_ISIN        # ISIN transfer preserved
+            assert row.industry == "Passenger Vehicles"   # metadata merged
+
+    def test_no_quarantine_sentinel_survives_the_migration(self, migrated):
+        """The temporary ticker exists only between two statements."""
+        with migrated.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM companies WHERE ticker LIKE '~DUP~%'"
+            )).scalar() == 0
+
+    def test_the_backup_holds_the_duplicates_real_ticker(self, migrated):
+        """Recovery must see M&M, not the sentinel."""
+        with migrated.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT ticker FROM companies_pre_merge_backup WHERE id = :dup"
+            ), {"dup": PROD_DUPLICATE_ID}).scalar() == "M&M"
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM company_merge_log WHERE ticker = 'M&M'"
+            )).scalar() >= 1
+
+    def test_financial_facts_and_dependents_are_preserved(self, migrated):
+        with migrated.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM financial_facts WHERE company_id = :cid"
+            ), {"cid": PROD_CANONICAL_ID}).scalar() == 9
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM documents WHERE company_id = :cid"
+            ), {"cid": PROD_CANONICAL_ID}).scalar() == 1
+            session_factory = sa.orm.sessionmaker(bind=conn)
+            with session_factory() as db:
+                assert _dangling(db, PROD_DUPLICATE_ID) == []
+
+    def test_identity_uniqueness_is_enforced_afterwards(self, migrated):
+        with migrated.connect() as conn:
+            with pytest.raises(sa.exc.IntegrityError):
+                conn.execute(sa.text(
+                    "INSERT INTO companies (id, name, ticker, exchange, "
+                    " listing_status, data_version, created_at, updated_at) "
+                    "VALUES (:id, 'Clone Ltd', 'M&M', 'NSE', 'active', 1, "
+                    "        :now, :now)"
+                ), {"id": str(uuid.uuid4()), "now": datetime.now(timezone.utc)})
+
+    def test_isin_uniqueness_is_enforced_afterwards(self, migrated):
+        with migrated.connect() as conn:
+            with pytest.raises(sa.exc.IntegrityError):
+                conn.execute(sa.text(
+                    "INSERT INTO companies (id, name, ticker, exchange, isin, "
+                    " listing_status, data_version, created_at, updated_at) "
+                    "VALUES (:id, 'Clone Ltd', 'CLONE', 'NSE', :isin, "
+                    "        'active', 1, :now, :now)"
+                ), {"id": str(uuid.uuid4()), "isin": PROD_ISIN,
+                    "now": datetime.now(timezone.utc)})
+
+
+class TestQuarantineRules:
+    """`_quarantine_duplicate_identity` in isolation."""
+
+    @staticmethod
+    def _module():
+        return TestIsinTransferRules._migration_module()
+
+    @staticmethod
+    def _table(engine) -> None:
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "CREATE TABLE companies (id TEXT PRIMARY KEY, ticker TEXT, "
+                "exchange TEXT, isin TEXT)"
+            ))
+
+    def _rows(self, conn):
+        return {
+            r.id: (r.ticker, r.exchange)
+            for r in conn.execute(sa.text(
+                "SELECT id, ticker, exchange FROM companies"
+            ))
+        }
+
+    def test_a_clashing_duplicate_is_renamed_and_the_canonical_is_not(self):
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO companies VALUES (:can, 'M&M', 'NSE', NULL), "
+                "(:dup, 'M&M', 'NSE', :isin)"
+            ), {"can": PROD_CANONICAL_ID, "dup": PROD_DUPLICATE_ID,
+                "isin": PROD_ISIN})
+            sentinel = module._quarantine_duplicate_identity(
+                conn, PROD_CANONICAL_ID, PROD_DUPLICATE_ID,
+            )
+            rows = self._rows(conn)
+            assert rows[PROD_CANONICAL_ID] == ("M&M", "NSE")
+            assert rows[PROD_DUPLICATE_ID] == (sentinel, "NSE")
+            assert sentinel.startswith("~DUP~")
+            assert len(sentinel) <= 32          # fits companies.ticker
+
+    def test_a_pair_on_different_exchanges_is_left_alone(self):
+        """The NSE/BSE Indian-family merge has no identity clash to remove."""
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO companies VALUES ('can', 'M&M', 'NSE', NULL), "
+                "('dup', 'M&M', 'BSE', NULL)"
+            ))
+            assert module._quarantine_duplicate_identity(
+                conn, "can", "dup") is None
+            assert self._rows(conn) == {
+                "can": ("M&M", "NSE"), "dup": ("M&M", "BSE"),
+            }
+
+    def test_quarantine_is_idempotent(self):
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO companies VALUES ('can', 'M&M', 'NSE', NULL), "
+                "('dup', 'M&M', 'NSE', NULL)"
+            ))
+            first = module._quarantine_duplicate_identity(conn, "can", "dup")
+            second = module._quarantine_duplicate_identity(conn, "can", "dup")
+            third = module._quarantine_duplicate_identity(conn, "can", "dup")
+            assert first == second == third
+            assert self._rows(conn)["can"] == ("M&M", "NSE")
+
+    def test_sentinels_are_distinct_per_duplicate(self):
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO companies VALUES ('can', 'M&M', 'NSE', NULL), "
+                "(:d1, 'M&M', 'NSE', NULL), (:d2, 'M&M', 'NSE', NULL)"
+            ), {"d1": PROD_DUPLICATE_ID, "d2": str(uuid.uuid4())})
+            sentinels = {
+                module._quarantine_duplicate_identity(conn, "can", dup)
+                for dup in self._rows(conn) if dup != "can"
+            }
+            assert len(sentinels) == 2

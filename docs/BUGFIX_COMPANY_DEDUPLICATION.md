@@ -279,3 +279,94 @@ Properties:
 
 Verified failing before the fix (`UNIQUE constraint failed: companies.isin`) and
 passing after.
+
+
+---
+
+## 10. Second production incident: the (ticker, exchange) identity clash
+
+The next run failed earlier than the first:
+
+```
+psycopg.errors.UniqueViolation: duplicate key value violates unique constraint
+"uq_company_ticker_exchange"
+DETAIL:  Key (ticker, exchange)=(M&M, NSE) already exists.
+```
+
+raised by the first statement of the ISIN transfer:
+
+```sql
+UPDATE companies SET isin = NULL WHERE id = :dup AND isin = :isin
+```
+
+Both incident rows sit on the same venue, which the first incident report did
+not show:
+
+| id | ticker | exchange | isin | history |
+|---|---|---|---|---|
+| `dff1781c-00be-4237-b545-4df26a58b2e0` | M&M | NSE | NULL | yes, canonical |
+| `5868f82a-0195-4414-aabf-fc40fc2e1f37` | M&M | NSE | INE101A01026 | no, duplicate |
+
+### Why an UPDATE of `isin` violates a constraint on `(ticker, exchange)`
+
+A UNIQUE constraint in PostgreSQL is a unique **index**, and an index is
+maintained on write. An UPDATE writes a new row version; unless it qualifies as
+a heap-only tuple it must insert a fresh entry into *every* index on the table.
+The entry inserted for the duplicate carries `(M&M, NSE)` — the key the
+canonical row already holds, live — so the insert is rejected. The column the
+UPDATE actually changed is irrelevant.
+
+The consequence is broader than the ISIN transfer: while the pair shares an
+identity, **neither row can be written to at all**, so the metadata merge on
+the canonical row was equally exposed. The database was in a state the
+constraint should have prevented (the constraint enforces on write but never
+retro-validated the rows already present), and the migration was trying to
+repair exactly that state while the constraint blocked every repair.
+
+### The ordering fix
+
+`_quarantine_duplicate_identity()` runs first, before any statement touches
+either row:
+
+```sql
+UPDATE companies SET ticker = '~DUP~<duplicate-uuid-hex>' WHERE id = :dup
+```
+
+The new index entry carries a key nothing else holds, so this write is legal
+while the old key stays with the canonical row. From that point the pair no
+longer collides, and every later statement — the ISIN release, the ISIN
+adoption, the COALESCE metadata merge, the delete — writes non-conflicting
+keys. The order inside `_merge_metadata()` is now:
+
+1. `_quarantine_duplicate_identity()` — removes the `(ticker, exchange)` clash;
+2. `_transfer_isin()` — releases the ISIN from the duplicate, then adopts it;
+3. the COALESCE merge — unchanged;
+
+followed by the existing delete, the Indian-venue normalisation, and step 6,
+which drops and re-adds `uq_company_ticker_exchange` so the constraint ends the
+migration valid over clean data.
+
+Properties:
+
+* **Nothing is deleted or disabled.** Both rows survive the quarantine, the
+  constraint stays in force for the whole migration, and it is re-asserted at
+  the end.
+* **The canonical identity never changes.** Only the duplicate is renamed, only
+  when it genuinely collides. An NSE/BSE pair is left alone.
+* **The sentinel is invisible afterwards.** The duplicate is deleted a few
+  statements later; `companies_pre_merge_backup` (written before the loop) and
+  `company_merge_log` both hold the real ticker.
+* **`ticker` is not in `COALESCE_COLUMNS`,** so the sentinel cannot reach the
+  survivor.
+* **Idempotent** — a row already carrying the prefix is left as it is.
+
+### Regression tests
+
+| Test class | Covers |
+|---|---|
+| `TestProductionIdentityAndIsinConflict` | both incident rows on NSE with the duplicate ISIN, under a trigger that reproduces PostgreSQL's write-time index semantics: the upgrade completes, the canonical row keeps `M&M`/`NSE` and gains the ISIN, no sentinel survives, the backup holds the real ticker, facts and documents are preserved, both constraints still enforce |
+| `TestQuarantineRules` | `_quarantine_duplicate_identity` in isolation: clashing pair renamed (canonical untouched), different-exchange pair left alone, idempotency, distinct sentinels per duplicate, sentinel fits `companies.ticker` |
+
+Verified failing before the fix with
+`duplicate key value violates unique constraint uq_company_ticker_exchange`,
+and passing after.

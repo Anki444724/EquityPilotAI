@@ -295,6 +295,87 @@ def _pick_canonical(group: list[dict],
     return min(group, key=key)
 
 
+#: Prefix for the temporary ticker a duplicate wears between the moment its
+#: identity is quarantined and the moment the row is deleted, a few statements
+#: later in the same transaction.
+QUARANTINE_PREFIX = "~DUP~"
+
+
+def _quarantine_duplicate_identity(bind: sa.Connection, canonical_id: str,
+                                   dup_id: str) -> str | None:
+    """Give the duplicate a temporary unique ticker before anything writes to it.
+
+    Production holds two rows with the *same* ``(ticker, exchange)``::
+
+        dff1781c…  M&M  NSE  isin NULL           <- canonical, owns the history
+        5868f82a…  M&M  NSE  isin INE101A01026   <- duplicate
+
+    ``uq_company_ticker_exchange`` is backed by a unique index, and a UNIQUE
+    index in PostgreSQL is maintained on *write*, not merely validated at
+    creation. Whenever an UPDATE produces a new row version that is not a
+    heap-only tuple, Postgres inserts a fresh entry into every index on the
+    table — including that one. Inserting ``(M&M, NSE)`` for the duplicate then
+    collides with the canonical row's live entry for the same key, and the
+    server raises::
+
+        duplicate key value violates unique constraint
+        "uq_company_ticker_exchange"
+        DETAIL:  Key (ticker, exchange)=(M&M, NSE) already exists.
+
+    The column being updated is irrelevant: it was ``isin`` that tripped it in
+    the incident, but the metadata merge writing to the canonical row is
+    exactly as exposed. The pair simply cannot both be touched while they share
+    an identity, which is the state the migration exists to repair.
+
+    So the identity clash is removed *first*. The duplicate is renamed to a
+    sentinel derived from its own id, which is unique by construction, so the
+    index entry the rename inserts has a key nothing else holds. Every later
+    UPDATE on either row then writes a non-conflicting key.
+
+    Deliberate properties:
+
+    * **Nothing is deleted or disabled.** Both rows survive this step, the
+      constraint stays in force throughout, and it is dropped and re-added at
+      the end of the migration only to re-assert it as *valid*.
+    * **The canonical identity is untouched.** Only the duplicate is renamed,
+      and only when it genuinely collides. A pair that differs by exchange —
+      the NSE/BSE Indian-family case — is left exactly as it was.
+    * **The original ticker is preserved.** ``companies_pre_merge_backup`` is
+      written before the loop starts, so it holds the real ticker, and
+      ``company_merge_log`` records the canonical ticker.
+    * **Nothing leaks into the survivor.** ``ticker`` is not in
+      ``COALESCE_COLUMNS``, so the sentinel cannot reach the canonical row.
+    * **Idempotent.** A row already wearing the prefix is left alone.
+
+    Returns the sentinel when one was applied, otherwise ``None``.
+    """
+    row = bind.execute(sa.text(
+        "SELECT (SELECT ticker   FROM companies WHERE id = :dup) AS dup_ticker,"
+        "       (SELECT exchange FROM companies WHERE id = :dup) AS dup_exchange,"
+        "       (SELECT ticker   FROM companies WHERE id = :can) AS can_ticker,"
+        "       (SELECT exchange FROM companies WHERE id = :can) AS can_exchange"
+    ), {"dup": dup_id, "can": canonical_id}).one()
+    dup_ticker, dup_exchange, can_ticker, can_exchange = row[0], row[1], row[2], row[3]
+
+    if dup_ticker is None or can_ticker is None:
+        return None
+    if dup_ticker.startswith(QUARANTINE_PREFIX):
+        return dup_ticker
+
+    def norm(value: str | None) -> str:
+        return (value or "").strip().upper()
+
+    if (norm(dup_ticker) != norm(can_ticker)
+            or norm(dup_exchange) != norm(can_exchange)):
+        return None  # no identity clash: leave the duplicate untouched
+
+    sentinel = (QUARANTINE_PREFIX + dup_id.replace("-", ""))[:32]
+    bind.execute(sa.text(
+        "UPDATE companies SET ticker = :sentinel WHERE id = :dup"
+    ), {"sentinel": sentinel, "dup": dup_id})
+    return sentinel
+
+
 def _transfer_isin(bind: sa.Connection, canonical_id: str, dup_id: str) -> None:
     """Hand a unique ISIN from the duplicate to the canonical row, safely.
 
@@ -349,6 +430,19 @@ def _transfer_isin(bind: sa.Connection, canonical_id: str, dup_id: str) -> None:
 
 
 def _merge_metadata(bind: sa.Connection, canonical_id: str, dup_id: str) -> None:
+    # Order matters, and this is the order:
+    #
+    #   1. remove the (ticker, exchange) clash, so any write to either row
+    #      inserts a non-conflicting entry into uq_company_ticker_exchange;
+    #   2. hand over the unique ISIN, released from the duplicate first so the
+    #      write cannot collide with companies_isin_key;
+    #   3. merge the remaining metadata.
+    #
+    # Steps 1 and 2 are separate because they answer to different constraints.
+    # Both must precede the UPDATE below, which writes to the canonical row and
+    # is just as capable of tripping the identity index while the twin lives.
+    _quarantine_duplicate_identity(bind, canonical_id, dup_id)
+
     # The unique ISIN moves before the metadata merge runs, so the CASE below
     # can no longer be the statement that adopts a live ISIN: by the time it
     # evaluates, the canonical row either already owns the ISIN (and keeps its
