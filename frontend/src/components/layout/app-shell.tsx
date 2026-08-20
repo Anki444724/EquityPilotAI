@@ -15,6 +15,7 @@ import { CommandPalette } from "./command-palette";
 import { useTheme } from "./theme-provider";
 import { useAuth } from "./auth-provider";
 import { SignIn } from "./sign-in";
+import { UserMenu } from "./user-menu";
 
 // The research modules are per-company: there is no meaningful "Financials"
 // page without a company to show financials *for*. They were previously
@@ -131,30 +132,6 @@ function NavList({
   );
 }
 
-/** The signed-in user block at the foot of the rail and the drawer. */
-function UserCard({ user }: { user: { name?: string; role?: string; is_dev_identity?: boolean } | undefined }) {
-  return (
-    <div className="border-t border-white/10 p-3">
-      <div className="flex items-center gap-2.5">
-        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/15 text-[0.6875rem] font-semibold text-white">
-          {(user?.name ?? "?").slice(0, 1)}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs text-white">{user?.name ?? "…"}</div>
-          <div className="truncate text-[0.625rem] uppercase tracking-wide text-white/45">
-            {user?.role ?? ""}
-          </div>
-        </div>
-      </div>
-      {user?.is_dev_identity && (
-        <p className="mt-2 rounded border border-warn/40 bg-warn/10 px-1.5 py-1 text-[0.5625rem] leading-tight text-warn">
-          DEV IDENTITY — set NATIVE_AUTH=true for real sign-in
-        </p>
-      )}
-    </div>
-  );
-}
-
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -258,7 +235,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-56 flex-col border-r border-[var(--border)] bg-[var(--header)] lg:flex">
         <Brand />
         <NavList pathname={pathname} role={sessionUser?.role} companyForNav={companyForNav} />
-        <UserCard user={user} />
+        <UserMenu user={user} />
       </aside>
 
       {/* Sidebar — mobile drawer. Renders the identical NavList. */}
@@ -295,7 +272,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               companyForNav={companyForNav}
               onNavigate={() => setNavOpen(false)}
             />
-            <UserCard user={user} />
+            <UserMenu user={user} onNavigate={() => setNavOpen(false)} />
           </aside>
         </div>
       )}

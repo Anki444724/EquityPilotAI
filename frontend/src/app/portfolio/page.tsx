@@ -19,13 +19,13 @@ import { portfolioApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, BarChart3, Bell, Briefcase, Camera, Layers, Loader2, PieChart,
-  Plus, Scale, Sparkles,
+  Activity, Bell, Briefcase, Camera, Layers, Loader2, PieChart, Plus, Sparkles,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { useAuth } from "@/components/layout/auth-provider";
-import { ApiError, setSession } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { CreatePortfolioDialog } from "@/components/portfolio/create-portfolio";
+import { resolvePortfolioListState } from "@/lib/portfolio-view-state";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: Briefcase },
@@ -39,30 +39,21 @@ type TabKey = (typeof TABS)[number]["key"];
 
 export default function PortfolioPage() {
   const queryClient = useQueryClient();
-  const router = useRouter();
   const { user: authUser, initialising: authInitialising } = useAuth();
   const [tab, setTab] = useState<TabKey>("overview");
   const [selected, setSelected] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
-  // Gate the query on fully authenticated + not initialising
-  // This prevents the request from firing with no token (main cause of 401 on reload)
+  // The query runs only once the session is settled, so it cannot fire without
+  // an access token and produce a spurious 401 on reload. The query function
+  // does not touch the session: `apiFetch` already refreshes once and retries,
+  // and AuthProvider clears the client when that refresh is refused. Clearing
+  // it a second time from here raced that and logged the user out on a
+  // recoverable 401.
   const portfolios = useQuery({
     queryKey: ["portfolios"],
-    queryFn: async () => {
-      try {
-        return await portfolioApi.list();
-      } catch (err: any) {
-        // Task 8: In catch{} set an auth error state
-        if (err instanceof ApiError && err.status === 401) {
-          setAuthError("Session expired. Please sign in again.");
-          setSession(null);
-          throw err;
-        }
-        throw err;
-      }
-    },
+    queryFn: () => portfolioApi.list(),
     enabled: !authInitialising && !!authUser,
     retry: (failureCount, error) => {
       if (error instanceof ApiError && error.status === 401) return false;
@@ -70,28 +61,24 @@ export default function PortfolioPage() {
     },
   });
 
-  // Tasks 6,7,9,10: On 401 clear token, redirect, never leave loading=true
-  useEffect(() => {
-    if (portfolios.isError) {
-      const err = portfolios.error;
-      if (err instanceof ApiError && err.status === 401) {
-        setSession(null);           // clear invalid token
-        setAuthError("Session expired. Please sign in again.");
-        router.replace("/");        // go to login
-      }
-    }
-  }, [portfolios.isError, portfolios.error, router]);
-
-  // Task 7 + 9: Explicit "finally" equivalent — never leave loading state on auth failure
-  const isPortfoliosLoading = portfolios.isLoading && !authError && !portfolios.isError;
-
-  // Task 9/10: in finally{} equivalent via query state + UI guard below
-  // (the query always settles; we surface the error state)
+  // One value, one meaning each — resolved by a pure function so the rules are
+  // testable rather than spread across four booleans in the JSX.
+  const listState = resolvePortfolioListState({
+    authInitialising,
+    isAuthenticated: !!authUser,
+    isPending: portfolios.isPending,
+    isFetching: portfolios.isFetching,
+    data: portfolios.data,
+    error: portfolios.error,
+  });
+  const sessionExpired = listState.kind === "session-expired";
+  const listPending = listState.kind === "loading";
+  const listFailed = listState.kind === "error";
+  const isEmpty = listState.kind === "empty";
+  const list = listState.kind === "ready" ? listState.portfolios : [];
 
   // Derive current selection from state or first portfolio; never setState in effect
-  const current = selected ?? (portfolios.data && portfolios.data.length > 0 ? portfolios.data[0].id : null);
-
-  // Remove previous useEffect that did setSelected synchronously; use derived `current` instead
+  const current = selected ?? (list.length > 0 ? list[0].id : null);
 
   const view = useQuery({
     queryKey: ["portfolio-view", current],
@@ -145,19 +132,35 @@ export default function PortfolioPage() {
             <p className="text-xs text-[var(--text-muted)]">
               {summary
                 ? `${summary.name} · benchmark ${summary.benchmark} · as at ${summary.as_of}`
-                : "Loading…"}
+                : listPending || view.isPending
+                  ? "Loading…"
+                  : sessionExpired
+                    ? "Session expired"
+                    : isEmpty
+                      ? "No portfolio selected"
+                      : "Select a portfolio"}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={current ?? ""}
-              onChange={(e) => setSelected(Number(e.target.value))}
-              className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs text-[var(--text)]"
+            {list.length > 0 && (
+              <select
+                value={current ?? ""}
+                onChange={(e) => setSelected(Number(e.target.value))}
+                className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs text-[var(--text)]"
+              >
+                {list.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="inline-flex items-center gap-1.5 rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]"
             >
-              {(portfolios.data ?? []).map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+              <Plus className="h-3.5 w-3.5" />
+              New portfolio
+            </button>
             <button
               type="button"
               onClick={() => snapshot.mutate()}
@@ -174,24 +177,56 @@ export default function PortfolioPage() {
 
         {notice && <Note>{notice}</Note>}
 
-        {authError && (
+        {sessionExpired && (
           <Card>
             <CardBody className="text-sm text-loss">
-              {authError} — you will be redirected to sign in.
+              Your session has expired. Sign in again to view your portfolios.
             </CardBody>
           </Card>
         )}
 
-        {isPortfoliosLoading && <Skeleton className="h-28 w-full" />}
-        {portfolios.data?.length === 0 && (
+        {listFailed && (
+          <Card>
+            <CardBody className="flex flex-wrap items-center justify-between gap-3 text-sm text-loss">
+              <span>{listFailed ? listState.message : ""}</span>
+              <button
+                type="button"
+                onClick={() => portfolios.refetch()}
+                className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]"
+              >
+                Retry
+              </button>
+            </CardBody>
+          </Card>
+        )}
+
+        {listPending && <Skeleton className="h-28 w-full" />}
+
+        {isEmpty && (
           <Card>
             <EmptyState
               icon={<Briefcase className="h-8 w-8" />}
               title="No portfolios yet"
-              description="Create a portfolio and record transactions to begin."
+              description="Create a portfolio, then record transactions to see holdings, allocation, risk and AI commentary."
+              action={
+                <button
+                  type="button"
+                  onClick={() => setCreating(true)}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md bg-accent-500 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-600"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Create Portfolio
+                </button>
+              }
             />
           </Card>
         )}
+
+        <CreatePortfolioDialog
+          open={creating}
+          onClose={() => setCreating(false)}
+          onCreated={(id) => { setSelected(id); setNotice("Portfolio created."); }}
+        />
 
         {/* ----------------------------------------------------- stats */}
         {summary && (
