@@ -408,7 +408,14 @@ class TestCaseVariantMerge:
 
 class TestFinancialHistoryInvariant:
     """If merging would strand a fact, the migration aborts — and the state
-    stays exactly as it was, with the facts intact on both rows."""
+    stays exactly as it was, with the facts intact on both rows.
+
+    "Stranded" now means a genuine *disagreement*: the two rows hold different
+    numbers for the same year, line item and precedence. A duplicate-side fact
+    that merely repeats a value the canonical row already carries is reconciled
+    by `_purge_redundant_facts` instead of blocking the merge — see
+    `TestRedundantFactReconciliation`.
+    """
 
     def test_conflicting_facts_abort_instead_of_delete(self, tmp_path):
         from app.core.config import settings
@@ -431,7 +438,11 @@ class TestFinancialHistoryInvariant:
                     ))
                     db.add(FinancialFact(
                         company_id=cid, fiscal_year=2020, line_item="revenue",
-                        value=999.0, precedence=2,
+                        # Same key, different number: the two rows disagree
+                        # about what the company earned, and only a human can
+                        # say which is right.
+                        value=999.0 if cid == canonical else 1234.0,
+                        precedence=2,
                         created_at=now, updated_at=now,
                     ))
                 db.commit()
@@ -451,6 +462,46 @@ class TestFinancialHistoryInvariant:
             assert conn.execute(sa.text(
                 "SELECT COUNT(*) FROM financial_facts"
             )).scalar() == 2
+
+    def test_the_abort_message_names_the_rows_to_look_at(self, tmp_path):
+        """A bare count sent the last operator to the wrong pair entirely."""
+        from app.core.config import settings
+
+        url = f"sqlite:///{tmp_path / 'conflict_detail.db'}"
+        engine = _prev_schema_engine(url, settings)
+        canonical = str(uuid.uuid4())
+        dup = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        with engine.begin() as conn:
+            session_factory = sa.orm.sessionmaker(bind=conn)
+            with session_factory() as db:
+                for cid in (canonical, dup):
+                    db.add(Company(
+                        id=cid, name="Detail Co", ticker="DETAIL",
+                        exchange="NSE" if cid == canonical else "BSE",
+                        listing_status="active",
+                        created_at=now, updated_at=now,
+                    ))
+                    db.add(FinancialFact(
+                        company_id=cid, fiscal_year=2021, line_item="ebitda",
+                        value=500.0 if cid == canonical else 777.0,
+                        precedence=2, created_at=now, updated_at=now,
+                    ))
+                db.commit()
+        original = settings.DATABASE_URL
+        try:
+            settings.DATABASE_URL = url
+            with pytest.raises(RuntimeError) as excinfo:
+                command.upgrade(_config(url), "head")
+        finally:
+            settings.DATABASE_URL = original
+
+        message = str(excinfo.value)
+        assert "DETAIL" in message                 # the ticker
+        assert dup in message                      # which duplicate
+        assert canonical in message                # against which survivor
+        assert "FY2021 ebitda" in message          # which fact
+        assert "500.0" in message and "777.0" in message   # both values
 
 
 # ==========================================================================
@@ -997,3 +1048,330 @@ class TestQuarantineRules:
                 for dup in self._rows(conn) if dup != "can"
             }
             assert len(sentinels) == 2
+
+
+# ==========================================================================
+# The production stranded-facts abort
+# ==========================================================================
+
+#: A third M&M row, the one that actually carried the stranded facts.
+PROD_THIRD_ID = "9a2c4f10-7b31-4e08-9d55-6c1f2a83be47"
+
+
+class TestProductionStrandedFacts:
+    """`100 financial fact(s) still reference duplicate company id(s)`.
+
+    The state that produced it, and why querying the reported pair showed
+    nothing:
+
+    * `dff1781c…` — canonical, 300 facts, the row the operator queried;
+    * `5868f82a…` — the ISIN-holding duplicate from the earlier incident,
+      **zero** facts, the other row the operator queried;
+    * a *third* M&M row on BSE holding 100 facts that repeat keys the
+      canonical row already has.
+
+    The migration merges every duplicate group, and the invariant reported a
+    bare count with no id, so the two ids from the previous incident report
+    looked innocent — because they were. The offending rows were never named.
+
+    The 100 facts repeat values the canonical row already holds, so there is
+    nothing to arbitrate: they are reconciled and the merge proceeds.
+    """
+
+    CANONICAL_FACTS = 300      # 30 fiscal years x 10 line items
+    REDUNDANT_FACTS = 100      # a subset of those keys, same values
+
+    LINE_ITEMS = [
+        "revenue", "ebitda", "ebit", "pat", "eps", "equity", "debt", "cash",
+        "operating_cash_flow", "free_cash_flow",
+    ]
+
+    @classmethod
+    def _value(cls, year: int, item: str) -> float:
+        """Deterministic, so the third row can repeat it exactly."""
+        return round(1000 + year + len(item) * 7.5, 4)
+
+    @pytest.fixture()
+    def seeded(self, tmp_path):
+        from app.core.config import settings
+
+        url = f"sqlite:///{tmp_path / 'stranded.db'}"
+        engine = _prev_schema_engine(url, settings)
+        _relax_identity_constraint(engine)
+
+        can_t = datetime(2026, 8, 19, tzinfo=timezone.utc)
+        dup_t = datetime(2026, 8, 17, tzinfo=timezone.utc)
+        third_t = datetime(2026, 8, 15, tzinfo=timezone.utc)
+        with engine.begin() as conn:
+            session_factory = sa.orm.sessionmaker(bind=conn)
+            with session_factory() as db:
+                db.add(Company(
+                    id=PROD_CANONICAL_ID, name="Mahindra & Mahindra Ltd",
+                    ticker="M&M", exchange="NSE", isin=None,
+                    listing_status="active", data_version=2,
+                    created_at=can_t, updated_at=can_t,
+                ))
+                db.add(Company(
+                    id=PROD_DUPLICATE_ID, name="Mahindra and Mahindra",
+                    ticker="M&M", exchange="NSE", isin=PROD_ISIN,
+                    industry="Passenger Vehicles", listing_status="active",
+                    data_version=1, created_at=dup_t, updated_at=dup_t,
+                ))
+                db.add(Company(
+                    id=PROD_THIRD_ID, name="Mahindra & Mahindra",
+                    ticker="M&M", exchange="BSE", isin=None,
+                    listing_status="active", data_version=1,
+                    created_at=third_t, updated_at=third_t,
+                ))
+                db.flush()
+
+                # 300 facts on the canonical row.
+                for year in range(1996, 2026):
+                    for item in self.LINE_ITEMS:
+                        db.add(FinancialFact(
+                            company_id=PROD_CANONICAL_ID, fiscal_year=year,
+                            line_item=item, value=self._value(year, item),
+                            precedence=2, source="screener.in",
+                            created_at=can_t, updated_at=can_t,
+                        ))
+                # 100 facts on the third row, repeating canonical keys and
+                # values exactly: the same source ingested twice.
+                for year in range(2016, 2026):
+                    for item in self.LINE_ITEMS:
+                        db.add(FinancialFact(
+                            company_id=PROD_THIRD_ID, fiscal_year=year,
+                            line_item=item, value=self._value(year, item),
+                            precedence=2, source="screener.in",
+                            created_at=third_t, updated_at=third_t,
+                        ))
+                db.commit()
+
+        _install_pg_identity_semantics(engine)
+        return engine, url, settings
+
+    def test_the_reported_pair_really_does_look_clean(self, seeded):
+        """Exactly what the operator's query returned, before any migration."""
+        engine, _, _ = seeded
+        with engine.connect() as conn:
+            counts = {
+                cid: conn.execute(sa.text(
+                    "SELECT COUNT(*) FROM financial_facts WHERE company_id = :c"
+                ), {"c": cid}).scalar()
+                for cid in (PROD_CANONICAL_ID, PROD_DUPLICATE_ID, PROD_THIRD_ID)
+            }
+            assert counts[PROD_CANONICAL_ID] == self.CANONICAL_FACTS
+            assert counts[PROD_DUPLICATE_ID] == 0
+            # The 100 the invariant was counting, on a row nobody looked at.
+            assert counts[PROD_THIRD_ID] == self.REDUNDANT_FACTS
+
+    def test_the_upgrade_now_completes(self, seeded):
+        engine, url, settings = seeded
+        _upgrade(_config(url), "head", settings)
+        with engine.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM companies"
+            )).scalar() == 1
+
+    def test_every_distinct_fact_survives_on_the_canonical_row(self, seeded):
+        engine, url, settings = seeded
+        _upgrade(_config(url), "head", settings)
+        with engine.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM financial_facts WHERE company_id = :c"
+            ), {"c": PROD_CANONICAL_ID}).scalar() == self.CANONICAL_FACTS
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM financial_facts"
+            )).scalar() == self.CANONICAL_FACTS
+            # Values were not overwritten by the duplicate's copies.
+            assert conn.execute(sa.text(
+                "SELECT value FROM financial_facts "
+                "WHERE company_id = :c AND fiscal_year = 2020 "
+                "AND line_item = 'revenue'"
+            ), {"c": PROD_CANONICAL_ID}).scalar() == self._value(2020, "revenue")
+
+    def test_the_redundant_copies_are_backed_up_not_merely_dropped(self, seeded):
+        engine, url, settings = seeded
+        _upgrade(_config(url), "head", settings)
+        with engine.connect() as conn:
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM company_merge_backup_financial_facts "
+                "WHERE company_id = :c"
+            ), {"c": PROD_THIRD_ID}).scalar() == self.REDUNDANT_FACTS
+            assert conn.execute(sa.text(
+                "SELECT conflicting FROM company_merge_log "
+                "WHERE subject = 'redundant:financial_facts' "
+                "AND dup_id = :dup"
+            ), {"dup": PROD_THIRD_ID}).scalar() == self.REDUNDANT_FACTS
+
+    def test_the_earlier_fixes_still_hold(self, seeded):
+        engine, url, settings = seeded
+        _upgrade(_config(url), "head", settings)
+        with engine.connect() as conn:
+            row = conn.execute(sa.text(
+                "SELECT id, ticker, exchange, isin FROM companies"
+            )).one()
+            assert row.id == PROD_CANONICAL_ID
+            assert (row.ticker, row.exchange) == ("M&M", "NSE")
+            assert row.isin == PROD_ISIN
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM companies WHERE ticker LIKE '~DUP~%'"
+            )).scalar() == 0
+            session_factory = sa.orm.sessionmaker(bind=conn)
+            with session_factory() as db:
+                assert _dangling(db, PROD_DUPLICATE_ID) == []
+                assert _dangling(db, PROD_THIRD_ID) == []
+
+    def test_a_disagreeing_fact_in_the_same_group_still_aborts(self, tmp_path):
+        """Protection intact: one differing number stops the whole merge."""
+        from app.core.config import settings
+
+        url = f"sqlite:///{tmp_path / 'stranded_conflict.db'}"
+        engine = _prev_schema_engine(url, settings)
+        _relax_identity_constraint(engine)
+        now = datetime.now(timezone.utc)
+        with engine.begin() as conn:
+            session_factory = sa.orm.sessionmaker(bind=conn)
+            with session_factory() as db:
+                db.add(Company(
+                    id=PROD_CANONICAL_ID, name="Mahindra & Mahindra Ltd",
+                    ticker="M&M", exchange="NSE", listing_status="active",
+                    created_at=now, updated_at=now,
+                ))
+                db.add(Company(
+                    id=PROD_THIRD_ID, name="Mahindra & Mahindra",
+                    ticker="M&M", exchange="BSE", listing_status="active",
+                    created_at=now, updated_at=now,
+                ))
+                db.flush()
+                for cid, value in ((PROD_CANONICAL_ID, 100.0),
+                                   (PROD_THIRD_ID, 100.0)):
+                    db.add(FinancialFact(
+                        company_id=cid, fiscal_year=2024, line_item="revenue",
+                        value=value, precedence=2,
+                        created_at=now, updated_at=now,
+                    ))
+                # ... and one that genuinely disagrees.
+                db.add(FinancialFact(
+                    company_id=PROD_CANONICAL_ID, fiscal_year=2023,
+                    line_item="pat", value=50.0, precedence=2,
+                    created_at=now, updated_at=now,
+                ))
+                db.add(FinancialFact(
+                    company_id=PROD_THIRD_ID, fiscal_year=2023,
+                    line_item="pat", value=61.5, precedence=2,
+                    created_at=now, updated_at=now,
+                ))
+                db.commit()
+        _install_pg_identity_semantics(engine)
+
+        original = settings.DATABASE_URL
+        try:
+            settings.DATABASE_URL = url
+            with pytest.raises(RuntimeError) as excinfo:
+                command.upgrade(_config(url), "head")
+        finally:
+            settings.DATABASE_URL = original
+
+        message = str(excinfo.value)
+        assert PROD_THIRD_ID in message
+        assert "FY2023 pat" in message
+        with engine.connect() as conn:
+            # Rolled back whole: both companies and all four facts intact.
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM companies"
+            )).scalar() == 2
+            assert conn.execute(sa.text(
+                "SELECT COUNT(*) FROM financial_facts"
+            )).scalar() == 4
+
+
+class TestRedundantFactReconciliation:
+    """`_purge_redundant_facts` in isolation."""
+
+    @staticmethod
+    def _module():
+        return TestIsinTransferRules._migration_module()
+
+    @staticmethod
+    def _table(engine) -> None:
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "CREATE TABLE financial_facts (id INTEGER PRIMARY KEY, "
+                "company_id TEXT, fiscal_year INTEGER, line_item TEXT, "
+                "precedence INTEGER, value REAL)"
+            ))
+
+    def _remaining(self, conn):
+        return conn.execute(sa.text(
+            "SELECT COUNT(*) FROM financial_facts WHERE company_id = 'dup'"
+        )).scalar()
+
+    def test_an_identical_fact_is_removed(self):
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO financial_facts (company_id, fiscal_year, "
+                "line_item, precedence, value) VALUES "
+                "('can', 2024, 'revenue', 2, 1234.5), "
+                "('dup', 2024, 'revenue', 2, 1234.5)"
+            ))
+            assert module._purge_redundant_facts(conn, "dup", "can") == 1
+            assert self._remaining(conn) == 0
+
+    def test_a_float_rounding_difference_counts_as_identical(self):
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO financial_facts (company_id, fiscal_year, "
+                "line_item, precedence, value) VALUES "
+                "('can', 2024, 'revenue', 2, 1234.5), "
+                "('dup', 2024, 'revenue', 2, 1234.5000000000002)"
+            ))
+            assert module._purge_redundant_facts(conn, "dup", "can") == 1
+
+    def test_a_disagreeing_fact_is_kept(self):
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO financial_facts (company_id, fiscal_year, "
+                "line_item, precedence, value) VALUES "
+                "('can', 2024, 'revenue', 2, 1234.5), "
+                "('dup', 2024, 'revenue', 2, 1300.0)"
+            ))
+            assert module._purge_redundant_facts(conn, "dup", "can") == 0
+            assert self._remaining(conn) == 1
+
+    def test_a_fact_the_canonical_row_does_not_have_is_kept(self):
+        """It is movable; reconciliation must not touch it."""
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO financial_facts (company_id, fiscal_year, "
+                "line_item, precedence, value) VALUES "
+                "('dup', 2024, 'revenue', 2, 1234.5)"
+            ))
+            assert module._purge_redundant_facts(conn, "dup", "can") == 0
+            assert self._remaining(conn) == 1
+
+    def test_a_different_precedence_is_not_redundant(self):
+        """Precedence is part of the key: a second source is its own fact."""
+        module = self._module()
+        engine = sa.create_engine("sqlite://")
+        self._table(engine)
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "INSERT INTO financial_facts (company_id, fiscal_year, "
+                "line_item, precedence, value) VALUES "
+                "('can', 2024, 'revenue', 2, 1234.5), "
+                "('dup', 2024, 'revenue', 5, 1234.5)"
+            ))
+            assert module._purge_redundant_facts(conn, "dup", "can") == 0
+            assert self._remaining(conn) == 1

@@ -370,3 +370,90 @@ Properties:
 Verified failing before the fix with
 `duplicate key value violates unique constraint uq_company_ticker_exchange`,
 and passing after.
+
+
+---
+
+## 11. Third production incident: stranded facts on a row nobody looked at
+
+```
+RuntimeError: refusing to merge: 100 financial fact(s) still reference
+duplicate company id(s) and cannot be moved without conflicting with the
+canonical row.
+```
+
+The operator queried both ids from the previous incident report and found:
+
+| id | facts |
+|---|---|
+| `dff1781c-00be-4237-b545-4df26a58b2e0` | 300 |
+| `5868f82a-0195-4414-aabf-fc40fc2e1f37` | 0 |
+
+Neither accounts for 100. The message was the problem: it reported a count and
+no identity. The migration merges **every** duplicate group, and the 100 facts
+belonged to a *third* M&M row that the incident report had never mentioned.
+
+### Why the facts could not move
+
+`_move_dependent_rows` moves a child row only when it will not collide with the
+canonical row's unique key. For `financial_facts` that key is
+`(company_id, fiscal_year, line_item, precedence)`. The third row carried facts
+for years the canonical row already covered, so every one of them was blocked,
+stayed behind, and tripped the invariant.
+
+They were blocked, but they were not in conflict: the duplicate had been
+ingested from the same source, so the *values were identical*. There was
+nothing to arbitrate — the number was already on the survivor.
+
+### The fix
+
+`_purge_redundant_facts()` runs after the move and before the invariant. It
+deletes duplicate-side facts whose `(fiscal_year, line_item, precedence)` the
+canonical row already holds **with the same value** (NULL-safe, with a
+`1e-9` relative tolerance for float round-trips between two ingests).
+
+This loses nothing:
+
+* the canonical row keeps an identical value under the same key;
+* every duplicate-side fact was copied to
+  `company_merge_backup_financial_facts` before anything moved;
+* the row was going to be removed moments later by the foreign key cascade when
+  the duplicate company row was deleted — refusing to delete it never saved it,
+  it only stopped the migration.
+
+Facts whose value **disagrees** are still left in place, so the invariant still
+aborts and still rolls the whole migration back. That is the only case that
+needs a human, and it is now reported properly: the message names the ticker,
+the duplicate id, the canonical id, and up to ten disagreeing facts with both
+values side by side.
+
+### Regression tests
+
+| Test | Covers |
+|---|---|
+| `TestProductionStrandedFacts` | the three-row group: the reported pair really is clean, the third row holds the 100, the upgrade completes, all 300 distinct facts survive with values untouched, the 100 copies are in the backup and the merge log, and the earlier ISIN and identity fixes still hold |
+| `TestProductionStrandedFacts::test_a_disagreeing_fact_in_the_same_group_still_aborts` | one differing number still stops the merge, message names the row, nothing deleted |
+| `TestRedundantFactReconciliation` | `_purge_redundant_facts` alone: identical removed, float-rounding treated as identical, disagreement kept, movable fact untouched, different precedence not redundant |
+| `TestFinancialHistoryInvariant::test_the_abort_message_names_the_rows_to_look_at` | the diagnostic message |
+| `tests/test_company_dedup_migration_postgres.py` | the whole incident replayed on a real PostgreSQL server |
+
+## 12. Verifying on real PostgreSQL
+
+SQLite cannot express the two things that actually broke production: unique
+indexes maintained on write, and the PostgreSQL-only branches of the migration
+(`pg_catalog` discovery, `ALTER TABLE … ADD CONSTRAINT`, the functional index on
+`upper(ticker)`, `UPDATE … FROM`). `tests/test_company_dedup_migration_postgres.py`
+runs the migration against a genuine server seeded with the exact incident rows,
+including the identity index in the state production had it — enforcing writes
+but never validated against the rows already present, which is what a failed
+`CREATE INDEX CONCURRENTLY` leaves behind.
+
+```bash
+pip install pgserver     # test-time only, deliberately not in requirements.txt
+pytest tests/test_company_dedup_migration_postgres.py -v
+```
+
+It also pins the mechanism itself: an `UPDATE … SET isin = NULL` is rejected by
+a constraint on `(ticker, exchange)`, because `isin` is indexed
+(`companies_isin_key`) so the update can never be a heap-only tuple, and a
+non-HOT update re-inserts the row's key into every index on the table.

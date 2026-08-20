@@ -570,8 +570,104 @@ def _move_dependent_rows(bind: sa.Connection, table: str, col: str,
     return int(before) - int(after), int(after)
 
 
-def _financial_facts_invariant(bind: sa.Connection, dup_ids: list[str]) -> None:
-    """Financial history is never deleted or overwritten by this migration."""
+#: Two ingests of the same source can differ in the last float bit. A fact is
+#: treated as identical when it matches within this relative tolerance.
+FACT_VALUE_TOLERANCE = 1e-9
+
+
+def _purge_redundant_facts(bind: sa.Connection, dup_id: str,
+                           canonical_id: str) -> int:
+    """Drop duplicate-side facts the canonical row already holds verbatim.
+
+    A fact that could not move is not automatically a conflict. The unique key
+    is ``(company_id, fiscal_year, line_item, precedence)``, so a fact stays
+    behind whenever the canonical row already has an entry for that same year,
+    line item and precedence. In the overwhelmingly common case — the duplicate
+    was created by a creation race and then ingested from the *same* source —
+    the two rows carry the *same number*. Nothing is being merged, nothing is in
+    conflict, and there is nothing to decide: the value is already present on
+    the survivor.
+
+    Those rows are removed here so the merge can proceed. This is not a data
+    loss:
+
+    * the canonical row keeps an identical value for the same key, so the fact
+      itself survives;
+    * every duplicate-side fact was copied to
+      ``company_merge_backup_financial_facts`` before anything moved;
+    * the row would be deleted moments later anyway by the foreign key cascade
+      when the duplicate company row goes — refusing to delete it here only
+      stopped the migration, it never saved the row.
+
+    Facts whose value genuinely *disagrees* with the canonical row are left
+    exactly where they are, so ``_financial_facts_invariant`` still aborts on
+    them. That is the case that needs a human, and it is the only one.
+
+    Returns the number of redundant rows removed.
+    """
+    value_matches = (
+        "(canonical.value IS NOT DISTINCT FROM financial_facts.value"
+        " OR (canonical.value IS NOT NULL"
+        "     AND financial_facts.value IS NOT NULL"
+        "     AND ABS(canonical.value - financial_facts.value)"
+        f"        <= {FACT_VALUE_TOLERANCE} * (1 + ABS(canonical.value))))"
+    )
+    result = bind.execute(sa.text(
+        "DELETE FROM financial_facts "
+        "WHERE company_id = :dup AND EXISTS ("
+        "  SELECT 1 FROM financial_facts canonical"
+        "  WHERE canonical.company_id = :can"
+        "    AND canonical.fiscal_year IS NOT DISTINCT FROM financial_facts.fiscal_year"
+        "    AND canonical.line_item   IS NOT DISTINCT FROM financial_facts.line_item"
+        "    AND canonical.precedence  IS NOT DISTINCT FROM financial_facts.precedence"
+        f"    AND {value_matches})"
+    ), {"dup": dup_id, "can": canonical_id})
+    return int(result.rowcount or 0)
+
+
+def _fact_conflict_report(bind: sa.Connection, dup_id: str,
+                          canonical_id: str | None, limit: int = 10) -> str:
+    """A human-readable list of the facts that genuinely disagree."""
+    if canonical_id is None:
+        return ""
+    rows = bind.execute(sa.text(
+        "SELECT d.fiscal_year, d.line_item, d.precedence, d.value AS dup_value,"
+        "       c.value AS canonical_value "
+        "FROM financial_facts d "
+        "LEFT JOIN financial_facts c "
+        "  ON c.company_id = :can "
+        " AND c.fiscal_year IS NOT DISTINCT FROM d.fiscal_year "
+        " AND c.line_item   IS NOT DISTINCT FROM d.line_item "
+        " AND c.precedence  IS NOT DISTINCT FROM d.precedence "
+        "WHERE d.company_id = :dup "
+        "ORDER BY d.fiscal_year, d.line_item "
+        "LIMIT :limit"
+    ), {"dup": dup_id, "can": canonical_id, "limit": limit}).all()
+    if not rows:
+        return ""
+    lines = [
+        f"    FY{r[0]} {r[1]} (precedence {r[2]}): "
+        f"duplicate={r[3]!r} canonical={r[4]!r}"
+        for r in rows
+    ]
+    return "\n" + "\n".join(lines)
+
+
+def _financial_facts_invariant(bind: sa.Connection, dup_ids: list[str],
+                               canonical_id: str | None = None,
+                               ticker: str | None = None) -> None:
+    """Financial history is never deleted or overwritten by this migration.
+
+    Reaching this point with rows left over means the duplicate holds a value
+    the canonical row contradicts for the same year, line item and precedence.
+    Redundant copies were already reconciled by ``_purge_redundant_facts``, so
+    what remains is a real disagreement that a human has to arbitrate.
+
+    The message names the rows involved. The first production run of this
+    migration reported only a count, which sent the operator to query the pair
+    from the previous incident report — a pair that was clean — while the
+    offending rows sat in another duplicate group entirely.
+    """
     leftover = bind.execute(
         sa.text(
             "SELECT COUNT(*) FROM financial_facts WHERE company_id IN :ids"
@@ -579,11 +675,19 @@ def _financial_facts_invariant(bind: sa.Connection, dup_ids: list[str]) -> None:
         {"ids": tuple(dup_ids)},
     ).scalar() or 0
     if leftover:
+        detail = "".join(
+            _fact_conflict_report(bind, dup_id, canonical_id)
+            for dup_id in dup_ids
+        )
         raise RuntimeError(
             f"refusing to merge: {leftover} financial fact(s) still reference "
             "duplicate company id(s) and cannot be moved without conflicting "
             "with the canonical row. The facts are intact; restore the state "
             "and resolve the conflict manually before re-running."
+            f"\n  ticker: {ticker or 'unknown'}"
+            f"\n  duplicate id(s): {', '.join(dup_ids)}"
+            f"\n  canonical id: {canonical_id or 'unknown'}"
+            f"\n  disagreeing facts (up to 10 per duplicate):{detail}"
         )
 
 
@@ -647,8 +751,26 @@ def upgrade() -> None:
                         if conflicting else "",
                     )
 
-            # 4. Hard invariant: no financial fact may be stranded.
-            _financial_facts_invariant(bind, [dup_id])
+            # 4. Reconcile facts that could not move because the canonical row
+            #    already holds the same (year, line item, precedence). Those
+            #    carrying the same value are redundant copies and are dropped
+            #    (already backed up); a genuine disagreement is left in place
+            #    for the invariant below to refuse.
+            redundant = _purge_redundant_facts(bind, dup_id, canonical_id)
+            if redundant:
+                _log(
+                    bind, dup_id=dup_id, canonical_id=canonical_id,
+                    ticker=ticker, subject="redundant:financial_facts",
+                    conflicting=redundant,
+                    note="identical facts already present on the canonical "
+                         "row; copies kept in "
+                         "company_merge_backup_financial_facts",
+                )
+
+            # 4a. Hard invariant: no financial fact may be stranded.
+            _financial_facts_invariant(
+                bind, [dup_id], canonical_id=canonical_id, ticker=ticker,
+            )
 
             # 4b. Redundant twins that could not move (the canonical row
             #     already holds the same unique key) are purged explicitly —
