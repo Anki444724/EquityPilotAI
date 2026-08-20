@@ -1,0 +1,2799 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<!DOCTYPE html>
+<html b:version='2' class='v2' expr:dir='data:blog.languageDirection'
+      xmlns='http://www.w3.org/1999/xhtml'
+      xmlns:b='http://www.google.com/2005/gml/b'
+      xmlns:data='http://www.google.com/2005/gml/data'
+      xmlns:expr='http://www.google.com/2005/gml/expr'>
+<head>
+<meta charset='UTF-8'/>
+<meta content='width=device-width, initial-scale=1' name='viewport'/>
+<meta content='EquityPilotAI local API simulation over 500 mock Indian listed companies. Demonstration data only, not investment advice.' name='description'/>
+<b:include data='blog' name='all-head-content'/>
+<title><data:blog.pageTitle/></title>
+<b:skin><![CDATA[
+/* ============================================================
+   Blogger integration layer for the EquityPilotAI API simulation.
+   The application owns the viewport; Blogger chrome is neutralised.
+   Every application rule below is namespaced under .epa
+   ============================================================ */
+html, body { margin: 0; padding: 0; background: #ffffff; min-height: 100%; }
+body { -webkit-text-size-adjust: 100%; }
+.section, .widget, .widget-content { margin: 0; padding: 0; }
+
+/* The application root is rendered directly in the document body, so no
+   Blogger widget has to succeed for the page to appear. */
+#epa-root {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  min-height: 100vh;
+}
+.epa { display: block; width: 100%; box-sizing: border-box; }
+.epa #epa-app, #epa-app { display: block; min-height: 60vh; }
+
+/* The Blogger section exists so Layout keeps working. It renders nothing. */
+.epa-host, .epa-host .widget, .epa-host-slot { display: none !important; }
+.navbar, #navbar, #navbar-iframe { display: none !important; height: 0; visibility: hidden; }
+
+.epa-noscript {
+  margin: 24px auto; max-width: 640px; padding: 16px 18px;
+  border: 1px solid #e2e8f0; border-radius: 8px;
+  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color: #0f172a; background: #f7f9fc;
+}
+
+/* ==========================================================================
+   1. DESIGN TOKENS  (ported from globals.css — navy / white / grey terminal)
+   All selectors are scoped under .epa so Blogger's theme cannot leak in.
+   ========================================================================== */
+.epa{
+  --navy-950:#060f1f; --navy-900:#0b1f3a; --navy-800:#12305c;
+  --accent-500:#1f6feb; --accent-400:#4b8ef5; --accent-600:#1858c4;
+  --gain:#0b7a3b; --loss:#b3261e; --warn:#b45309;
+  --bg:#ffffff; --bg-elevated:#ffffff; --bg-subtle:#f7f9fc;
+  --border:#e2e8f0; --border-strong:#cbd5e1;
+  --text:#0f172a; --text-muted:#64748b; --header:#0b1f3a;
+  --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --sans: ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+
+  background:var(--bg); color:var(--text); font-family:var(--sans);
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+  font-feature-settings:"tnum" 1;
+  display:block; width:100%; box-sizing:border-box;
+}
+.epa.epa-dark{
+  --bg:#060f1f; --bg-elevated:#0d1b30; --bg-subtle:#0b1728;
+  --border:#1e304c; --border-strong:#2b4468;
+  --text:#e8eef7; --text-muted:#8fa3bf; --header:#060f1f;
+}
+.epa *,.epa *::before,.epa *::after{box-sizing:border-box;}
+.epa h1,.epa h2,.epa h3,.epa p,.epa ul,.epa ol,.epa figure{margin:0;padding:0;}
+.epa ul{list-style:none;}
+.epa a{color:inherit;text-decoration:none;}
+.epa button,.epa input,.epa select,.epa textarea{font:inherit;color:inherit;}
+.epa img{max-width:100%;}
+.epa :focus-visible{outline:2px solid var(--accent-500);outline-offset:2px;}
+
+/* Numerics are always tabular — a column of figures must align. */
+.epa .num{font-family:var(--mono);font-variant-numeric:tabular-nums;
+  font-size:.8125rem;letter-spacing:-.01em;}
+.epa .gain{color:var(--gain);} .epa .loss{color:var(--loss);}
+.epa .muted{color:var(--text-muted);}
+.epa .mono{font-family:var(--mono);}
+.epa .tiny{font-size:.6875rem;} .epa .xs{font-size:.75rem;} .epa .sm{font-size:.8125rem;}
+.epa .b{font-weight:600;} .epa .right{text-align:right;} .epa .center{text-align:center;}
+.epa .nowrap{white-space:nowrap;}
+
+/* ==========================================================================
+   2. SHELL — sidebar rail + topbar + mobile drawer
+   ========================================================================== */
+.epa-shell{display:flex;min-height:640px;width:100%;}
+.epa-side{
+  width:216px;flex:0 0 216px;background:var(--navy-900);
+  display:flex;flex-direction:column;position:sticky;top:0;
+  max-height:100vh;border-right:1px solid rgba(255,255,255,.07);
+}
+.epa.epa-dark .epa-side{background:#081426;}
+.epa-brand{display:flex;align-items:center;gap:10px;padding:14px 16px;
+  border-bottom:1px solid rgba(255,255,255,.1);}
+.epa-logo{width:32px;height:32px;border-radius:6px;background:var(--accent-500);
+  color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px;flex:0 0 32px;}
+.epa-brand-t{font-size:.8125rem;font-weight:600;color:#fff;line-height:1.15;}
+.epa-brand-s{font-size:.625rem;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.45);}
+.epa-nav{flex:1;overflow-y:auto;padding:8px;}
+.epa-navgroup{font-size:.5625rem;letter-spacing:.1em;text-transform:uppercase;
+  color:rgba(255,255,255,.35);padding:10px 10px 4px;}
+.epa-navlink{display:flex;align-items:center;gap:9px;border-radius:5px;
+  padding:7px 10px;font-size:.8125rem;color:rgba(255,255,255,.65);cursor:pointer;
+  transition:background .12s,color .12s;min-height:34px;}
+.epa-navlink:hover{background:rgba(255,255,255,.1);color:#fff;}
+.epa-navlink.is-active{background:var(--accent-500);color:#fff;}
+.epa-navlink .ico{width:15px;text-align:center;flex:0 0 15px;opacity:.9;}
+.epa-navlink.is-disabled{opacity:.35;cursor:not-allowed;}
+.epa-usercard{border-top:1px solid rgba(255,255,255,.1);padding:11px;}
+.epa-avatar{width:28px;height:28px;border-radius:999px;background:rgba(255,255,255,.15);
+  color:#fff;display:grid;place-items:center;font-size:.6875rem;font-weight:600;flex:0 0 28px;}
+.epa-devnote{margin-top:8px;border:1px solid rgba(180,83,9,.45);background:rgba(180,83,9,.12);
+  color:#f0b46b;border-radius:4px;padding:4px 6px;font-size:.5625rem;line-height:1.3;}
+
+.epa-main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.epa-topbar{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:10px;
+  padding:9px 14px;border-bottom:1px solid var(--border);
+  background:linear-gradient(to bottom,var(--bg-elevated),var(--bg));
+}
+.epa-burger{display:none;}
+.epa-searchwrap{position:relative;flex:1;max-width:520px;min-width:0;}
+.epa-search{
+  width:100%;font-family:var(--mono);font-size:.8125rem;background:var(--bg-subtle);
+  border:1px solid var(--border);border-radius:6px;padding:7px 62px 7px 30px;color:var(--text);
+  transition:border-color .1s,box-shadow .1s;
+}
+.epa-search:focus{border-color:var(--accent-500);box-shadow:0 0 0 3px rgba(31,111,235,.1);outline:none;}
+.epa-searchicon{position:absolute;left:9px;top:50%;transform:translateY(-50%);
+  color:var(--text-muted);font-size:12px;pointer-events:none;}
+.epa-kbd{font-family:var(--mono);font-size:.625rem;padding:1px 5px;border-radius:3px;
+  background:var(--bg-subtle);border:1px solid var(--border);color:var(--text-muted);}
+.epa-searchwrap .epa-kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);}
+.epa-results{
+  position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:60;
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 12px 32px -8px rgba(0,0,0,.25);overflow:hidden;max-height:340px;overflow-y:auto;
+}
+.epa-result{display:flex;justify-content:space-between;gap:10px;padding:8px 11px;cursor:pointer;
+  border-bottom:1px solid var(--border);}
+.epa-result:last-child{border-bottom:0;}
+.epa-result:hover,.epa-result[aria-selected="true"]{background:var(--bg-subtle);}
+.epa-content{padding:18px 16px 44px;max-width:1500px;width:100%;}
+
+.epa-iconbtn{border:1px solid var(--border);background:var(--bg-elevated);border-radius:6px;
+  padding:6px 9px;cursor:pointer;font-size:12px;color:var(--text-muted);min-height:32px;}
+.epa-iconbtn:hover{color:var(--text);border-color:var(--border-strong);}
+
+/* ==========================================================================
+   3. PRIMITIVES — Card / Stat / Badge / Button / Empty / Skeleton
+   ========================================================================== */
+.epa-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 1px 3px rgba(0,0,0,.05);overflow:hidden;min-width:0;}
+.epa.epa-dark .epa-card{box-shadow:0 1px 3px rgba(0,0,0,.25);}
+.epa-cardhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  padding:11px 15px;border-bottom:1px solid var(--border);background:var(--bg-elevated);}
+.epa-cardtitle{font-size:.8125rem;font-weight:600;}
+.epa-cardsub{font-size:.6875rem;color:var(--text-muted);margin-top:2px;}
+.epa-cardbody{padding:15px;}
+.epa-statlabel{font-size:.6875rem;font-weight:500;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--text-muted);}
+.epa-statvalue{margin-top:4px;font-size:1.25rem;font-weight:600;font-family:var(--mono);
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+.epa-stathint{margin-top:2px;font-size:.75rem;color:var(--text-muted);}
+.epa-badge{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);
+  background:var(--bg-subtle);color:var(--text-muted);border-radius:4px;padding:2px 6px;
+  font-size:.6875rem;font-weight:500;white-space:nowrap;}
+.epa-badge.accent{background:rgba(31,111,235,.1);color:var(--accent-500);border-color:rgba(31,111,235,.25);}
+.epa-badge.gain{background:rgba(11,122,59,.1);color:var(--gain);border-color:rgba(11,122,59,.25);}
+.epa-badge.loss{background:rgba(179,38,30,.1);color:var(--loss);border-color:rgba(179,38,30,.25);}
+.epa-badge.warn{background:rgba(180,83,9,.1);color:var(--warn);border-color:rgba(180,83,9,.25);}
+.epa-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border:1px solid var(--border);background:var(--bg-elevated);border-radius:6px;
+  padding:7px 12px;font-size:.75rem;font-weight:500;cursor:pointer;min-height:34px;
+  transition:background .1s,border-color .1s;}
+.epa-btn:hover{border-color:var(--border-strong);background:var(--bg-subtle);}
+.epa-btn.primary{background:var(--accent-500);border-color:var(--accent-500);color:#fff;}
+.epa-btn.primary:hover{background:var(--accent-600);border-color:var(--accent-600);}
+.epa-btn.danger{color:var(--loss);border-color:rgba(179,38,30,.35);}
+.epa-btn:disabled{opacity:.4;cursor:not-allowed;}
+.epa-btn.small{padding:4px 9px;min-height:28px;font-size:.6875rem;}
+.epa-input,.epa-select{width:100%;background:var(--bg-elevated);border:1px solid var(--border);
+  border-radius:6px;padding:7px 10px;font-size:.8125rem;min-height:34px;}
+.epa-input:focus,.epa-select:focus{outline:none;border-color:var(--accent-500);
+  box-shadow:0 0 0 3px rgba(31,111,235,.1);}
+.epa-label{display:block;font-size:.6875rem;color:var(--text-muted);margin-bottom:4px;}
+.epa-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:52px 22px;text-align:center;}
+.epa-empty .t{font-size:.875rem;font-weight:500;}
+.epa-empty .d{margin-top:5px;font-size:.75rem;color:var(--text-muted);max-width:380px;}
+.epa-skel{border-radius:6px;background:var(--bg-subtle);
+  background-image:linear-gradient(90deg,var(--bg-subtle) 25%,var(--bg-elevated) 50%,var(--bg-subtle) 75%);
+  background-size:200% 100%;animation:epa-shimmer 1.4s infinite linear;}
+@keyframes epa-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes epa-fadeup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.epa-fade{animation:epa-fadeup .26s ease-out both;}
+
+/* Layout helpers */
+.epa-grid{display:grid;gap:14px;}
+.epa-g2{grid-template-columns:repeat(2,minmax(0,1fr));}
+.epa-g3{grid-template-columns:repeat(3,minmax(0,1fr));}
+.epa-g4{grid-template-columns:repeat(4,minmax(0,1fr));}
+.epa-split{display:grid;gap:16px;grid-template-columns:2fr 1fr;}
+.epa-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.epa-between{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;}
+.epa-stack{display:flex;flex-direction:column;gap:16px;}
+.epa-h1{font-size:1.25rem;font-weight:600;letter-spacing:-.01em;}
+.epa-sub{margin-top:3px;font-size:.8125rem;color:var(--text-muted);}
+.epa-sectiontitle{font-size:.75rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text-muted);}
+.epa-divider{height:1px;background:var(--border);margin:12px 0;}
+
+/* ==========================================================================
+   4. DATA GRID — the institutional table (ported .grid-table / .scroll-x)
+   ========================================================================== */
+.epa-scroll{overflow-x:auto;overflow-y:hidden;min-width:0;max-width:100%;
+  -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;}
+.epa-table{width:100%;border-collapse:separate;border-spacing:0;}
+.epa-table thead th{
+  position:sticky;top:0;z-index:10;background:var(--bg-subtle);
+  border-bottom:1px solid var(--border-strong);
+  font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--text-muted);padding:8px 12px;text-align:right;white-space:nowrap;}
+.epa-table thead th:first-child{text-align:left;position:sticky;left:0;z-index:15;background:var(--bg-subtle);}
+.epa-table tbody td{padding:6px 12px;border-bottom:1px solid var(--border);
+  text-align:right;white-space:nowrap;height:32px;font-size:.8125rem;}
+.epa-table tbody td:first-child{text-align:left;position:sticky;left:0;z-index:5;background:var(--bg-elevated);}
+.epa-table tbody tr:hover td{background:var(--bg-subtle);}
+.epa-table tbody tr.is-subtotal td{font-weight:600;background:rgba(31,111,235,.05);}
+.epa-table tbody tr.is-total td{font-weight:700;background:rgba(31,111,235,.08);
+  border-top:1px solid var(--border-strong);}
+.epa-table td.l,.epa-table th.l{text-align:left;}
+.epa-link{color:var(--accent-500);cursor:pointer;}
+.epa-link:hover{text-decoration:underline;}
+
+/* Tab strips — single scrolling row, never wrap */
+.epa-tabs{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;min-width:0;
+  max-width:100%;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;}
+.epa-tabs::-webkit-scrollbar{display:none;}
+.epa-tab{flex:0 0 auto;white-space:nowrap;margin-bottom:-1px;border:0;background:none;
+  border-bottom:2px solid transparent;padding:8px 12px;font-size:.8125rem;
+  color:var(--text-muted);cursor:pointer;min-height:36px;}
+.epa-tab:hover{color:var(--text);}
+.epa-tab.is-active{border-bottom-color:var(--accent-500);color:var(--accent-500);font-weight:500;}
+
+/* Score bars, verdicts, timeline, chat — ported premium components */
+.epa-bar{height:5px;background:var(--bg-subtle);border-radius:999px;overflow:hidden;}
+.epa-bar>span{display:block;height:100%;border-radius:999px;
+  background:linear-gradient(to right,#1f6feb,#4b8ef5);transition:width .4s cubic-bezier(.4,0,.2,1);}
+.epa-bar.gain>span{background:linear-gradient(to right,#0b7a3b,#15803d);}
+.epa-bar.loss>span{background:linear-gradient(to right,#b3261e,#dc2626);}
+.epa-verdict{border-left:4px solid var(--accent-500);padding:11px 14px;background:var(--bg-subtle);
+  border-radius:0 6px 6px 0;}
+.epa-verdict.bull{border-left-color:var(--gain);} .epa-verdict.bear{border-left-color:var(--loss);}
+.epa-timeline{position:relative;padding-left:26px;padding-bottom:14px;}
+.epa-timeline::before{content:"";position:absolute;left:6px;top:6px;bottom:0;width:2px;background:var(--border);}
+.epa-timeline:last-child::before{display:none;}
+.epa-dot{position:absolute;left:0;top:4px;width:12px;height:12px;border-radius:999px;
+  background:var(--bg-elevated);border:2px solid var(--accent-500);}
+.epa-bubble{max-width:82%;padding:9px 13px;border-radius:8px;font-size:.8125rem;line-height:1.4;}
+.epa-bubble.user{background:var(--accent-500);color:#fff;margin-left:auto;border-bottom-right-radius:2px;}
+.epa-bubble.bot{background:var(--bg-subtle);border:1px solid var(--border);border-bottom-left-radius:2px;}
+.epa-chatlog{display:flex;flex-direction:column;gap:9px;max-height:320px;overflow-y:auto;padding:4px;}
+.epa-chip{border:1px solid var(--border);background:var(--bg-subtle);border-radius:999px;
+  padding:4px 10px;font-size:.6875rem;cursor:pointer;white-space:nowrap;}
+.epa-chip.is-active{background:rgba(31,111,235,.12);border-color:rgba(31,111,235,.35);color:var(--accent-500);}
+.epa-kv{display:flex;justify-content:space-between;gap:12px;padding:5px 0;
+  border-bottom:1px dashed var(--border);font-size:.8125rem;}
+.epa-kv:last-child{border-bottom:0;}
+.epa-note{border:1px solid var(--border);background:var(--bg-subtle);border-radius:6px;
+  padding:9px 11px;font-size:.75rem;color:var(--text-muted);}
+.epa-alert{border-radius:6px;padding:9px 11px;font-size:.75rem;display:flex;gap:8px;}
+.epa-alert.err{border:1px solid rgba(179,38,30,.4);background:rgba(179,38,30,.08);color:var(--loss);}
+.epa-alert.ok{border:1px solid rgba(11,122,59,.4);background:rgba(11,122,59,.08);color:var(--gain);}
+.epa-alert.warn{border:1px solid rgba(180,83,9,.4);background:rgba(180,83,9,.08);color:var(--warn);}
+
+/* Auth screen */
+.epa-auth{display:flex;align-items:center;justify-content:center;padding:48px 16px;min-height:560px;}
+.epa-authbox{width:100%;max-width:380px;}
+.epa-authcard{border:1px solid var(--border);background:var(--bg-elevated);border-radius:10px;
+  padding:20px;box-shadow:0 8px 30px -12px rgba(0,0,0,.2);}
+
+/* Modal */
+.epa-modalwrap{position:fixed;inset:0;z-index:9000;background:rgba(4,10,20,.55);
+  display:flex;align-items:center;justify-content:center;padding:16px;}
+.epa-modal{width:100%;max-width:420px;background:var(--bg-elevated);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 24px 60px -20px rgba(0,0,0,.5);overflow:hidden;}
+
+/* Charts (inline SVG, no library) */
+.epa-chart{width:100%;height:auto;display:block;}
+.epa-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.6875rem;color:var(--text-muted);}
+.epa-swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:5px;}
+.epa-heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;}
+.epa-heatcell{border-radius:5px;padding:8px;color:#fff;font-size:.6875rem;
+  transition:transform .08s,filter .08s;cursor:pointer;}
+.epa-heatcell:hover{transform:scale(1.03);filter:brightness(1.08);}
+
+/* Scrollbars */
+.epa ::-webkit-scrollbar{width:10px;height:10px;}
+.epa ::-webkit-scrollbar-track{background:var(--bg-subtle);}
+.epa ::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:5px;border:2px solid var(--bg-subtle);}
+
+/* ==========================================================================
+   5. RESPONSIVE — mobile drawer + density (mirrors the app's 1024/400 bands)
+   ========================================================================== */
+@media (max-width:1023px){
+  .epa-side{position:fixed;left:0;top:0;bottom:0;z-index:9500;transform:translateX(-105%);
+    transition:transform .22s ease;max-height:100vh;box-shadow:0 0 40px rgba(0,0,0,.4);}
+  .epa-side.is-open{transform:none;}
+  .epa-backdrop{position:fixed;inset:0;background:rgba(4,10,20,.5);z-index:9400;}
+  .epa-burger{display:inline-flex;}
+  .epa-g4{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .epa-g3{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .epa-split{grid-template-columns:minmax(0,1fr);}
+  .epa-table thead th{padding:7px 8px;font-size:.625rem;}
+  .epa-table tbody td{padding:6px 8px;height:30px;font-size:.75rem;}
+  .epa .num{font-size:.75rem;}
+  .epa-table tbody td:first-child,.epa-table thead th:first-child{
+    box-shadow:1px 0 0 0 var(--border);max-width:11.5rem;overflow:hidden;text-overflow:ellipsis;}
+  .epa-content{padding:14px 12px 40px;}
+  .epa ::-webkit-scrollbar{width:6px;height:6px;}
+}
+@media (max-width:640px){
+  .epa-g4,.epa-g3,.epa-g2{grid-template-columns:minmax(0,1fr);}
+  .epa-h1{font-size:1.0625rem;}
+}
+@media (max-width:400px){
+  .epa-table thead th{padding:6px 7px;} .epa-table tbody td{padding:5px 7px;}
+  .epa-table tbody td:first-child{max-width:9rem;} .epa .num{font-size:.6875rem;}
+}
+@media print{ .epa-side,.epa-topbar{display:none;} }
+
+/* API debug panel */
+.epa-debug{position:fixed;right:14px;bottom:14px;z-index:99998;width:min(680px,calc(100vw - 28px));
+  max-height:52vh;display:flex;flex-direction:column;background:var(--bg-elevated);
+  border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 22px 50px -18px rgba(0,0,0,.45);overflow:hidden;}
+.epa-debughead{display:flex;align-items:center;gap:9px;padding:8px 12px;border-bottom:1px solid var(--border);
+  background:var(--bg-subtle);font-size:.8125rem;}
+.epa-debugbody{overflow:auto;padding:8px 10px;}
+.epa-debugrow{display:flex;align-items:center;gap:9px;padding:5px 4px;border-bottom:1px solid var(--border);}
+.epa-debugrow:last-child{border-bottom:0;}
+/* JSON viewer */
+.epa-json{margin:0;padding:12px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:6px;
+  font-family:var(--mono);font-size:.75rem;line-height:1.45;white-space:pre;overflow:auto;max-height:60vh;}
+/* Sortable headers */
+.epa-table thead th.epa-sortable{cursor:pointer;user-select:none;}
+.epa-table thead th.epa-sortable:hover{color:var(--text);}
+.epa-table thead th.is-sorted{color:var(--accent-500);}
+@media (max-width:640px){ .epa-debug{right:8px;left:8px;width:auto;max-height:60vh;} }
+]]></b:skin>
+</head>
+<body>
+
+<div class='epa' id='epa-root'>
+<div id='epa-app'>
+<div class='epa-content'><div class='epa-skel' style='height:220px'></div></div>
+</div>
+<noscript>
+<div class='epa-noscript'><strong>EquityPilotAI</strong><br/>
+This research prototype runs entirely in your browser. Please enable JavaScript to use it.
+No server, API or network access is required.</div>
+</noscript>
+</div>
+
+<b:section class='epa-host' id='main' maxwidgets='1' showaddelement='no'>
+<b:widget id='HTML1' locked='false' title='EquityPilotAI' type='HTML' visible='false'>
+<b:includable id='main'><div class='epa-host-slot'></div></b:includable>
+</b:widget>
+</b:section>
+
+<script type='text/javascript'>
+//<![CDATA[
+(function () {
+  "use strict";
+
+  /* ==========================================================================
+     1. CONFIG
+     ========================================================================== */
+  var CONFIG = {
+    USE_MOCK: true,
+    API_BASE: "",
+    DATA_VERSION: "2026.08.20-mock-500",
+    APP_VERSION: "1.0.0-blogger-prototype",
+    LATENCY_MIN_MS: 6,
+    LATENCY_MAX_MS: 55,
+    PAGE_SIZE: 25,
+    COMPANY_COUNT: 500,
+    FISCAL_YEARS: 6,
+    STORAGE_PREFIX: "epa:",
+    DEBUG_LOG_LIMIT: 60,
+    RENDER_CHUNK: 40
+  };
+
+  /* ==========================================================================
+     2. FORMATTING AND DATA QUALITY
+     Indian numbering, rupee crore, percentages, negatives in parentheses,
+     and one single place that decides what a missing value looks like.
+     ========================================================================== */
+  var EM = "\u2014";
+  var RS = "\u20B9";
+
+  function has(v) {
+    return v !== null && v !== undefined && v !== "" && !(typeof v === "number" && isNaN(v));
+  }
+  function indianGroup(value, decimals) {
+    var neg = value < 0;
+    var fixed = Math.abs(value).toFixed(decimals);
+    var parts = fixed.split(".");
+    var intPart = parts[0], dec = parts[1], out;
+    if (intPart.length <= 3) { out = intPart; }
+    else {
+      out = intPart.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ",") + "," + intPart.slice(-3);
+    }
+    var joined = dec ? out + "." + dec : out;
+    return neg ? "(" + joined + ")" : joined;
+  }
+  function plain(v, d) { return has(v) ? indianGroup(v, d === undefined ? 0 : d) : EM; }
+  function crore(v, d) { return has(v) ? indianGroup(v, d === undefined ? 1 : d) : EM; }
+  function croreRs(v, d) { return has(v) ? RS + indianGroup(v, d === undefined ? 1 : d) + " cr" : EM; }
+  function rupees(v, d) { return has(v) ? RS + indianGroup(v, d === undefined ? 2 : d) : EM; }
+  function marketCapFmt(v) {
+    if (!has(v)) return EM;
+    if (Math.abs(v) >= 100000) return RS + (v / 100000).toFixed(2) + " L Cr";
+    return RS + indianGroup(v, 0) + " Cr";
+  }
+  function pct(v, d) {
+    if (!has(v)) return EM;
+    var x = v * 100, s = Math.abs(x).toFixed(d === undefined ? 1 : d) + "%";
+    return x < 0 ? "(" + s + ")" : s;
+  }
+  function pctPoints(v, d) {
+    if (!has(v)) return EM;
+    var s = Math.abs(v).toFixed(d === undefined ? 1 : d) + "%";
+    return v < 0 ? "(" + s + ")" : s;
+  }
+  function signedPct(v, d) {
+    if (!has(v)) return EM;
+    var x = v * 100;
+    return (x >= 0 ? "+" : "\u2212") + Math.abs(x).toFixed(d === undefined ? 2 : d) + "%";
+  }
+  function mult(v, d) { return has(v) ? v.toFixed(d === undefined ? 2 : d) + "x" : EM; }
+  function fyLabel(y) { return "FY" + String(y).slice(-2); }
+  function signCls(v) { return !has(v) ? "muted" : v > 0 ? "gain" : v < 0 ? "loss" : "muted"; }
+  function dateShort(iso) {
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? EM : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+  }
+  function dateTime(iso) {
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? EM : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  }
+  function esc(s) {
+    return String(s === null || s === undefined ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function nowMs() {
+    return (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+  }
+
+  /* ==========================================================================
+     3. MOCK DATABASE
+     500 Indian listed companies. Reference names are real; every number is
+     simulated. Nothing here is live market data and each record says so.
+     ========================================================================== */
+  function seeded(seed) {
+    var s = seed % 2147483647;
+    if (s <= 0) s += 2147483646;
+    return function () { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+  }
+  function hashCode(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
+    return Math.abs(h) + 7;
+  }
+
+  var SECTOR_PROFILE = {
+    "Financial Services":        { margin: 0.235, ebitda: 0.42, growth: 0.13, de: 3.10, pe: 17, py: 0.14 },
+    "Information Technology":    { margin: 0.185, ebitda: 0.245, growth: 0.11, de: 0.06, pe: 26, py: 0.42 },
+    "Energy":                    { margin: 0.072, ebitda: 0.155, growth: 0.09, de: 0.62, pe: 14, py: 0.28 },
+    "Automobile":                { margin: 0.081, ebitda: 0.132, growth: 0.12, de: 0.38, pe: 22, py: 0.22 },
+    "Fast Moving Consumer Goods":{ margin: 0.152, ebitda: 0.225, growth: 0.09, de: 0.11, pe: 45, py: 0.62 },
+    "Healthcare":                { margin: 0.142, ebitda: 0.238, growth: 0.13, de: 0.19, pe: 32, py: 0.18 },
+    "Capital Goods":             { margin: 0.076, ebitda: 0.128, growth: 0.15, de: 0.44, pe: 34, py: 0.16 },
+    "Metals & Mining":           { margin: 0.089, ebitda: 0.192, growth: 0.08, de: 0.71, pe: 12, py: 0.31 },
+    "Construction Materials":    { margin: 0.098, ebitda: 0.181, growth: 0.10, de: 0.33, pe: 28, py: 0.19 },
+    "Consumer Durables":         { margin: 0.086, ebitda: 0.139, growth: 0.14, de: 0.24, pe: 41, py: 0.21 },
+    "Utilities":                 { margin: 0.121, ebitda: 0.264, growth: 0.08, de: 0.88, pe: 15, py: 0.35 },
+    "Chemicals":                 { margin: 0.103, ebitda: 0.187, growth: 0.12, de: 0.41, pe: 27, py: 0.17 },
+    "Telecommunication":         { margin: 0.058, ebitda: 0.372, growth: 0.10, de: 1.42, pe: 38, py: 0.08 },
+    "Realty":                    { margin: 0.131, ebitda: 0.229, growth: 0.16, de: 0.57, pe: 36, py: 0.09 },
+    "Textiles":                  { margin: 0.061, ebitda: 0.118, growth: 0.09, de: 0.63, pe: 18, py: 0.13 },
+    "Services":                  { margin: 0.094, ebitda: 0.163, growth: 0.14, de: 0.29, pe: 30, py: 0.12 },
+    "Media & Entertainment":     { margin: 0.072, ebitda: 0.171, growth: 0.07, de: 0.26, pe: 24, py: 0.10 },
+    "Agriculture & Food":        { margin: 0.067, ebitda: 0.124, growth: 0.10, de: 0.47, pe: 21, py: 0.15 }
+  };
+
+  var INDUSTRY_BY_SECTOR = {
+    "Financial Services": ["Private Sector Bank", "Public Sector Bank", "Non Banking Financial Company",
+      "Housing Finance", "Life Insurance", "General Insurance", "Asset Management", "Capital Markets"],
+    "Information Technology": ["IT Services & Consulting", "Software Products", "BPO & KPO", "Data Processing"],
+    "Energy": ["Refineries & Petrochemicals", "Oil Exploration", "Gas Distribution", "Coal", "Power Generation"],
+    "Automobile": ["Passenger Vehicles", "Commercial Vehicles", "Two Wheelers", "Auto Components", "Tyres"],
+    "Fast Moving Consumer Goods": ["Diversified FMCG", "Packaged Foods", "Personal Care", "Beverages", "Tobacco"],
+    "Healthcare": ["Pharmaceuticals", "Hospitals", "Diagnostics", "Medical Devices", "Contract Research"],
+    "Capital Goods": ["Engineering & Construction", "Industrial Machinery", "Electrical Equipment", "Defence"],
+    "Metals & Mining": ["Iron & Steel", "Aluminium", "Copper", "Mining", "Ferro Alloys"],
+    "Construction Materials": ["Cement", "Tiles & Ceramics", "Glass", "Aggregates"],
+    "Consumer Durables": ["Household Appliances", "Consumer Electronics", "Paints", "Gems & Jewellery", "Footwear"],
+    "Utilities": ["Power Transmission", "Power Distribution", "Renewable Energy", "Water Utilities"],
+    "Chemicals": ["Specialty Chemicals", "Commodity Chemicals", "Fertilisers", "Agrochemicals", "Industrial Gases"],
+    "Telecommunication": ["Telecom Services", "Telecom Equipment", "Internet Services"],
+    "Realty": ["Residential Real Estate", "Commercial Real Estate", "Real Estate Investment Trust"],
+    "Textiles": ["Cotton Textiles", "Synthetic Textiles", "Apparel & Accessories", "Home Textiles"],
+    "Services": ["Logistics", "Ports & Shipping", "Airlines", "Hotels & Resorts", "Staffing", "Retail"],
+    "Media & Entertainment": ["Broadcasting", "Film Production", "Publishing", "Advertising"],
+    "Agriculture & Food": ["Sugar", "Edible Oils", "Tea & Coffee", "Aquaculture", "Seeds"]
+  };
+
+  /* Reference companies: real NSE names, simulated figures. */
+  var REFERENCE = [
+    ["MGL", "Mahanagar Gas Ltd", "Utilities", "Gas Distribution", 1418.35, 14012],
+    ["M&M", "Mahindra & Mahindra Ltd", "Automobile", "Passenger Vehicles", 2874.60, 357420],
+    ["J&KBANK", "Jammu & Kashmir Bank Ltd", "Financial Services", "Public Sector Bank", 104.75, 11530],
+    ["M&MFIN", "Mahindra & Mahindra Financial Services Ltd", "Financial Services", "Non Banking Financial Company", 272.40, 33660],
+    ["MINDACORP", "Minda Corporation Ltd", "Automobile", "Auto Components", 561.20, 13418],
+    ["RELIANCE", "Reliance Industries Ltd", "Energy", "Refineries & Petrochemicals", 1428.60, 1932000],
+    ["TCS", "Tata Consultancy Services Ltd", "Information Technology", "IT Services & Consulting", 3167.45, 1146000],
+    ["HDFCBANK", "HDFC Bank Ltd", "Financial Services", "Private Sector Bank", 1684.20, 1284000],
+    ["ICICIBANK", "ICICI Bank Ltd", "Financial Services", "Private Sector Bank", 1246.85, 878000],
+    ["INFY", "Infosys Ltd", "Information Technology", "IT Services & Consulting", 1548.90, 642000],
+    ["ITC", "ITC Ltd", "Fast Moving Consumer Goods", "Diversified FMCG", 412.75, 516000],
+    ["LT", "Larsen & Toubro Ltd", "Capital Goods", "Engineering & Construction", 3592.10, 494000],
+    ["SBIN", "State Bank of India", "Financial Services", "Public Sector Bank", 812.35, 725000],
+    ["BHARTIARTL", "Bharti Airtel Ltd", "Telecommunication", "Telecom Services", 1642.50, 982000],
+    ["MARUTI", "Maruti Suzuki India Ltd", "Automobile", "Passenger Vehicles", 12140.00, 381000],
+    ["SUNPHARMA", "Sun Pharmaceutical Industries Ltd", "Healthcare", "Pharmaceuticals", 1742.30, 418000],
+    ["TITAN", "Titan Company Ltd", "Consumer Durables", "Gems & Jewellery", 3418.00, 303000],
+    ["ASIANPAINT", "Asian Paints Ltd", "Consumer Durables", "Paints", 2384.55, 229000],
+    ["ULTRACEMCO", "UltraTech Cement Ltd", "Construction Materials", "Cement", 11235.75, 324000],
+    ["AXISBANK", "Axis Bank Ltd", "Financial Services", "Private Sector Bank", 1108.40, 342000],
+    ["KOTAKBANK", "Kotak Mahindra Bank Ltd", "Financial Services", "Private Sector Bank", 1798.60, 357000],
+    ["HINDUNILVR", "Hindustan Unilever Ltd", "Fast Moving Consumer Goods", "Personal Care", 2456.30, 577000],
+    ["NESTLEIND", "Nestle India Ltd", "Fast Moving Consumer Goods", "Packaged Foods", 2214.80, 213000],
+    ["WIPRO", "Wipro Ltd", "Information Technology", "IT Services & Consulting", 289.45, 302000],
+    ["HCLTECH", "HCL Technologies Ltd", "Information Technology", "IT Services & Consulting", 1712.90, 464000],
+    ["TECHM", "Tech Mahindra Ltd", "Information Technology", "IT Services & Consulting", 1642.20, 160000],
+    ["ONGC", "Oil & Natural Gas Corporation Ltd", "Energy", "Oil Exploration", 246.80, 310000],
+    ["NTPC", "NTPC Ltd", "Utilities", "Power Generation", 358.20, 347000],
+    ["POWERGRID", "Power Grid Corporation of India Ltd", "Utilities", "Power Transmission", 322.15, 299000],
+    ["COALINDIA", "Coal India Ltd", "Energy", "Coal", 412.60, 254000],
+    ["TATASTEEL", "Tata Steel Ltd", "Metals & Mining", "Iron & Steel", 152.40, 190000],
+    ["JSWSTEEL", "JSW Steel Ltd", "Metals & Mining", "Iron & Steel", 942.75, 230000],
+    ["HINDALCO", "Hindalco Industries Ltd", "Metals & Mining", "Aluminium", 668.35, 150000],
+    ["TATAMOTORS", "Tata Motors Ltd", "Automobile", "Passenger Vehicles", 712.85, 262000],
+    ["BAJFINANCE", "Bajaj Finance Ltd", "Financial Services", "Non Banking Financial Company", 7124.50, 441000],
+    ["BAJAJFINSV", "Bajaj Finserv Ltd", "Financial Services", "Asset Management", 1642.80, 262000],
+    ["HEROMOTOCO", "Hero MotoCorp Ltd", "Automobile", "Two Wheelers", 4682.30, 93000],
+    ["EICHERMOT", "Eicher Motors Ltd", "Automobile", "Two Wheelers", 4912.65, 134000],
+    ["BAJAJ-AUTO", "Bajaj Auto Ltd", "Automobile", "Two Wheelers", 8942.10, 249000],
+    ["DRREDDY", "Dr Reddys Laboratories Ltd", "Healthcare", "Pharmaceuticals", 1284.55, 107000],
+    ["CIPLA", "Cipla Ltd", "Healthcare", "Pharmaceuticals", 1512.40, 122000],
+    ["APOLLOHOSP", "Apollo Hospitals Enterprise Ltd", "Healthcare", "Hospitals", 6842.20, 98000],
+    ["DIVISLAB", "Divis Laboratories Ltd", "Healthcare", "Pharmaceuticals", 5824.60, 154000],
+    ["GRASIM", "Grasim Industries Ltd", "Construction Materials", "Cement", 2624.35, 173000],
+    ["SHREECEM", "Shree Cement Ltd", "Construction Materials", "Cement", 24810.50, 89000],
+    ["AMBUJACEM", "Ambuja Cements Ltd", "Construction Materials", "Cement", 562.80, 138000],
+    ["PIDILITIND", "Pidilite Industries Ltd", "Chemicals", "Specialty Chemicals", 2984.25, 151000],
+    ["SRF", "SRF Ltd", "Chemicals", "Specialty Chemicals", 2412.90, 71000],
+    ["UPL", "UPL Ltd", "Chemicals", "Agrochemicals", 612.45, 46000],
+    ["TATACHEM", "Tata Chemicals Ltd", "Chemicals", "Commodity Chemicals", 1024.30, 26000],
+    ["DLF", "DLF Ltd", "Realty", "Residential Real Estate", 812.60, 201000],
+    ["GODREJPROP", "Godrej Properties Ltd", "Realty", "Residential Real Estate", 2684.40, 74000],
+    ["OBEROIRLTY", "Oberoi Realty Ltd", "Realty", "Commercial Real Estate", 1842.75, 67000],
+    ["INDIGO", "InterGlobe Aviation Ltd", "Services", "Airlines", 4284.30, 165000],
+    ["ADANIPORTS", "Adani Ports & Special Economic Zone Ltd", "Services", "Ports & Shipping", 1342.85, 290000],
+    ["CONCOR", "Container Corporation of India Ltd", "Services", "Logistics", 782.40, 47000],
+    ["TRENT", "Trent Ltd", "Services", "Retail", 5842.60, 207000],
+    ["DMART", "Avenue Supermarts Ltd", "Services", "Retail", 4128.35, 268000],
+    ["INDHOTEL", "The Indian Hotels Company Ltd", "Services", "Hotels & Resorts", 682.90, 97000],
+    ["ZEEL", "Zee Entertainment Enterprises Ltd", "Media & Entertainment", "Broadcasting", 128.45, 12000],
+    ["SUNTV", "Sun TV Network Ltd", "Media & Entertainment", "Broadcasting", 682.30, 27000],
+    ["PVRINOX", "PVR INOX Ltd", "Media & Entertainment", "Film Production", 1284.60, 12600],
+    ["PAGEIND", "Page Industries Ltd", "Textiles", "Apparel & Accessories", 42840.00, 47800],
+    ["ARVIND", "Arvind Ltd", "Textiles", "Cotton Textiles", 342.60, 8960],
+    ["BALKRISIND", "Balkrishna Industries Ltd", "Automobile", "Tyres", 2684.75, 51900],
+    ["MRF", "MRF Ltd", "Automobile", "Tyres", 128420.00, 54500],
+    ["BOSCHLTD", "Bosch Ltd", "Automobile", "Auto Components", 32840.60, 96800],
+    ["HAVELLS", "Havells India Ltd", "Consumer Durables", "Household Appliances", 1642.35, 103000],
+    ["VOLTAS", "Voltas Ltd", "Consumer Durables", "Household Appliances", 1284.90, 42500],
+    ["BERGEPAINT", "Berger Paints India Ltd", "Consumer Durables", "Paints", 512.40, 59700],
+    ["SIEMENS", "Siemens Ltd", "Capital Goods", "Electrical Equipment", 6842.50, 243000],
+    ["ABB", "ABB India Ltd", "Capital Goods", "Electrical Equipment", 7124.80, 151000],
+    ["BEL", "Bharat Electronics Ltd", "Capital Goods", "Defence", 284.60, 208000],
+    ["HAL", "Hindustan Aeronautics Ltd", "Capital Goods", "Defence", 4284.90, 286000],
+    ["CUMMINSIND", "Cummins India Ltd", "Capital Goods", "Industrial Machinery", 3284.75, 91000],
+    ["GAIL", "GAIL India Ltd", "Energy", "Gas Distribution", 198.45, 130000],
+    ["IOC", "Indian Oil Corporation Ltd", "Energy", "Refineries & Petrochemicals", 142.80, 201000],
+    ["BPCL", "Bharat Petroleum Corporation Ltd", "Energy", "Refineries & Petrochemicals", 312.65, 135000],
+    ["IGL", "Indraprastha Gas Ltd", "Utilities", "Gas Distribution", 428.30, 29900],
+    ["TATAPOWER", "Tata Power Company Ltd", "Utilities", "Power Generation", 412.75, 131000],
+    ["ADANIGREEN", "Adani Green Energy Ltd", "Utilities", "Renewable Energy", 1024.60, 162000],
+    ["PNB", "Punjab National Bank", "Financial Services", "Public Sector Bank", 104.85, 120000],
+    ["BANKBARODA", "Bank of Baroda", "Financial Services", "Public Sector Bank", 242.60, 125000],
+    ["CANBK", "Canara Bank", "Financial Services", "Public Sector Bank", 104.30, 94600],
+    ["INDUSINDBK", "IndusInd Bank Ltd", "Financial Services", "Private Sector Bank", 984.25, 76600],
+    ["FEDERALBNK", "Federal Bank Ltd", "Financial Services", "Private Sector Bank", 198.40, 48600],
+    ["IDFCFIRSTB", "IDFC First Bank Ltd", "Financial Services", "Private Sector Bank", 68.35, 50100],
+    ["CHOLAFIN", "Cholamandalam Investment & Finance Company Ltd", "Financial Services", "Non Banking Financial Company", 1482.60, 124600],
+    ["MUTHOOTFIN", "Muthoot Finance Ltd", "Financial Services", "Non Banking Financial Company", 1984.35, 79700],
+    ["LICHSGFIN", "LIC Housing Finance Ltd", "Financial Services", "Housing Finance", 582.40, 32000],
+    ["SBILIFE", "SBI Life Insurance Company Ltd", "Financial Services", "Life Insurance", 1642.85, 164000],
+    ["HDFCLIFE", "HDFC Life Insurance Company Ltd", "Financial Services", "Life Insurance", 682.30, 146000],
+    ["ICICIGI", "ICICI Lombard General Insurance Company Ltd", "Financial Services", "General Insurance", 1842.60, 91000],
+    ["TATACONSUM", "Tata Consumer Products Ltd", "Fast Moving Consumer Goods", "Packaged Foods", 1042.85, 103000],
+    ["BRITANNIA", "Britannia Industries Ltd", "Fast Moving Consumer Goods", "Packaged Foods", 5284.40, 127000],
+    ["DABUR", "Dabur India Ltd", "Fast Moving Consumer Goods", "Personal Care", 542.60, 96100],
+    ["MARICO", "Marico Ltd", "Fast Moving Consumer Goods", "Personal Care", 682.35, 88300],
+    ["GODREJCP", "Godrej Consumer Products Ltd", "Fast Moving Consumer Goods", "Personal Care", 1284.75, 131000],
+    ["COLPAL", "Colgate Palmolive India Ltd", "Fast Moving Consumer Goods", "Personal Care", 2684.30, 73000],
+    ["VBL", "Varun Beverages Ltd", "Fast Moving Consumer Goods", "Beverages", 584.20, 189000],
+    ["BALRAMCHIN", "Balrampur Chini Mills Ltd", "Agriculture & Food", "Sugar", 584.60, 11800],
+    ["KRBL", "KRBL Ltd", "Agriculture & Food", "Edible Oils", 324.85, 7650],
+    ["AVANTIFEED", "Avanti Feeds Ltd", "Agriculture & Food", "Aquaculture", 682.40, 9290],
+    ["APLLTD", "Alembic Pharmaceuticals Ltd", "Healthcare", "Pharmaceuticals", 1024.30, 20100],
+    ["LUPIN", "Lupin Ltd", "Healthcare", "Pharmaceuticals", 2084.65, 95000],
+    ["TORNTPHARM", "Torrent Pharmaceuticals Ltd", "Healthcare", "Pharmaceuticals", 3284.20, 111000],
+    ["METROPOLIS", "Metropolis Healthcare Ltd", "Healthcare", "Diagnostics", 1842.50, 9440],
+    ["POLYCAB", "Polycab India Ltd", "Capital Goods", "Electrical Equipment", 6284.75, 94500],
+    ["KEI", "KEI Industries Ltd", "Capital Goods", "Electrical Equipment", 3842.60, 36700],
+    ["THERMAX", "Thermax Ltd", "Capital Goods", "Industrial Machinery", 3684.40, 43900],
+    ["AIAENG", "AIA Engineering Ltd", "Capital Goods", "Industrial Machinery", 3284.85, 30900],
+    ["SUPREMEIND", "Supreme Industries Ltd", "Chemicals", "Specialty Chemicals", 4284.30, 54400],
+    ["DEEPAKNTR", "Deepak Nitrite Ltd", "Chemicals", "Specialty Chemicals", 2284.60, 31200],
+    ["COROMANDEL", "Coromandel International Ltd", "Chemicals", "Fertilisers", 1842.35, 54200],
+    ["CHAMBLFERT", "Chambal Fertilisers & Chemicals Ltd", "Chemicals", "Fertilisers", 584.75, 23400],
+    ["JUBLFOOD", "Jubilant Foodworks Ltd", "Services", "Retail", 684.20, 45100],
+    ["NAUKRI", "Info Edge India Ltd", "Information Technology", "Internet Services", 8284.60, 107000],
+    ["PERSISTENT", "Persistent Systems Ltd", "Information Technology", "Software Products", 5842.30, 90000],
+    ["COFORGE", "Coforge Ltd", "Information Technology", "IT Services & Consulting", 8420.75, 56200],
+    ["MPHASIS", "Mphasis Ltd", "Information Technology", "IT Services & Consulting", 2884.40, 54700]
+  ];
+
+  var NAME_ROOT = ["Aarti", "Bharat", "Chandra", "Deccan", "Eastern", "Ganga", "Himalaya", "Indus",
+    "Jyoti", "Kaveri", "Lakshmi", "Meghna", "Narmada", "Orient", "Pragati", "Rajdhani", "Sagar",
+    "Trident", "Udaan", "Vindhya", "Yamuna", "Zenith", "Anand", "Bhavani", "Chola", "Dhanraj",
+    "Everest", "Fortune", "Gokul", "Harsha", "Ishan", "Jaywant", "Konark", "Lalit", "Mandvi",
+    "Nilgiri", "Omkar", "Pavan", "Quantum", "Raichur", "Suryodaya", "Tejas", "Utkal", "Vaibhav",
+    "Wardha", "Yashoda", "Zircon", "Amrit", "Bela", "Chitra", "Dwarka", "Emerald", "Falcon",
+    "Girija", "Hansa", "Ikshu", "Jalan", "Kalyani", "Lotus", "Maitri", "Nandan", "Ojas", "Prerna"];
+  var NAME_TAIL = ["Industries", "Enterprises", "Technologies", "Corporation", "Limited", "Holdings",
+    "Ventures", "Systems", "Projects", "Solutions", "Products", "Manufacturing", "Resources",
+    "Infrastructure", "Exports", "Mills", "Works", "Labs", "Motors", "Chemicals", "Finance",
+    "Logistics", "Textiles", "Foods", "Energy", "Metals", "Realty", "Networks"];
+
+  function isinFor(ticker, i) {
+    var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    var a = letters[hashCode(ticker) % 26], b = letters[(hashCode(ticker) >> 3) % 26];
+    return "INE" + a + String(100 + (i % 900)) + b + "01" + String(10 + (i % 89));
+  }
+  function capCategory(cap) {
+    if (cap >= 85000) return "Large Cap";
+    if (cap >= 20000) return "Mid Cap";
+    if (cap >= 5000) return "Small Cap";
+    return "Micro Cap";
+  }
+
+  function makeCompany(i, ticker, name, sector, industry, price, cap, reference) {
+    var rnd = seeded(hashCode(ticker) + i * 131);
+    var prof = SECTOR_PROFILE[sector];
+    var chgPct = (rnd() - 0.47) * 0.052;
+    var prev = price / (1 + chgPct);
+    var pe = Math.max(5.5, prof.pe * (0.62 + rnd() * 0.85));
+    var roe = Math.max(0.028, (0.09 + rnd() * 0.20) * (sector === "Financial Services" ? 0.85 : 1));
+    var pat = cap / pe;
+    var equity = pat / roe;
+    var pb = cap / equity;
+    var de = Math.max(0, prof.de * (0.45 + rnd() * 1.15));
+    var debt = equity * de;
+    var ebitMargin = prof.ebitda * (0.72 + rnd() * 0.36);
+    var revenue = pat / Math.max(0.012, prof.margin * (0.7 + rnd() * 0.7));
+    var roce = (revenue * ebitMargin) / Math.max(1, equity + debt);
+    var shares = Math.max(0.4, cap / price);
+    var promoter = 22 + rnd() * 52;
+    var institutional = Math.min(98 - promoter, 8 + rnd() * 34);
+
+    return {
+      id: "epa-" + String(1000 + i),
+      ticker: ticker,
+      name: name,
+      exchange: rnd() > 0.14 ? "NSE" : "BSE",
+      isin: isinFor(ticker, i),
+      sector: sector,
+      industry: industry,
+      marketCap: Math.round(cap),
+      marketCapCategory: capCategory(cap),
+      currentPrice: Math.round(price * 100) / 100,
+      previousClose: Math.round(prev * 100) / 100,
+      dayChange: Math.round((price - prev) * 100) / 100,
+      dayChangePercent: Math.round(chgPct * 10000) / 10000,
+      "52WeekHigh": Math.round(price * (1.12 + rnd() * 0.34) * 100) / 100,
+      "52WeekLow": Math.round(price * (0.58 + rnd() * 0.22) * 100) / 100,
+      pe: Math.round(pe * 100) / 100,
+      pb: Math.round(pb * 100) / 100,
+      eps: Math.round((pat / shares) * 100) / 100,
+      roe: Math.round(roe * 10000) / 10000,
+      roce: Math.round(roce * 10000) / 10000,
+      debtToEquity: Math.round(de * 100) / 100,
+      dividendYield: Math.round(((pat * prof.py) / cap) * 10000) / 10000,
+      promoterHolding: Math.round(promoter * 10) / 10,
+      institutionalHolding: Math.round(institutional * 10) / 10,
+      sharesOutstanding: Math.round(shares * 100) / 100,
+      listedYear: 1960 + Math.floor(rnd() * 58),
+      isMock: true,
+      dataSource: reference ? "REFERENCE_MOCK" : "SYNTHETIC_MOCK",
+      dataDisclaimer: reference
+        ? "Real listed entity. All figures are simulated for prototype testing."
+        : "Synthetic company generated for prototype testing. Not a real listed entity.",
+      dataVersion: CONFIG.DATA_VERSION
+    };
+  }
+
+  var DB = { companies: [], byTicker: {}, sectors: [], industries: [], financials: {}, prices: {}, generatedAt: null };
+
+  function buildDatabase() {
+    var t0 = nowMs(), i, used = {}, list = [];
+    for (i = 0; i < REFERENCE.length; i++) {
+      var r = REFERENCE[i];
+      used[r[0]] = 1;
+      list.push(makeCompany(i, r[0], r[1], r[2], r[3], r[4], r[5], true));
+    }
+    var sectorNames = Object.keys(SECTOR_PROFILE);
+    var n = REFERENCE.length;
+    while (list.length < CONFIG.COMPANY_COUNT) {
+      var rnd = seeded(9176 + n * 37);
+      var sector = sectorNames[n % sectorNames.length];
+      var inds = INDUSTRY_BY_SECTOR[sector];
+      var industry = inds[Math.floor(rnd() * inds.length) % inds.length];
+      var root = NAME_ROOT[(n * 7) % NAME_ROOT.length];
+      var tail = NAME_TAIL[(n * 3) % NAME_TAIL.length];
+      var name = root + " " + tail + " Ltd";
+      var base = (root.slice(0, 4) + tail.slice(0, 3)).toUpperCase().replace(/[^A-Z]/g, "");
+      var ticker = base, suffix = 2;
+      while (used[ticker]) { ticker = base.slice(0, 7) + suffix; suffix++; }
+      used[ticker] = 1;
+      var tier = rnd();
+      var cap = tier > 0.93 ? 90000 + rnd() * 260000
+              : tier > 0.72 ? 20000 + rnd() * 65000
+              : tier > 0.34 ? 5000 + rnd() * 14500
+              : 320 + rnd() * 4500;
+      var price = 32 + rnd() * 2400;
+      list.push(makeCompany(n, ticker, name, sector, industry, price, cap, false));
+      n++;
+    }
+    DB.companies = list;
+    var secSet = {}, indSet = {};
+    for (i = 0; i < list.length; i++) {
+      DB.byTicker[list[i].ticker] = list[i];
+      secSet[list[i].sector] = 1;
+      indSet[list[i].industry] = 1;
+    }
+    DB.sectors = Object.keys(secSet).sort();
+    DB.industries = Object.keys(indSet).sort();
+    DB.generatedAt = new Date().toISOString();
+    DB.buildMs = Math.round((nowMs() - t0) * 100) / 100;
+    return DB;
+  }
+
+  /* Statements are generated on first request and cached, so 500 companies
+     cost 500 light records at boot instead of 45,000 numbers. */
+  function financialsOf(ticker) {
+    if (DB.financials[ticker]) return DB.financials[ticker];
+    var c = DB.byTicker[ticker];
+    var rnd = seeded(hashCode(ticker) * 17 + 91);
+    var prof = SECTOR_PROFILE[c.sector];
+    var latestPat = c.marketCap / c.pe;
+    var latestEquity = latestPat / c.roe;
+    var netMargin = Math.max(0.012, prof.margin * (0.7 + rnd() * 0.7));
+    var latestRevenue = latestPat / netMargin;
+    var years = [], thisFy = 2025;
+    var revenue = latestRevenue, equity = latestEquity, pat = latestPat;
+    for (var k = 0; k < CONFIG.FISCAL_YEARS; k++) {
+      var back = CONFIG.FISCAL_YEARS - 1 - k;
+      var g = prof.growth * (0.55 + rnd() * 0.95);
+      var rev = latestRevenue / Math.pow(1 + g, back);
+      var ebitdaMargin = prof.ebitda * (0.82 + rnd() * 0.30);
+      var ebitda = rev * ebitdaMargin;
+      var dep = rev * (0.022 + rnd() * 0.028);
+      var ebit = ebitda - dep;
+      var interest = rev * (0.006 + rnd() * 0.021);
+      var pbt = ebit - interest + rev * (0.004 + rnd() * 0.010);
+      var tax = pbt * (0.21 + rnd() * 0.06);
+      var patY = back === 0 ? latestPat : pbt - tax;
+      var eq = latestEquity / Math.pow(1 + g * 0.72, back);
+      var debtY = eq * c.debtToEquity * (0.82 + rnd() * 0.34);
+      var cash = rev * (0.05 + rnd() * 0.11);
+      var totalAssets = eq + debtY + rev * (0.19 + rnd() * 0.13);
+      var ocf = patY + dep - rev * (0.008 + rnd() * 0.021);
+      var capex = -(rev * (0.035 + rnd() * 0.048));
+      var icf = capex - rev * (0.006 + rnd() * 0.014);
+      var fcf = ocf + capex;
+      var dividends = -(patY * prof.py * (0.7 + rnd() * 0.6));
+      years.push({
+        fiscalYear: thisFy - back,
+        revenue: round2(rev),
+        ebitda: round2(ebitda),
+        ebit: round2(ebit),
+        depreciation: round2(dep),
+        interest: round2(interest),
+        pbt: round2(pbt),
+        tax: round2(tax),
+        pat: round2(patY),
+        eps: round2(patY / c.sharesOutstanding),
+        totalAssets: round2(totalAssets),
+        totalLiabilities: round2(totalAssets - eq),
+        equity: round2(eq),
+        debt: round2(debtY),
+        cash: round2(cash),
+        netDebt: round2(debtY - cash),
+        operatingCashFlow: round2(ocf),
+        investingCashFlow: round2(icf),
+        financingCashFlow: round2(dividends + rev * (rnd() - 0.5) * 0.03),
+        freeCashFlow: round2(fcf),
+        capex: round2(capex),
+        dividendsPaid: round2(dividends)
+      });
+    }
+    DB.financials[ticker] = years;
+    return years;
+  }
+  function round2(v) { return Math.round(v * 100) / 100; }
+
+  function cagr(first, last, years) {
+    if (!has(first) || !has(last) || first <= 0 || years <= 0) return null;
+    return Math.pow(last / first, 1 / years) - 1;
+  }
+  function ratiosOf(ticker) {
+    var c = DB.byTicker[ticker], years = financialsOf(ticker);
+    return years.map(function (y, i) {
+      var prev = i > 0 ? years[i - 1] : y;
+      var avgEquity = (y.equity + prev.equity) / 2;
+      var capitalEmployed = y.equity + y.debt;
+      return {
+        fiscalYear: y.fiscalYear,
+        roe: y.pat / avgEquity,
+        roce: y.ebit / capitalEmployed,
+        roa: y.pat / y.totalAssets,
+        netMargin: y.pat / y.revenue,
+        ebitdaMargin: y.ebitda / y.revenue,
+        ebitMargin: y.ebit / y.revenue,
+        debtToEquity: y.debt / y.equity,
+        netDebtToEbitda: y.netDebt / y.ebitda,
+        interestCover: y.ebit / Math.max(0.01, y.interest),
+        assetTurnover: y.revenue / y.totalAssets,
+        cashConversion: y.operatingCashFlow / y.ebitda,
+        fcfMargin: y.freeCashFlow / y.revenue,
+        effectiveTaxRate: y.tax / Math.max(0.01, y.pbt),
+        pe: (c.currentPrice * c.sharesOutstanding) / y.pat,
+        pb: (c.currentPrice * c.sharesOutstanding) / y.equity,
+        evToEbitda: (c.currentPrice * c.sharesOutstanding + y.netDebt) / y.ebitda
+      };
+    });
+  }
+
+  /* OHLCV, generated per period and cached. */
+  var PERIOD_DAYS = { "1M": 22, "3M": 66, "6M": 130, "1Y": 250 };
+  function pricesOf(ticker, period) {
+    period = PERIOD_DAYS[period] ? period : "6M";
+    var key = ticker + ":" + period;
+    if (DB.prices[key]) return DB.prices[key];
+    var c = DB.byTicker[ticker];
+    var days = PERIOD_DAYS[period];
+    var rnd = seeded(hashCode(ticker) * 29 + days);
+    var out = [], price = c.currentPrice * (0.78 + rnd() * 0.30);
+    var end = new Date(2025, 7, 20);
+    for (var i = days - 1; i >= 0; i--) {
+      var drift = (rnd() - 0.482) * 0.022;
+      var open = price;
+      price = Math.max(1, price * (1 + drift));
+      var high = Math.max(open, price) * (1 + rnd() * 0.011);
+      var low = Math.min(open, price) * (1 - rnd() * 0.011);
+      var d = new Date(end.getTime() - i * 86400000);
+      out.push({
+        date: d.toISOString().slice(0, 10),
+        open: round2(open), high: round2(high), low: round2(low), close: round2(price),
+        volume: Math.round(120000 + rnd() * 3600000)
+      });
+    }
+    out[out.length - 1].close = c.currentPrice;
+    DB.prices[key] = out;
+    return out;
+  }
+
+  var NEWS_TEMPLATES = [
+    { t: "{N} reports {P}% rise in revenue for the latest quarter", s: "Business Standard", c: "Results", m: "positive" },
+    { t: "Analysts revise target price on {T} after margin commentary", s: "Mint", c: "Analyst", m: "positive" },
+    { t: "{N} board clears capex of {RS}{C} crore for capacity expansion", s: "Economic Times", c: "Corporate", m: "neutral" },
+    { t: "{T} slips as input costs weigh on near term guidance", s: "Reuters India", c: "Market", m: "negative" },
+    { t: "{N} declares interim dividend of {RS}{D} per share", s: "Exchange Filing", c: "Corporate", m: "positive" },
+    { t: "{S} demand outlook steady into the second half, says industry body", s: "CNBC TV18", c: "Sector", m: "neutral" },
+    { t: "{N} completes bolt on acquisition in the {I} segment", s: "PTI", c: "Deals", m: "positive" },
+    { t: "Regulator seeks clarification from {T} on disclosure timing", s: "Moneycontrol", c: "Governance", m: "negative" },
+    { t: "{N} commissions new facility, adds {P}% to installed capacity", s: "Financial Express", c: "Operations", m: "positive" },
+    { t: "Promoter holding in {T} unchanged at {H}% for the quarter", s: "Exchange Filing", c: "Shareholding", m: "neutral" }
+  ];
+
+  /* ==========================================================================
+     4. MOCK AI SCORING ENGINE
+     Deterministic scoring from the mock fundamentals. No provider is called.
+     ========================================================================== */
+  function scoreBand(value, low, high) {
+    if (!has(value)) return 50;
+    var v = (value - low) / (high - low);
+    return Math.max(0, Math.min(100, Math.round(v * 100)));
+  }
+  function aiEngine(ticker) {
+    var c = DB.byTicker[ticker];
+    var years = financialsOf(ticker);
+    var ratios = ratiosOf(ticker);
+    var last = years[years.length - 1], first = years[0], r = ratios[ratios.length - 1];
+    var span = years.length - 1;
+
+    var revenueCagr = cagr(first.revenue, last.revenue, span);
+    var ebitdaCagr = cagr(first.ebitda, last.ebitda, span);
+    var patCagr = cagr(first.pat, last.pat, span);
+    var peers = peerSet(ticker);
+    var medianPe = median(peers.map(function (p) { return p.pe; }));
+    var medianRoe = median(peers.map(function (p) { return p.roe; }));
+
+    var growth = Math.round(
+      0.45 * scoreBand(revenueCagr, -0.02, 0.28) +
+      0.30 * scoreBand(patCagr, -0.05, 0.35) +
+      0.25 * scoreBand(ebitdaCagr, -0.03, 0.30));
+    var profitability = Math.round(
+      0.40 * scoreBand(r.roe, 0.02, 0.32) +
+      0.30 * scoreBand(r.roce, 0.03, 0.34) +
+      0.30 * scoreBand(r.netMargin, 0.01, 0.24));
+    var valuation = Math.round(
+      0.55 * scoreBand(medianPe / Math.max(1, c.pe), 0.45, 1.85) +
+      0.25 * scoreBand(3.2 / Math.max(0.2, c.pb), 0.25, 1.9) +
+      0.20 * scoreBand(c.dividendYield, 0, 0.045));
+    var health = Math.round(
+      0.35 * scoreBand(2.4 - Math.min(2.4, c.debtToEquity), 0, 2.4) +
+      0.25 * scoreBand(r.interestCover, 1, 14) +
+      0.20 * scoreBand(r.cashConversion, 0.25, 1.15) +
+      0.20 * scoreBand(-r.netDebtToEbitda, -4.5, 1.2));
+    var fundamental = Math.round(0.34 * profitability + 0.33 * growth + 0.33 * health);
+    var overall = Math.round(0.30 * fundamental + 0.22 * growth + 0.20 * profitability +
+                             0.15 * valuation + 0.13 * health);
+
+    var verdict = overall >= 74 ? "BUY" : overall >= 60 ? "HOLD" : overall >= 46 ? "WATCH" : "AVOID";
+    var tone = verdict === "BUY" ? "bull" : verdict === "AVOID" ? "bear" : "base";
+    var spread = Math.abs(growth - valuation) + Math.abs(profitability - health);
+    var confidence = Math.max(0.42, Math.min(0.93, 0.9 - spread / 420));
+
+    var positives = [], risks = [];
+    if (has(revenueCagr) && revenueCagr > 0.12) positives.push("Revenue compounding at " + pct(revenueCagr) + " over " + span + " years.");
+    if (r.roce > 0.16) positives.push("ROCE of " + pct(r.roce) + " is comfortably above a typical cost of capital.");
+    if (r.cashConversion > 0.8) positives.push("Cash conversion of " + pct(r.cashConversion) + " of EBITDA supports earnings quality.");
+    if (c.debtToEquity < 0.4) positives.push("Lightly geared at " + mult(c.debtToEquity) + " debt to equity.");
+    if (c.pe < medianPe) positives.push("Trades at " + mult(c.pe, 1) + " against a peer median of " + mult(medianPe, 1) + ".");
+    if (c.dividendYield > 0.02) positives.push("Dividend yield of " + pct(c.dividendYield) + " adds to total return.");
+    if (r.roe > medianRoe) positives.push("ROE of " + pct(r.roe) + " ahead of the peer median " + pct(medianRoe) + ".");
+
+    if (has(patCagr) && patCagr < 0.04) risks.push("Profit growth of " + pct(patCagr) + " lags revenue, pointing to margin pressure.");
+    if (c.debtToEquity > 1.1) risks.push("Leverage of " + mult(c.debtToEquity) + " debt to equity limits balance sheet flexibility.");
+    if (r.interestCover < 3.5) risks.push("Interest cover of " + mult(r.interestCover) + " leaves little headroom.");
+    if (c.pe > medianPe * 1.25) risks.push("Valuation at " + mult(c.pe, 1) + " is a premium to the peer median " + mult(medianPe, 1) + ".");
+    if (r.cashConversion < 0.6) risks.push("Only " + pct(r.cashConversion) + " of EBITDA converts to operating cash.");
+    if (c.promoterHolding < 30) risks.push("Promoter holding of " + pctPoints(c.promoterHolding) + " is on the lower side.");
+    if (!positives.length) positives.push("No standout strengths in the mock metrics for this name.");
+    if (!risks.length) risks.push("No material red flags in the mock metrics for this name.");
+
+    return {
+      disclaimer: "MOCK AI ANALYSIS \u2014 NOT LIVE AI",
+      engine: "local-rule-engine",
+      provider: "none",
+      externalCalls: 0,
+      ticker: c.ticker,
+      company: c.name,
+      generatedAt: new Date().toISOString(),
+      scores: {
+        fundamental: fundamental, growth: growth, profitability: profitability,
+        valuation: valuation, financialHealth: health, overall: overall
+      },
+      verdict: verdict,
+      tone: tone,
+      confidence: Math.round(confidence * 100) / 100,
+      keyPositives: positives.slice(0, 5),
+      keyRisks: risks.slice(0, 5),
+      reasoning:
+        c.name + " scores " + overall + " out of 100 on the local rule engine. Growth contributes " +
+        growth + ", profitability " + profitability + ", valuation " + valuation +
+        " and balance sheet health " + health + ". On the latest mock fiscal year the company shows revenue of " +
+        croreRs(last.revenue) + ", PAT of " + croreRs(last.pat) + " at a " + pct(r.netMargin) +
+        " net margin, ROCE of " + pct(r.roce) + " and net debt to EBITDA of " + mult(r.netDebtToEbitda) +
+        ". Against sector peers the shares trade at " + mult(c.pe, 1) + " earnings versus a median of " +
+        mult(medianPe, 1) + ". The verdict is " + verdict + " with confidence " +
+        Math.round(confidence * 100) + " percent. Every input is simulated prototype data.",
+      inputs: {
+        revenueCagr: revenueCagr, ebitdaCagr: ebitdaCagr, patCagr: patCagr,
+        roe: r.roe, roce: r.roce, netMargin: r.netMargin, debtToEquity: c.debtToEquity,
+        interestCover: r.interestCover, cashConversion: r.cashConversion,
+        pe: c.pe, peerMedianPe: medianPe
+      }
+    };
+  }
+  function median(values) {
+    var v = values.filter(has).slice().sort(function (a, b) { return a - b; });
+    if (!v.length) return null;
+    var m = Math.floor(v.length / 2);
+    return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+  }
+  function peerSet(ticker) {
+    var c = DB.byTicker[ticker];
+    var sameIndustry = DB.companies.filter(function (p) {
+      return p.ticker !== ticker && p.industry === c.industry;
+    });
+    var sameSector = DB.companies.filter(function (p) {
+      return p.ticker !== ticker && p.sector === c.sector && p.industry !== c.industry;
+    });
+    var byCap = function (a, b) { return Math.abs(a.marketCap - c.marketCap) - Math.abs(b.marketCap - c.marketCap); };
+    return sameIndustry.sort(byCap).slice(0, 6).concat(sameSector.sort(byCap).slice(0, 3)).slice(0, 7);
+  }
+
+  /* ==========================================================================
+     5. LOCAL API LAYER
+     Every call is asynchronous, timed, logged and attributed to an endpoint.
+     Swap the producer bodies for http() to go live; signatures do not change.
+     ========================================================================== */
+  function ApiError(status, endpoint, message) {
+    this.name = "ApiError";
+    this.status = status;
+    this.endpoint = endpoint;
+    this.message = message;
+  }
+  ApiError.prototype = Object.create(Error.prototype);
+
+  var DEBUG = {
+    enabled: true,
+    log: [],
+    push: function (entry) {
+      this.log.unshift(entry);
+      if (this.log.length > CONFIG.DEBUG_LOG_LIMIT) this.log.pop();
+      if (STATE && STATE.debugOpen) paintDebug();
+    },
+    clear: function () { this.log = []; paintDebug(); }
+  };
+
+  function countRecords(payload) {
+    if (payload === null || payload === undefined) return 0;
+    if (Object.prototype.toString.call(payload) === "[object Array]") return payload.length;
+    if (payload.results && payload.results.length !== undefined) return payload.results.length;
+    if (payload.rows && payload.rows.length !== undefined) return payload.rows.length;
+    if (payload.series && payload.series.length !== undefined) return payload.series.length;
+    if (payload.years && payload.years.length !== undefined) return payload.years.length;
+    return 1;
+  }
+
+  /* The single choke point. Real endpoints replace producer(), nothing else. */
+  function apiCall(endpoint, request, producer) {
+    var t0 = nowMs();
+    return new Promise(function (resolve, reject) {
+      var wait = CONFIG.LATENCY_MIN_MS + Math.random() * (CONFIG.LATENCY_MAX_MS - CONFIG.LATENCY_MIN_MS);
+      setTimeout(function () {
+        var payload = null, error = null, status = 200;
+        try {
+          payload = producer();
+        } catch (e) {
+          error = e;
+          status = e && e.status ? e.status : 500;
+        }
+        DEBUG.push({
+          endpoint: endpoint,
+          request: request || {},
+          status: status,
+          ms: Math.round((nowMs() - t0) * 100) / 100,
+          records: error ? 0 : countRecords(payload),
+          mode: CONFIG.USE_MOCK ? "MOCK" : "LIVE",
+          at: new Date().toISOString()
+        });
+        if (error) reject(error); else resolve(payload);
+      }, wait);
+    });
+  }
+
+  function needCompany(ticker, endpoint) {
+    var c = DB.byTicker[String(ticker || "").toUpperCase()];
+    if (!c) throw new ApiError(404, endpoint, "No company with ticker " + String(ticker) + " in the mock universe.");
+    return c;
+  }
+
+  var API = {
+    meta: function () {
+      return {
+        appVersion: CONFIG.APP_VERSION, dataVersion: CONFIG.DATA_VERSION,
+        mode: CONFIG.USE_MOCK ? "MOCK" : "LIVE", apiBase: CONFIG.API_BASE,
+        companies: DB.companies.length, generatedAt: DB.generatedAt, buildMs: DB.buildMs,
+        externalCalls: 0
+      };
+    },
+
+    /* REAL: GET /api/v1/dashboard */
+    dashboard: function () {
+      return apiCall("/api/v1/dashboard", {}, function () {
+        var byCap = DB.companies.slice().sort(function (a, b) { return b.marketCap - a.marketCap; });
+        var movers = DB.companies.slice().sort(function (a, b) { return b.dayChangePercent - a.dayChangePercent; });
+        var sectorMap = {};
+        DB.companies.forEach(function (c) {
+          var s = sectorMap[c.sector] || (sectorMap[c.sector] = { sector: c.sector, count: 0, marketCap: 0, sumPe: 0 });
+          s.count++; s.marketCap += c.marketCap; s.sumPe += c.pe;
+        });
+        var sectors = Object.keys(sectorMap).map(function (k) {
+          var s = sectorMap[k];
+          return { sector: k, count: s.count, marketCap: Math.round(s.marketCap), avgPe: s.sumPe / s.count };
+        }).sort(function (a, b) { return b.marketCap - a.marketCap; });
+        var caps = {};
+        DB.companies.forEach(function (c) { caps[c.marketCapCategory] = (caps[c.marketCapCategory] || 0) + 1; });
+        return {
+          mode: "MOCK",
+          coverage: {
+            companies: DB.companies.length,
+            sectors: DB.sectors.length,
+            industries: DB.industries.length,
+            fiscalYearsPerCompany: CONFIG.FISCAL_YEARS,
+            totalMarketCap: Math.round(DB.companies.reduce(function (a, c) { return a + c.marketCap; }, 0)),
+            capMix: caps
+          },
+          indices: [
+            { name: "NIFTY 50", value: 24812.40, change: 118.65, changePercent: 0.0048 },
+            { name: "SENSEX", value: 81244.10, change: 392.20, changePercent: 0.0048 },
+            { name: "NIFTY BANK", value: 51488.75, change: -164.30, changePercent: -0.0032 },
+            { name: "INDIA VIX", value: 12.44, change: -0.38, changePercent: -0.0296 }
+          ],
+          largest: byCap.slice(0, 10),
+          gainers: movers.slice(0, 6),
+          losers: movers.slice(-6).reverse(),
+          sectors: sectors
+        };
+      });
+    },
+
+    /* REAL: GET /api/v1/companies?page=&pageSize=&sector=&industry=&sort=&dir=&q= */
+    companies: function (params) {
+      params = params || {};
+      return apiCall("/api/v1/companies", params, function () {
+        return queryCompanies(params);
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker} */
+    company: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker;
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep);
+        var years = financialsOf(c.ticker);
+        var last = years[years.length - 1];
+        return {
+          company: c,
+          latestFiscalYear: last.fiscalYear,
+          highlights: {
+            revenue: last.revenue, ebitda: last.ebitda, pat: last.pat, eps: last.eps,
+            equity: last.equity, debt: last.debt, cash: last.cash, netDebt: last.netDebt,
+            operatingCashFlow: last.operatingCashFlow, freeCashFlow: last.freeCashFlow
+          },
+          shareholding: [
+            { group: "Promoters", percent: c.promoterHolding },
+            { group: "Institutional", percent: c.institutionalHolding },
+            { group: "Public and others", percent: round2(100 - c.promoterHolding - c.institutionalHolding) }
+          ],
+          about: c.name + " is listed on the " + c.exchange + " and classified under " + c.sector +
+            " / " + c.industry + ". " + c.dataDisclaimer
+        };
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/financials */
+    financials: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/financials";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep);
+        var years = financialsOf(c.ticker), ratios = ratiosOf(c.ticker);
+        var first = years[0], last = years[years.length - 1], span = years.length - 1;
+        var r = ratios[ratios.length - 1];
+        return {
+          ticker: c.ticker, unit: "INR crore", basis: "Consolidated, simulated",
+          fiscalYears: years.map(function (y) { return y.fiscalYear; }),
+          years: years,
+          derived: {
+            revenueCagr: cagr(first.revenue, last.revenue, span),
+            ebitdaCagr: cagr(first.ebitda, last.ebitda, span),
+            patCagr: cagr(first.pat, last.pat, span),
+            roe: r.roe, roce: r.roce,
+            netMargin: r.netMargin, ebitdaMargin: r.ebitdaMargin,
+            debtToEquity: r.debtToEquity
+          },
+          dataQuality: {
+            missingFields: 0, generated: true, source: c.dataSource, version: CONFIG.DATA_VERSION
+          }
+        };
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/pnl */
+    pnl: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/pnl";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep), years = financialsOf(c.ticker);
+        return statement(c, years, "pnl");
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/balance-sheet */
+    balanceSheet: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/balance-sheet";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep), years = financialsOf(c.ticker);
+        return statement(c, years, "balance");
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/cash-flow */
+    cashFlow: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/cash-flow";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep), years = financialsOf(c.ticker);
+        return statement(c, years, "cash");
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/ratios */
+    ratios: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/ratios";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep);
+        return { ticker: c.ticker, rows: ratiosOf(c.ticker) };
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/share-price?period= */
+    sharePrice: function (ticker, period) {
+      var ep = "/api/v1/companies/" + ticker + "/share-price";
+      return apiCall(ep, { ticker: ticker, period: period || "6M" }, function () {
+        var c = needCompany(ticker, ep);
+        var p = PERIOD_DAYS[period] ? period : "6M";
+        var series = pricesOf(c.ticker, p);
+        var closes = series.map(function (x) { return x.close; });
+        var first = closes[0], last = closes[closes.length - 1];
+        return {
+          ticker: c.ticker, period: p, points: series.length,
+          quote: {
+            currentPrice: c.currentPrice, previousClose: c.previousClose,
+            dayChange: c.dayChange, dayChangePercent: c.dayChangePercent,
+            dayHigh: round2(Math.max.apply(null, [series[series.length - 1].high, c.currentPrice])),
+            dayLow: round2(Math.min.apply(null, [series[series.length - 1].low, c.currentPrice])),
+            week52High: c["52WeekHigh"], week52Low: c["52WeekLow"],
+            volume: series[series.length - 1].volume,
+            avgVolume: Math.round(series.reduce(function (a, x) { return a + x.volume; }, 0) / series.length),
+            marketCap: c.marketCap, source: "SIMULATED_OHLCV"
+          },
+          performance: {
+            periodReturn: (last / first) - 1,
+            high: Math.max.apply(null, series.map(function (x) { return x.high; })),
+            low: Math.min.apply(null, series.map(function (x) { return x.low; }))
+          },
+          series: series
+        };
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/news */
+    news: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/news";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep);
+        var years = financialsOf(c.ticker), last = years[years.length - 1];
+        var rnd = seeded(hashCode(c.ticker) + 4021);
+        return NEWS_TEMPLATES.map(function (t, i) {
+          var d = new Date(2025, 7, 20 - i * 3, 9 + (i % 9), (i * 13) % 60);
+          return {
+            id: c.ticker + "-news-" + i,
+            headline: t.t.replace("{N}", c.name).replace("{T}", c.ticker).replace("{S}", c.sector)
+              .replace("{I}", c.industry).replace("{RS}", RS)
+              .replace("{P}", String(4 + Math.round(rnd() * 21)))
+              .replace("{C}", plain(Math.round(last.revenue * 0.07)))
+              .replace("{D}", (Math.max(0.5, last.eps * 0.2)).toFixed(1))
+              .replace("{H}", c.promoterHolding.toFixed(1)),
+            source: t.s, category: t.c, sentiment: t.m,
+            publishedAt: d.toISOString(),
+            summary: "Simulated news item generated locally so the news rail can be laid out and tested. " +
+                     "No feed is contacted.",
+            isMock: true
+          };
+        });
+      });
+    },
+
+    /* REAL: GET /api/v1/companies/{ticker}/peers */
+    peers: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/peers";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep);
+        var rows = [c].concat(peerSet(c.ticker)).map(function (p) {
+          var years = financialsOf(p.ticker);
+          var last = years[years.length - 1];
+          return {
+            ticker: p.ticker, name: p.name, sector: p.sector, industry: p.industry,
+            isSelf: p.ticker === c.ticker,
+            marketCap: p.marketCap, revenue: last.revenue, pat: last.pat,
+            pe: p.pe, pb: p.pb, roe: p.roe, roce: p.roce,
+            debtToEquity: p.debtToEquity, eps: p.eps
+          };
+        });
+        var keys = ["marketCap", "revenue", "pat", "pe", "pb", "roe", "roce", "debtToEquity", "eps"];
+        var med = {};
+        keys.forEach(function (k) { med[k] = median(rows.map(function (x) { return x[k]; })); });
+        return { ticker: c.ticker, basis: "Same industry first, then sector, ranked by market cap proximity",
+                 rows: rows, sectorMedian: med };
+      });
+    },
+
+    /* REAL: POST /api/v1/companies/{ticker}/ai-analysis */
+    aiAnalysis: function (ticker) {
+      var ep = "/api/v1/companies/" + ticker + "/ai-analysis";
+      return apiCall(ep, { ticker: ticker }, function () {
+        var c = needCompany(ticker, ep);
+        return aiEngine(c.ticker);
+      });
+    },
+
+    /* REAL: GET /api/v1/search?q= */
+    search: function (query, params) {
+      params = params || {};
+      params.q = query;
+      return apiCall("/api/v1/search", params, function () {
+        return queryCompanies(params);
+      });
+    },
+
+    /* REAL: GET /api/v1/watchlists */
+    watchlist: function () {
+      return apiCall("/api/v1/watchlists", {}, function () {
+        var lists = readWatchlists();
+        return lists.map(function (w) {
+          return {
+            id: w.id, name: w.name, createdAt: w.createdAt,
+            entries: w.entries.map(function (e) { return watchRow(e); })
+          };
+        });
+      });
+    },
+
+    /* REAL: POST /api/v1/watchlists/{id}/entries */
+    addWatchlist: function (ticker, options) {
+      options = options || {};
+      var ep = "/api/v1/watchlists/entries";
+      return apiCall(ep, { ticker: ticker, options: options }, function () {
+        var t = String(ticker || "").toUpperCase();
+        var c = needCompany(t, ep);
+        var lists = readWatchlists();
+        var target = options.listId || (lists[0] && lists[0].id);
+        var wl = lists.filter(function (w) { return w.id === target; })[0];
+        if (!wl) throw new ApiError(404, ep, "Watchlist not found.");
+        if (wl.entries.some(function (e) { return e.ticker === t; })) {
+          throw new ApiError(409, ep, t + " is already on " + wl.name + ".");
+        }
+        wl.entries.push({
+          ticker: t,
+          buyPrice: has(options.buyPrice) ? Number(options.buyPrice) : c.currentPrice,
+          buyBelow: has(options.buyBelow) ? Number(options.buyBelow) : round2(c.currentPrice * 0.88),
+          note: options.note || "",
+          addedAt: new Date().toISOString()
+        });
+        saveWatchlists(lists);
+        return { added: t, listId: wl.id, entries: wl.entries.length };
+      });
+    },
+
+    /* REAL: DELETE /api/v1/watchlists/{id}/entries/{ticker} */
+    removeWatchlist: function (ticker, options) {
+      options = options || {};
+      var ep = "/api/v1/watchlists/entries/" + ticker;
+      return apiCall(ep, { ticker: ticker }, function () {
+        var t = String(ticker || "").toUpperCase();
+        var lists = readWatchlists();
+        var target = options.listId || (lists[0] && lists[0].id);
+        var removed = false;
+        lists.forEach(function (w) {
+          if (w.id !== target) return;
+          var before = w.entries.length;
+          w.entries = w.entries.filter(function (e) { return e.ticker !== t; });
+          removed = w.entries.length < before;
+        });
+        if (!removed) throw new ApiError(404, ep, t + " is not on this watchlist.");
+        saveWatchlists(lists);
+        return { removed: t, listId: target };
+      });
+    },
+
+    /* Watchlist container management, same mock transport. */
+    createWatchlist: function (name) {
+      return apiCall("/api/v1/watchlists", { name: name }, function () {
+        if (!name || !String(name).trim()) throw new ApiError(400, "/api/v1/watchlists", "A watchlist needs a name.");
+        var lists = readWatchlists();
+        var wl = { id: "wl-" + Date.now(), name: String(name).trim(), createdAt: new Date().toISOString(), entries: [] };
+        lists.push(wl);
+        saveWatchlists(lists);
+        return wl;
+      });
+    },
+    deleteWatchlist: function (id) {
+      return apiCall("/api/v1/watchlists/" + id, { id: id }, function () {
+        var lists = readWatchlists().filter(function (w) { return w.id !== id; });
+        saveWatchlists(lists);
+        return { deleted: id, remaining: lists.length };
+      });
+    },
+    sectors: function () {
+      return apiCall("/api/v1/sectors", {}, function () {
+        return DB.sectors.map(function (s) {
+          return { sector: s, industries: DB.companies.filter(function (c) { return c.sector === s; })
+            .map(function (c) { return c.industry; })
+            .filter(function (v, i, a) { return a.indexOf(v) === i; }).sort() };
+        });
+      });
+    }
+  };
+
+  /* Live transport, unused while USE_MOCK is true. Kept next to the API so the
+     replacement path is obvious.
+     function http(path, init) {
+       return fetch(CONFIG.API_BASE + path, init).then(function (r) {
+         if (!r.ok) throw new ApiError(r.status, path, "HTTP " + r.status);
+         return r.json();
+       });
+     } */
+
+  function statement(c, years, kind) {
+    var rows;
+    function L(label, key, tone, dec) { return { label: label, key: key, tone: tone || "", decimals: dec }; }
+    if (kind === "pnl") {
+      rows = [L("Revenue from operations", "revenue"), L("EBITDA", "ebitda", "subtotal"),
+        L("Depreciation and amortisation", "depreciation"), L("EBIT", "ebit", "subtotal"),
+        L("Finance cost", "interest"), L("Profit before tax", "pbt", "subtotal"),
+        L("Tax expense", "tax"), L("Profit after tax", "pat", "total"),
+        L("Earnings per share", "eps", "", 2)];
+    } else if (kind === "balance") {
+      rows = [L("Shareholders equity", "equity"), L("Borrowings", "debt"),
+        L("Total liabilities", "totalLiabilities", "subtotal"),
+        L("Total assets", "totalAssets", "total"), L("Cash and equivalents", "cash"),
+        L("Net debt", "netDebt", "subtotal")];
+    } else {
+      rows = [L("Operating cash flow", "operatingCashFlow", "subtotal"), L("Capital expenditure", "capex"),
+        L("Investing cash flow", "investingCashFlow", "subtotal"),
+        L("Financing cash flow", "financingCashFlow", "subtotal"),
+        L("Dividends paid", "dividendsPaid"), L("Free cash flow", "freeCashFlow", "total")];
+    }
+    return {
+      ticker: c.ticker, statement: kind, unit: "INR crore", basis: "Consolidated, simulated",
+      fiscalYears: years.map(function (y) { return y.fiscalYear; }),
+      rows: rows.map(function (r) {
+        return { label: r.label, tone: r.tone, decimals: r.decimals,
+                 values: years.map(function (y) { return y[r.key]; }) };
+      })
+    };
+  }
+
+  function queryCompanies(params) {
+    var q = String(params.q || "").trim().toLowerCase();
+    var rows = DB.companies;
+    if (q) {
+      rows = rows.filter(function (c) {
+        return c.ticker.toLowerCase().indexOf(q) !== -1 ||
+               c.name.toLowerCase().indexOf(q) !== -1 ||
+               c.sector.toLowerCase().indexOf(q) !== -1 ||
+               c.industry.toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    if (params.sector) rows = rows.filter(function (c) { return c.sector === params.sector; });
+    if (params.industry) rows = rows.filter(function (c) { return c.industry === params.industry; });
+    if (params.capCategory) rows = rows.filter(function (c) { return c.marketCapCategory === params.capCategory; });
+    var sortKey = params.sort || "marketCap";
+    var dir = params.dir === "asc" ? 1 : -1;
+    rows = rows.slice().sort(function (a, b) {
+      var x = a[sortKey], y = b[sortKey];
+      if (typeof x === "string") return x.localeCompare(y) * dir;
+      if (!has(x)) return 1;
+      if (!has(y)) return -1;
+      return (x - y) * dir;
+    });
+    var pageSize = Number(params.pageSize) || CONFIG.PAGE_SIZE;
+    var page = Math.max(1, Number(params.page) || 1);
+    var total = rows.length;
+    var pages = Math.max(1, Math.ceil(total / pageSize));
+    if (page > pages) page = pages;
+    return {
+      total: total, page: page, pages: pages, pageSize: pageSize,
+      sort: sortKey, dir: params.dir === "asc" ? "asc" : "desc",
+      query: params.q || "", filters: { sector: params.sector || "", industry: params.industry || "",
+        capCategory: params.capCategory || "" },
+      results: rows.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+    };
+  }
+
+  /* ==========================================================================
+     6. LOCAL STORAGE
+     ========================================================================== */
+  function store(key, fallback) {
+    try {
+      var raw = window.localStorage.getItem(CONFIG.STORAGE_PREFIX + key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (e) { return fallback; }
+  }
+  function save(key, value) {
+    try { window.localStorage.setItem(CONFIG.STORAGE_PREFIX + key, JSON.stringify(value)); } catch (e) {}
+  }
+  function readWatchlists() {
+    var lists = store("watchlists-v2", null);
+    if (!lists) {
+      lists = [{
+        id: "wl-core", name: "Core coverage", createdAt: new Date().toISOString(),
+        entries: [
+          { ticker: "MGL", buyPrice: 1290, buyBelow: 1250, note: "City gas volumes", addedAt: "2025-07-11T09:20:00Z" },
+          { ticker: "M&M", buyPrice: 2610, buyBelow: 2700, note: "SUV mix", addedAt: "2025-07-22T06:05:00Z" },
+          { ticker: "TCS", buyPrice: 3480, buyBelow: 2950, note: "Deal wins", addedAt: "2025-08-02T11:40:00Z" }
+        ]
+      }, { id: "wl-tactical", name: "Tactical ideas", createdAt: new Date().toISOString(), entries: [] }];
+      saveWatchlists(lists);
+    }
+    return lists;
+  }
+  function saveWatchlists(lists) { save("watchlists-v2", lists); }
+
+  function watchRow(entry) {
+    var c = DB.byTicker[entry.ticker];
+    if (!c) {
+      return { ticker: entry.ticker, name: EM, missing: true, note: entry.note,
+               buyPrice: entry.buyPrice, buyBelow: entry.buyBelow, currentPrice: null,
+               upside: null, triggered: false, addedAt: entry.addedAt };
+    }
+    return {
+      ticker: c.ticker, name: c.name, sector: c.sector, missing: false,
+      buyPrice: entry.buyPrice, buyBelow: entry.buyBelow,
+      currentPrice: c.currentPrice,
+      dayChangePercent: c.dayChangePercent,
+      marketCap: c.marketCap, pe: c.pe, roe: c.roe,
+      unrealised: has(entry.buyPrice) ? (c.currentPrice - entry.buyPrice) / entry.buyPrice : null,
+      upside: has(entry.buyBelow) ? (entry.buyBelow - c.currentPrice) / c.currentPrice : null,
+      triggered: has(entry.buyBelow) ? c.currentPrice <= entry.buyBelow : false,
+      note: entry.note, addedAt: entry.addedAt
+    };
+  }
+
+  /* ==========================================================================
+     7. VIEW HELPERS
+     ========================================================================== */
+  function card(inner, cls) { return '<div class="epa-card ' + (cls || "") + '">' + inner + "</div>"; }
+  function cardHead(title, sub, action) {
+    return '<div class="epa-cardhead"><div><div class="epa-cardtitle">' + esc(title) + "</div>" +
+      (sub ? '<div class="epa-cardsub">' + esc(sub) + "</div>" : "") + "</div>" +
+      (action ? "<div>" + action + "</div>" : "") + "</div>";
+  }
+  function cbody(inner, cls) { return '<div class="epa-cardbody ' + (cls || "") + '">' + inner + "</div>"; }
+  function statCard(label, value, hint, tone) {
+    return card(cbody('<div class="epa-statlabel">' + esc(label) + "</div>" +
+      '<div class="epa-statvalue ' + (tone || "") + '">' + value + "</div>" +
+      (hint ? '<div class="epa-stathint">' + hint + "</div>" : "")));
+  }
+  function badge(text, variant) { return '<span class="epa-badge ' + (variant || "") + '">' + text + "</span>"; }
+  function kv(k, v) {
+    return '<div class="epa-kv"><span class="muted">' + esc(k) + '</span><span class="num b">' + v + "</span></div>";
+  }
+  function bar(value, tone) {
+    return '<div class="epa-bar ' + (tone || "") + '"><span style="width:' +
+      Math.max(0, Math.min(100, value)) + '%"></span></div>';
+  }
+  function skeletonBlock(n, h) {
+    var out = "";
+    for (var i = 0; i < (n || 5); i++) out += '<div class="epa-skel" style="height:' + (h || 34) + 'px;margin-bottom:9px"></div>';
+    return out;
+  }
+  function tabStrip(tabs, activeKey, action) {
+    return '<div class="epa-tabs">' + tabs.map(function (t) {
+      return '<button class="epa-tab ' + (t.key === activeKey ? "is-active" : "") +
+        '" data-action="' + esc(action) + '" data-key="' + esc(t.key) + '">' + esc(t.label) + "</button>";
+    }).join("") + "</div>";
+  }
+  function emptyState(title, desc) {
+    return '<div class="epa-empty"><div class="t">' + esc(title) + "</div>" +
+      (desc ? '<div class="d">' + esc(desc) + "</div>" : "") + "</div>";
+  }
+
+  /** Error card with a retry button, so one failed call cannot kill the app. */
+  var RETRY = {};
+  function renderError(host, err, retryFn) {
+    var id = "retry-" + Math.random().toString(36).slice(2, 9);
+    RETRY[id] = retryFn;
+    host.innerHTML = card(
+      cardHead("API Error", "The application is still running; only this panel failed.", badge("STATUS " + (err.status || 500), "loss")) +
+      cbody(
+        kv("Endpoint", esc(err.endpoint || "unknown")) +
+        kv("Status", String(err.status || 500)) +
+        kv("Mode", CONFIG.USE_MOCK ? "MOCK" : "LIVE") +
+        '<div class="epa-alert err" style="margin-top:10px"><span>!</span><div>' + esc(err.message || String(err)) + "</div></div>" +
+        '<div style="margin-top:12px"><button class="epa-btn primary" data-action="retry" data-key="' + id + '">Retry request</button>' +
+        ' <button class="epa-btn" data-action="nav" data-href="/dashboard">Back to dashboard</button></div>'));
+  }
+  function guard(host, promise, onOk, retryFn) {
+    promise.then(function (data) {
+      try { onOk(data); }
+      catch (e) { renderError(host, new ApiError(500, "render", e.message), retryFn); }
+    }).catch(function (err) { renderError(host, err, retryFn); });
+  }
+
+  /* ==========================================================================
+     8. SVG CHARTS, drawn locally, no library
+     ========================================================================== */
+  function lineChart(values, opts) {
+    opts = opts || {};
+    var w = 720, h = opts.height || 200, pad = 30;
+    var min = Math.min.apply(null, values), max = Math.max.apply(null, values);
+    if (min === max) { min = min * 0.98; max = max * 1.02 + 0.01; }
+    var stepX = (w - pad * 2) / Math.max(1, values.length - 1);
+    var y = function (v) { return h - pad - ((v - min) / (max - min)) * (h - pad * 2); };
+    var d = "", grid = "";
+    values.forEach(function (v, i) { d += (i ? "L" : "M") + (pad + i * stepX).toFixed(1) + " " + y(v).toFixed(1) + " "; });
+    for (var g = 0; g <= 3; g++) {
+      var gy = pad + g * (h - pad * 2) / 3;
+      grid += '<line x1="' + pad + '" y1="' + gy + '" x2="' + (w - pad) + '" y2="' + gy +
+        '" stroke="currentColor" stroke-opacity=".12"/>' +
+        '<text x="' + (w - pad + 4) + '" y="' + (gy + 3) + '" font-size="9" font-family="monospace" ' +
+        'fill="currentColor" fill-opacity=".45">' + (max - g * (max - min) / 3).toFixed(1) + "</text>";
+    }
+    var up = values[values.length - 1] >= values[0], col = up ? "#0b7a3b" : "#b3261e";
+    var area = d + "L" + (pad + (values.length - 1) * stepX).toFixed(1) + " " + (h - pad) + " L" + pad + " " + (h - pad) + " Z";
+    return '<svg class="epa-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none" style="height:' + h + 'px">' +
+      grid + '<path d="' + area + '" fill="' + col + '" fill-opacity=".08"/>' +
+      '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+  }
+  function candleChart(series, opts) {
+    opts = opts || {};
+    var w = 760, h = opts.height || 260, padT = 12, padB = 58, padL = 8, padR = 42;
+    var highs = series.map(function (p) { return p.high; }), lows = series.map(function (p) { return p.low; });
+    var max = Math.max.apply(null, highs), min = Math.min.apply(null, lows);
+    if (min === max) { max = max * 1.01; min = min * 0.99; }
+    var vols = series.map(function (p) { return p.volume; }), maxVol = Math.max.apply(null, vols);
+    var innerW = w - padL - padR, step = innerW / series.length;
+    var bw = Math.max(1.1, Math.min(7, step * 0.62));
+    var y = function (v) { return padT + (1 - (v - min) / (max - min)) * (h - padT - padB); };
+    var vy = function (v) { return (h - 26) - (v / maxVol) * 22; };
+    var out = "";
+    for (var g = 0; g <= 3; g++) {
+      var gy = padT + g * (h - padT - padB) / 3;
+      out += '<line x1="' + padL + '" y1="' + gy + '" x2="' + (w - padR) + '" y2="' + gy + '" stroke="currentColor" stroke-opacity=".1"/>' +
+        '<text x="' + (w - padR + 4) + '" y="' + (gy + 3) + '" font-size="9" font-family="monospace" fill="currentColor" fill-opacity=".5">' +
+        (max - g * (max - min) / 3).toFixed(0) + "</text>";
+    }
+    series.forEach(function (p, i) {
+      var x = padL + i * step + step / 2;
+      var up = p.close >= p.open, col = up ? "#0b7a3b" : "#b3261e";
+      out += '<line x1="' + x.toFixed(1) + '" y1="' + y(p.high).toFixed(1) + '" x2="' + x.toFixed(1) +
+        '" y2="' + y(p.low).toFixed(1) + '" stroke="' + col + '" stroke-width="1"/>';
+      var top = y(Math.max(p.open, p.close)), bot = y(Math.min(p.open, p.close));
+      out += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) +
+        '" height="' + Math.max(1, bot - top).toFixed(1) + '" fill="' + col + '"/>';
+      out += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + vy(p.volume).toFixed(1) + '" width="' + bw.toFixed(1) +
+        '" height="' + Math.max(0.6, (h - 26) - vy(p.volume)).toFixed(1) + '" fill="' + col + '" fill-opacity=".35"/>';
+    });
+    out += '<text x="' + padL + '" y="' + (h - 6) + '" font-size="9" font-family="monospace" fill="currentColor" fill-opacity=".55">' +
+      esc(series[0].date) + '</text><text x="' + (w - padR) + '" y="' + (h - 6) +
+      '" font-size="9" text-anchor="end" font-family="monospace" fill="currentColor" fill-opacity=".55">' +
+      esc(series[series.length - 1].date) + "</text>";
+    return '<svg class="epa-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none" style="height:' + h + 'px">' + out + "</svg>";
+  }
+  function barChart(labels, series, opts) {
+    opts = opts || {};
+    var w = 720, h = opts.height || 210, pad = 30, n = labels.length;
+    var all = [];
+    series.forEach(function (s) { s.values.forEach(function (v) { all.push(v); }); });
+    var max = Math.max.apply(null, all) * 1.12, min = Math.min(0, Math.min.apply(null, all));
+    if (max === min) max = min + 1;
+    var groupW = (w - pad * 2) / n, barW = Math.max(3, (groupW - 8) / series.length);
+    var y = function (v) { return h - pad - ((v - min) / (max - min)) * (h - pad * 2); };
+    var out = "";
+    for (var g = 0; g <= 3; g++) {
+      var gy = pad + g * (h - pad * 2) / 3;
+      out += '<line x1="' + pad + '" y1="' + gy + '" x2="' + (w - pad) + '" y2="' + gy + '" stroke="currentColor" stroke-opacity=".12"/>';
+    }
+    labels.forEach(function (lab, i) {
+      series.forEach(function (s, si) {
+        var v = s.values[i], px = pad + i * groupW + 4 + si * barW, py = y(v), zero = y(0);
+        out += '<rect x="' + px.toFixed(1) + '" y="' + Math.min(py, zero).toFixed(1) + '" width="' + (barW - 2).toFixed(1) +
+          '" height="' + Math.max(1, Math.abs(zero - py)).toFixed(1) + '" rx="2" fill="' + s.color + '"/>';
+      });
+      out += '<text x="' + (pad + i * groupW + groupW / 2).toFixed(1) + '" y="' + (h - 9) +
+        '" font-size="10" text-anchor="middle" font-family="monospace" fill="currentColor" fill-opacity=".55">' + esc(lab) + "</text>";
+    });
+    return '<svg class="epa-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none" style="height:' + h + 'px">' + out + "</svg>";
+  }
+  function donut(slices) {
+    var total = slices.reduce(function (a, s) { return a + s.value; }, 0) || 1;
+    var r = 54, circ = 2 * Math.PI * r, offset = 0, out = "";
+    slices.forEach(function (s) {
+      var len = (s.value / total) * circ;
+      out += '<circle r="' + r + '" cx="70" cy="70" fill="none" stroke="' + s.color + '" stroke-width="22" stroke-dasharray="' +
+        len.toFixed(2) + " " + (circ - len).toFixed(2) + '" stroke-dashoffset="' + (-offset).toFixed(2) +
+        '" transform="rotate(-90 70 70)"/>';
+      offset += len;
+    });
+    return '<svg viewBox="0 0 140 140" style="width:140px;height:140px">' + out + "</svg>";
+  }
+
+  /* ==========================================================================
+     9. APPLICATION STATE AND ROUTER
+     ========================================================================== */
+  var STATE = {
+    theme: store("theme", "light"),
+    navOpen: false,
+    debugOpen: false,
+    route: { name: "dashboard", ticker: null, tab: null },
+    list: { q: "", sector: "", industry: "", capCategory: "", page: 1, pageSize: CONFIG.PAGE_SIZE,
+            sort: "marketCap", dir: "desc" },
+    price: { period: "6M" },
+    watch: { listId: null, error: "" },
+    apiTest: { path: "/dashboard", output: "", running: false }
+  };
+
+  var root = null, app = null;
+
+  var COMPANY_TABS = [
+    { key: "overview", label: "Overview" },
+    { key: "financials", label: "Financials" },
+    { key: "pnl", label: "Profit & Loss" },
+    { key: "balance-sheet", label: "Balance Sheet" },
+    { key: "cash-flow", label: "Cash Flow" },
+    { key: "ratios", label: "Key Ratios" },
+    { key: "share-price", label: "Share Price" },
+    { key: "ai", label: "AI Analysis" },
+    { key: "news", label: "News" },
+    { key: "peers", label: "Peers" }
+  ];
+  var TAB_ALIAS = { "balance": "balance-sheet", "cashflow": "cash-flow", "price": "share-price", "market": "share-price" };
+
+  function decodeSeg(v) { try { return decodeURIComponent(v); } catch (e) { return v; } }
+  function companyHref(ticker, tab) {
+    return "/company/" + encodeURIComponent(ticker) + (tab && tab !== "overview" ? "/" + tab : "");
+  }
+  function parseHash() {
+    var raw = (window.location.hash || "").replace(/^#\/?/, "");
+    var seg = raw.split("/").filter(Boolean);
+    if (!seg.length) return { name: "dashboard", ticker: null, tab: null };
+    if (seg[0] === "company") {
+      var tab = seg[2] ? decodeSeg(seg[2]) : "overview";
+      return { name: "company", ticker: seg[1] ? decodeSeg(seg[1]).toUpperCase() : null, tab: TAB_ALIAS[tab] || tab };
+    }
+    if (seg[0] === "companies" || seg[0] === "search") return { name: "companies", ticker: null, tab: null };
+    if (seg[0] === "watchlist") return { name: "watchlist", ticker: null, tab: null };
+    if (seg[0] === "api-test") return { name: "api-test", ticker: null, tab: null };
+    return { name: "dashboard", ticker: null, tab: null };
+  }
+  function go(path) {
+    if (window.location.hash === "#" + path) render();
+    else window.location.hash = path;
+  }
+  window.addEventListener("hashchange", function () { STATE.route = parseHash(); render(); });
+
+  /* ==========================================================================
+     10. SHELL
+     ========================================================================== */
+  function mountRoot() {
+    var r = document.getElementById("epa-root");
+    if (!r) { r = document.createElement("div"); r.id = "epa-root"; document.body.appendChild(r); }
+    if ((" " + (r.className || "") + " ").indexOf(" epa ") === -1) r.className = ("epa " + (r.className || "")).replace(/\s+$/, "");
+    var a = document.getElementById("epa-app");
+    if (!a) { a = document.createElement("div"); a.id = "epa-app"; r.appendChild(a); }
+    return { root: r, app: a };
+  }
+
+  function render() {
+    if (!root || !app || !root.parentNode) { var m = mountRoot(); root = m.root; app = m.app; }
+    root.className = "epa" + (STATE.theme === "dark" ? " epa-dark" : "");
+    app.innerHTML =
+      '<div class="epa-shell">' +
+        (STATE.navOpen ? '<div class="epa-backdrop" data-action="closenav"></div>' : "") +
+        sidebar() +
+        '<div class="epa-main">' + topbar() +
+          '<div class="epa-content epa-fade" id="epa-view">' + skeletonBlock(4, 58) + "</div>" +
+        "</div>" +
+      "</div>" + debugPanel();
+    var view = document.getElementById("epa-view");
+    var r = STATE.route;
+    if (r.name === "companies") pageCompanies(view);
+    else if (r.name === "company") pageCompany(view);
+    else if (r.name === "watchlist") pageWatchlist(view);
+    else if (r.name === "api-test") pageApiTest(view);
+    else pageDashboard(view);
+  }
+
+  function sidebar() {
+    var r = STATE.route;
+    var ticker = r.name === "company" ? r.ticker : store("last-ticker", null);
+    var main = [
+      { key: "dashboard", label: "Dashboard", ico: "\u25A6", href: "/dashboard" },
+      { key: "companies", label: "Company Search", ico: "\u2315", href: "/companies" },
+      { key: "watchlist", label: "Watchlist", ico: "\u2606", href: "/watchlist" },
+      { key: "api-test", label: "API Test Console", ico: "\u2318", href: "/api-test" }
+    ];
+    function item(n, active) {
+      if (!n.href) return '<li class="epa-navlink is-disabled"><span class="ico">' + n.ico + "</span><span>" + esc(n.label) + "</span></li>";
+      return '<li class="epa-navlink ' + (active ? "is-active" : "") + '" data-action="nav" data-href="' + esc(n.href) +
+        '"><span class="ico">' + n.ico + "</span><span>" + esc(n.label) + "</span></li>";
+    }
+    var companyNav = COMPANY_TABS.map(function (t) {
+      return item({ key: t.key, label: t.label, ico: "\u25CF", href: ticker ? companyHref(ticker, t.key) : null },
+        r.name === "company" && r.tab === t.key);
+    }).join("");
+    return '<aside class="epa-side ' + (STATE.navOpen ? "is-open" : "") + '">' +
+      '<div class="epa-brand" data-action="nav" data-href="/dashboard" style="cursor:pointer">' +
+        '<div class="epa-logo">EP</div><div><div class="epa-brand-t">EquityPilotAI</div>' +
+        '<div class="epa-brand-s">API Simulation</div></div></div>' +
+      '<ul class="epa-nav"><li class="epa-navgroup">Platform</li>' +
+      main.map(function (n) { return item(n, n.key === r.name); }).join("") +
+      '<li class="epa-navgroup">Company' + (ticker ? " \u00B7 " + esc(ticker) : "") + "</li>" + companyNav +
+      "</ul>" +
+      '<div class="epa-usercard"><div class="tiny" style="color:rgba(255,255,255,.7)">Mode ' +
+        (CONFIG.USE_MOCK ? "MOCK" : "LIVE") + " \u00B7 " + DB.companies.length + " companies</div>" +
+        '<div class="tiny" style="color:rgba(255,255,255,.4);margin-top:2px">data ' + esc(CONFIG.DATA_VERSION) + "</div>" +
+        '<div class="epa-devnote">No backend, no network calls, no AWS</div></div></aside>';
+  }
+
+  function topbar() {
+    return '<div class="epa-topbar">' +
+      '<button class="epa-iconbtn epa-burger" data-action="opennav">\u2630</button>' +
+      '<div class="epa-searchwrap"><span class="epa-searchicon">\u2315</span>' +
+        '<input class="epa-search" id="epa-globalsearch" autocomplete="off" placeholder="Search 500 companies by ticker, name or sector" />' +
+        '<span class="epa-kbd">Ctrl K</span><div id="epa-suggest"></div></div>' +
+      '<div style="flex:1"></div>' +
+      badge("MOCK DATA", "warn") +
+      '<button class="epa-iconbtn" data-action="toggledebug" title="API debug panel">API</button>' +
+      '<button class="epa-iconbtn" data-action="theme">' + (STATE.theme === "dark" ? "\u2600" : "\u263D") + "</button>" +
+      "</div>";
+  }
+
+  /* ==========================================================================
+     11. API DEBUG PANEL
+     ========================================================================== */
+  function debugPanel() {
+    if (!STATE.debugOpen) return "";
+    return '<div class="epa-debug" id="epa-debug">' +
+      '<div class="epa-debughead"><span class="b">API debug</span>' +
+        '<span class="tiny muted">mode ' + (CONFIG.USE_MOCK ? "MOCK" : "LIVE") + " \u00B7 app " + esc(CONFIG.APP_VERSION) + "</span>" +
+        '<span style="flex:1"></span>' +
+        '<button class="epa-btn small" data-action="cleardebug">Clear</button> ' +
+        '<button class="epa-btn small" data-action="toggledebug">Close</button></div>' +
+      '<div class="epa-debugbody" id="epa-debugbody">' + debugRows() + "</div></div>";
+  }
+  function debugRows() {
+    if (!DEBUG.log.length) return '<div class="epa-note">No API calls yet.</div>';
+    return DEBUG.log.map(function (e) {
+      var cls = e.status === 200 ? "gain" : "loss";
+      return '<div class="epa-debugrow">' +
+        '<span class="epa-badge ' + cls + '">' + e.status + "</span>" +
+        '<span class="mono xs" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(e.endpoint) + "</span>" +
+        '<span class="mono tiny muted">' + esc(JSON.stringify(e.request).slice(0, 46)) + "</span>" +
+        '<span class="mono tiny">' + e.records + " rec</span>" +
+        '<span class="mono tiny b">' + e.ms.toFixed(1) + " ms</span>" +
+        '<span class="epa-badge">' + e.mode + "</span></div>";
+    }).join("");
+  }
+  function paintDebug() {
+    var body = document.getElementById("epa-debugbody");
+    if (body) body.innerHTML = debugRows();
+  }
+
+  /* ==========================================================================
+     12. PAGE: DASHBOARD
+     ========================================================================== */
+  function pageDashboard(view) {
+    guard(view, API.dashboard(), function (d) {
+      var indices = d.indices.map(function (i) {
+        return '<div style="flex:1;min-width:145px"><div class="tiny muted b">' + esc(i.name) + "</div>" +
+          '<div class="num b" style="font-size:1rem">' + plain(i.value, 2) + "</div>" +
+          '<div class="tiny ' + signCls(i.change) + '">' + (i.change >= 0 ? "+" : "") + i.change.toFixed(2) +
+          " (" + signedPct(i.changePercent) + ")</div></div>";
+      }).join("");
+      var largest = d.largest.map(function (c) {
+        return "<tr>" +
+          '<td><span class="num epa-link b" data-action="open" data-key="' + esc(c.ticker) + '">' + esc(c.ticker) + "</span>" +
+          '<div class="tiny muted">' + esc(c.name) + "</div></td>" +
+          '<td class="l xs muted">' + esc(c.sector) + "</td>" +
+          '<td class="num">' + rupees(c.currentPrice) + "</td>" +
+          '<td class="num ' + signCls(c.dayChangePercent) + '">' + signedPct(c.dayChangePercent) + "</td>" +
+          '<td class="num b">' + marketCapFmt(c.marketCap) + "</td>" +
+          '<td class="num">' + mult(c.pe, 1) + "</td>" +
+          '<td class="num">' + pct(c.roe) + "</td></tr>";
+      }).join("");
+      var mover = function (c) {
+        var up = c.dayChangePercent >= 0;
+        return '<div class="epa-heatcell" data-action="open" data-key="' + esc(c.ticker) + '" style="background:' +
+          (up ? "#0b7a3b" : "#b3261e") + '"><div class="b mono">' + esc(c.ticker) + "</div>" +
+          '<div class="mono" style="font-size:.8125rem">' + signedPct(c.dayChangePercent) + "</div>" +
+          '<div style="opacity:.85">' + rupees(c.currentPrice, 0) + "</div></div>";
+      };
+      var sectors = d.sectors.slice(0, 10).map(function (s) {
+        return '<div class="epa-kv"><span class="epa-link" data-action="sector" data-key="' + esc(s.sector) + '">' +
+          esc(s.sector) + '</span><span class="num">' + s.count + " \u00B7 " + marketCapFmt(s.marketCap) + "</span></div>";
+      }).join("");
+      var capMix = Object.keys(d.coverage.capMix).map(function (k) {
+        return '<div class="epa-kv"><span>' + esc(k) + '</span><span class="num">' + d.coverage.capMix[k] + "</span></div>";
+      }).join("");
+
+      view.innerHTML =
+        '<div class="epa-between" style="margin-bottom:14px"><div><h1 class="epa-h1">Dashboard</h1>' +
+        '<p class="epa-sub">Local API simulation over ' + d.coverage.companies + ' mock Indian listed companies. ' +
+        'Every figure is generated in your browser.</p></div>' +
+        '<div class="epa-row"><button class="epa-btn" data-action="nav" data-href="/companies">Browse companies</button>' +
+        '<button class="epa-btn" data-action="nav" data-href="/api-test">API console</button></div></div>' +
+
+        card(cbody('<div class="epa-row" style="gap:20px">' + indices + "</div>")) +
+
+        '<div class="epa-grid epa-g4" style="margin:14px 0">' +
+          statCard("Companies", plain(d.coverage.companies), "mock universe") +
+          statCard("Sectors", plain(d.coverage.sectors), plain(d.coverage.industries) + " industries") +
+          statCard("Total market cap", marketCapFmt(d.coverage.totalMarketCap)) +
+          statCard("Statement years", plain(d.coverage.fiscalYearsPerCompany), "per company") +
+        "</div>" +
+
+        '<div class="epa-split" style="margin-bottom:14px">' +
+          card(cardHead("Largest by market cap", "Top 10 of " + d.coverage.companies,
+              '<span class="epa-link xs" data-action="nav" data-href="/companies">View all</span>') +
+            '<div class="epa-scroll"><table class="epa-table"><thead><tr><th>Company</th><th class="l">Sector</th>' +
+            "<th>Price</th><th>Change</th><th>Market cap</th><th>P/E</th><th>ROE</th></tr></thead><tbody>" +
+            largest + "</tbody></table></div>") +
+          '<div class="epa-stack">' +
+            card(cardHead("Movers", "Session change") + cbody('<div class="epa-heat">' +
+              d.gainers.map(mover).join("") + d.losers.map(mover).join("") + "</div>")) +
+            card(cardHead("Market cap mix") + cbody(capMix)) +
+          "</div>" +
+        "</div>" +
+
+        '<div class="epa-split">' +
+          card(cardHead("Sector weight", "By aggregate mock market cap") +
+            cbody(barChart(d.sectors.slice(0, 9).map(function (s) { return s.sector.slice(0, 7); }),
+              [{ values: d.sectors.slice(0, 9).map(function (s) { return s.marketCap / 100000; }), color: "#1f6feb" }],
+              { height: 200 }) + '<div class="epa-legend" style="margin-top:6px"><span>Lakh crore</span></div>')) +
+          card(cardHead("Explore by sector") + cbody(sectors)) +
+        "</div>";
+    }, function () { pageDashboard(view); });
+  }
+
+  /* ==========================================================================
+     13. PAGE: COMPANY SEARCH with filters, sorting, pagination, lazy rendering
+     ========================================================================== */
+  var SORTABLE = [
+    { key: "ticker", label: "Ticker" }, { key: "name", label: "Company", cls: "l" },
+    { key: "sector", label: "Sector", cls: "l" }, { key: "marketCap", label: "Market cap" },
+    { key: "currentPrice", label: "Price" }, { key: "dayChangePercent", label: "Change" },
+    { key: "pe", label: "P/E" }, { key: "pb", label: "P/B" }, { key: "roe", label: "ROE" },
+    { key: "debtToEquity", label: "D/E" }, { key: "dividendYield", label: "Yield" }
+  ];
+
+  function pageCompanies(view) {
+    var s = STATE.list;
+    guard(view, API.companies(s), function (d) {
+      var head = SORTABLE.map(function (col) {
+        var active = s.sort === col.key;
+        return '<th class="' + (col.cls || "") + ' epa-sortable ' + (active ? "is-sorted" : "") +
+          '" data-action="sort" data-key="' + col.key + '">' + esc(col.label) +
+          (active ? (s.dir === "asc" ? " \u25B2" : " \u25BC") : "") + "</th>";
+      }).join("") + "<th></th>";
+
+      view.innerHTML =
+        '<div class="epa-between" style="margin-bottom:12px"><div><h1 class="epa-h1">Company Search</h1>' +
+        '<p class="epa-sub">' + plain(d.total) + " companies match \u00B7 page " + d.page + " of " + d.pages +
+        " \u00B7 rendering " + d.results.length + " rows</p></div></div>" +
+
+        card(cbody('<div class="epa-row" style="gap:10px;align-items:flex-end">' +
+          '<div style="flex:1;min-width:180px"><label class="epa-label">Search</label>' +
+            '<input class="epa-input" id="epa-q" value="' + esc(s.q) + '" placeholder="Ticker, name, sector or industry"/></div>' +
+          '<div style="width:190px"><label class="epa-label">Sector</label><select class="epa-select" id="epa-sector">' +
+            '<option value="">All sectors</option>' + DB.sectors.map(function (x) {
+              return '<option value="' + esc(x) + '"' + (x === s.sector ? " selected" : "") + ">" + esc(x) + "</option>";
+            }).join("") + "</select></div>" +
+          '<div style="width:190px"><label class="epa-label">Industry</label><select class="epa-select" id="epa-industry">' +
+            '<option value="">All industries</option>' + industriesFor(s.sector).map(function (x) {
+              return '<option value="' + esc(x) + '"' + (x === s.industry ? " selected" : "") + ">" + esc(x) + "</option>";
+            }).join("") + "</select></div>" +
+          '<div style="width:150px"><label class="epa-label">Size</label><select class="epa-select" id="epa-cap">' +
+            ["", "Large Cap", "Mid Cap", "Small Cap", "Micro Cap"].map(function (x) {
+              return '<option value="' + esc(x) + '"' + (x === s.capCategory ? " selected" : "") + ">" + (x || "All sizes") + "</option>";
+            }).join("") + "</select></div>" +
+          '<div style="width:120px"><label class="epa-label">Page size</label><select class="epa-select" id="epa-pagesize">' +
+            [10, 25, 50, 100].map(function (x) {
+              return '<option value="' + x + '"' + (x === s.pageSize ? " selected" : "") + ">" + x + " rows</option>";
+            }).join("") + "</select></div>" +
+          '<button class="epa-btn" data-action="resetfilters">Reset</button>' +
+        "</div>")) +
+
+        '<div style="height:12px"></div>' +
+        card('<div class="epa-scroll"><table class="epa-table"><thead><tr>' + head +
+          '</tr></thead><tbody id="epa-rows"></tbody></table></div>' +
+          '<div class="epa-row" style="justify-content:space-between;padding:10px 14px;border-top:1px solid var(--border)">' +
+            '<span class="xs muted">Showing ' + ((d.page - 1) * d.pageSize + 1) + " to " +
+              Math.min(d.total, d.page * d.pageSize) + " of " + plain(d.total) + "</span>" +
+            '<span><button class="epa-btn small" data-action="page" data-key="first"' + (d.page === 1 ? " disabled" : "") + ">First</button> " +
+            '<button class="epa-btn small" data-action="page" data-key="prev"' + (d.page === 1 ? " disabled" : "") + ">Previous</button> " +
+            '<button class="epa-btn small" data-action="page" data-key="next"' + (d.page >= d.pages ? " disabled" : "") + ">Next</button> " +
+            '<button class="epa-btn small" data-action="page" data-key="last"' + (d.page >= d.pages ? " disabled" : "") + ">Last</button></span>" +
+          "</div>");
+
+      chunkRows(document.getElementById("epa-rows"), d.results, function (c) {
+        return "<tr>" +
+          '<td><span class="num epa-link b" data-action="open" data-key="' + esc(c.ticker) + '">' + esc(c.ticker) + "</span></td>" +
+          '<td class="l"><span class="epa-link" data-action="open" data-key="' + esc(c.ticker) + '">' + esc(c.name) + "</span>" +
+            '<div class="tiny muted">' + esc(c.industry) + " \u00B7 " + esc(c.marketCapCategory) + "</div></td>" +
+          '<td class="l xs muted">' + esc(c.sector) + "</td>" +
+          '<td class="num">' + marketCapFmt(c.marketCap) + "</td>" +
+          '<td class="num">' + rupees(c.currentPrice) + "</td>" +
+          '<td class="num ' + signCls(c.dayChangePercent) + '">' + signedPct(c.dayChangePercent) + "</td>" +
+          '<td class="num">' + mult(c.pe, 1) + "</td>" +
+          '<td class="num">' + mult(c.pb, 1) + "</td>" +
+          '<td class="num">' + pct(c.roe) + "</td>" +
+          '<td class="num">' + mult(c.debtToEquity) + "</td>" +
+          '<td class="num">' + pct(c.dividendYield) + "</td>" +
+          '<td><button class="epa-btn small" data-action="quickwatch" data-key="' + esc(c.ticker) + '">Watch</button></td></tr>';
+      });
+
+      var q = document.getElementById("epa-q");
+      if (q) q.addEventListener("input", debounce(function (e) {
+        STATE.list.q = e.target.value; STATE.list.page = 1;
+        pageCompanies(view);
+        var f = document.getElementById("epa-q");
+        if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+      }, 200));
+      bindSelect("epa-sector", function (v) { STATE.list.sector = v; STATE.list.industry = ""; STATE.list.page = 1; pageCompanies(view); });
+      bindSelect("epa-industry", function (v) { STATE.list.industry = v; STATE.list.page = 1; pageCompanies(view); });
+      bindSelect("epa-cap", function (v) { STATE.list.capCategory = v; STATE.list.page = 1; pageCompanies(view); });
+      bindSelect("epa-pagesize", function (v) { STATE.list.pageSize = Number(v); STATE.list.page = 1; pageCompanies(view); });
+      STATE.list.pages = d.pages;
+    }, function () { pageCompanies(view); });
+  }
+  function industriesFor(sector) {
+    if (!sector) return DB.industries;
+    return DB.companies.filter(function (c) { return c.sector === sector; })
+      .map(function (c) { return c.industry; })
+      .filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+  }
+  function bindSelect(id, fn) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("change", function (e) { fn(e.target.value); });
+  }
+  /** Rows are appended in frames so a 100 row page never blocks the thread. */
+  function chunkRows(tbody, rows, build) {
+    if (!tbody) return;
+    var i = 0;
+    function step() {
+      var html = "", end = Math.min(rows.length, i + CONFIG.RENDER_CHUNK);
+      for (; i < end; i++) html += build(rows[i]);
+      tbody.insertAdjacentHTML("beforeend", html);
+      if (i < rows.length) {
+        if (window.requestAnimationFrame) window.requestAnimationFrame(step);
+        else setTimeout(step, 0);
+      }
+    }
+    step();
+  }
+  function debounce(fn, ms) {
+    var t;
+    return function () {
+      var args = arguments, self = this;
+      clearTimeout(t);
+      t = setTimeout(function () { fn.apply(self, args); }, ms);
+    };
+  }
+
+  /* ==========================================================================
+     14. PAGE: COMPANY
+     ========================================================================== */
+  function pageCompany(view) {
+    var ticker = STATE.route.ticker, tab = STATE.route.tab || "overview";
+    save("last-ticker", ticker);
+    guard(view, API.company(ticker), function (d) {
+      var c = d.company;
+      view.innerHTML = companyHeader(c, d) + tabStrip(COMPANY_TABS, tab, "ctab") +
+        '<div id="epa-ctab">' + skeletonBlock(4, 46) + "</div>";
+      var host = document.getElementById("epa-ctab");
+      if (tab === "financials") tabFinancials(host, c);
+      else if (tab === "pnl") tabStatement(host, c, "pnl");
+      else if (tab === "balance-sheet") tabStatement(host, c, "balance-sheet");
+      else if (tab === "cash-flow") tabStatement(host, c, "cash-flow");
+      else if (tab === "ratios") tabRatios(host, c);
+      else if (tab === "share-price") tabSharePrice(host, c);
+      else if (tab === "ai") tabAI(host, c);
+      else if (tab === "news") tabNews(host, c);
+      else if (tab === "peers") tabPeers(host, c);
+      else tabOverview(host, c, d);
+    }, function () { pageCompany(view); });
+  }
+
+  function companyHeader(c, d) {
+    return card(cbody('<div class="epa-between" style="align-items:flex-start">' +
+      '<div style="min-width:0"><div class="epa-row">' +
+        '<span class="num b" style="background:var(--accent-500);color:#fff;border-radius:4px;padding:2px 8px">' + esc(c.ticker) + "</span>" +
+        badge(c.exchange) + badge(c.sector, "accent") + badge(c.marketCapCategory) +
+        badge(c.dataSource === "REFERENCE_MOCK" ? "REFERENCE NAME, MOCK FIGURES" : "SYNTHETIC MOCK RECORD", "warn") +
+      "</div>" +
+      '<h1 class="epa-h1" style="margin-top:8px">' + esc(c.name) + "</h1>" +
+      '<p class="xs muted" style="margin-top:2px">' + esc(c.industry) + " \u00B7 ISIN " + esc(c.isin) +
+        " \u00B7 listed " + c.listedYear + " \u00B7 " + plain(c.sharesOutstanding, 2) + " cr shares</p></div>" +
+      '<div style="min-width:200px"><div class="tiny muted b">LAST PRICE</div>' +
+        '<div class="num b" style="font-size:1.5rem">' + rupees(c.currentPrice) + "</div>" +
+        '<div class="tiny b ' + signCls(c.dayChange) + '">' + (c.dayChange >= 0 ? "+" : "") + c.dayChange.toFixed(2) +
+          " (" + signedPct(c.dayChangePercent) + ")</div>" +
+        '<div class="tiny muted" style="margin-top:4px">52w ' + rupees(c["52WeekLow"], 0) + " to " + rupees(c["52WeekHigh"], 0) + "</div>" +
+        '<div class="tiny muted">Market cap ' + marketCapFmt(c.marketCap) + "</div>" +
+        '<button class="epa-btn primary small" style="margin-top:8px" data-action="quickwatch" data-key="' + esc(c.ticker) +
+        '">Add to watchlist</button></div></div>')) + '<div style="height:12px"></div>';
+  }
+
+  function tabOverview(host, c, d) {
+    var colors = ["#1f6feb", "#0b7a3b", "#64748b"];
+    guard(host, API.financials(c.ticker), function (f) {
+      var years = f.years, labels = years.map(function (y) { return fyLabel(y.fiscalYear); });
+      host.innerHTML =
+        '<div class="epa-grid epa-g4" style="margin-bottom:14px">' +
+          statCard("Revenue " + fyLabel(d.latestFiscalYear), croreRs(d.highlights.revenue)) +
+          statCard("EBITDA", croreRs(d.highlights.ebitda), pct(f.derived.ebitdaMargin) + " margin") +
+          statCard("PAT", croreRs(d.highlights.pat), pct(f.derived.netMargin) + " margin") +
+          statCard("EPS", rupees(d.highlights.eps), "per share") +
+        "</div>" +
+        '<div class="epa-split" style="margin-bottom:14px">' +
+          card(cardHead("Revenue, EBITDA and PAT", labels[0] + " to " + labels[labels.length - 1]) +
+            cbody(barChart(labels, [
+              { values: years.map(function (y) { return y.revenue; }), color: "#1f6feb" },
+              { values: years.map(function (y) { return y.ebitda; }), color: "#4b8ef5" },
+              { values: years.map(function (y) { return y.pat; }), color: "#0b7a3b" }
+            ], { height: 210 }) + '<div class="epa-legend" style="margin-top:8px">' +
+              '<span><i class="epa-swatch" style="background:#1f6feb"></i>Revenue</span>' +
+              '<span><i class="epa-swatch" style="background:#4b8ef5"></i>EBITDA</span>' +
+              '<span><i class="epa-swatch" style="background:#0b7a3b"></i>PAT</span></div>')) +
+          card(cardHead("Shareholding", "Simulated pattern") +
+            cbody('<div class="epa-row" style="justify-content:center">' +
+              donut(d.shareholding.map(function (s, i) { return { value: s.percent, color: colors[i] }; })) + "</div>" +
+              d.shareholding.map(function (s, i) {
+                return '<div class="epa-kv"><span><i class="epa-swatch" style="background:' + colors[i] + '"></i>' +
+                  esc(s.group) + '</span><span class="num">' + pctPoints(s.percent) + "</span></div>";
+              }).join(""))) +
+        "</div>" +
+        '<div class="epa-split">' +
+          card(cardHead("Key metrics") + cbody(
+            kv("Market cap", marketCapFmt(c.marketCap)) + kv("P/E", mult(c.pe)) + kv("P/B", mult(c.pb)) +
+            kv("EPS", rupees(c.eps)) + kv("ROE", pct(c.roe)) + kv("ROCE", pct(c.roce)) +
+            kv("Debt to equity", mult(c.debtToEquity)) + kv("Dividend yield", pct(c.dividendYield)) +
+            kv("Promoter holding", pctPoints(c.promoterHolding)) +
+            kv("Institutional holding", pctPoints(c.institutionalHolding)))) +
+          card(cardHead("Growth and balance sheet") + cbody(
+            kv("Revenue CAGR", pct(f.derived.revenueCagr)) + kv("EBITDA CAGR", pct(f.derived.ebitdaCagr)) +
+            kv("PAT CAGR", pct(f.derived.patCagr)) +
+            kv("Equity", croreRs(d.highlights.equity)) + kv("Debt", croreRs(d.highlights.debt)) +
+            kv("Cash", croreRs(d.highlights.cash)) + kv("Net debt", croreRs(d.highlights.netDebt)) +
+            kv("Operating cash flow", croreRs(d.highlights.operatingCashFlow)) +
+            kv("Free cash flow", croreRs(d.highlights.freeCashFlow)) +
+            '<div class="epa-note" style="margin-top:10px">' + esc(d.about) + "</div>")) +
+        "</div>";
+    }, function () { tabOverview(host, c, d); });
+  }
+
+  function tabFinancials(host, c) {
+    guard(host, API.financials(c.ticker), function (f) {
+      var rows = f.years.map(function (y) {
+        return "<tr><td>" + fyLabel(y.fiscalYear) + "</td>" +
+          '<td class="num">' + crore(y.revenue) + "</td>" +
+          '<td class="num">' + crore(y.ebitda) + "</td>" +
+          '<td class="num">' + crore(y.ebit) + "</td>" +
+          '<td class="num">' + crore(y.pat) + "</td>" +
+          '<td class="num">' + plain(y.eps, 2) + "</td>" +
+          '<td class="num">' + crore(y.totalAssets) + "</td>" +
+          '<td class="num">' + crore(y.equity) + "</td>" +
+          '<td class="num">' + crore(y.debt) + "</td>" +
+          '<td class="num">' + crore(y.cash) + "</td>" +
+          '<td class="num">' + crore(y.operatingCashFlow) + "</td>" +
+          '<td class="num ' + signCls(y.freeCashFlow) + '">' + crore(y.freeCashFlow) + "</td></tr>";
+      }).join("");
+      host.innerHTML =
+        '<div class="epa-grid epa-g4" style="margin-bottom:14px">' +
+          statCard("Revenue CAGR", pct(f.derived.revenueCagr), f.years.length - 1 + " years") +
+          statCard("EBITDA CAGR", pct(f.derived.ebitdaCagr)) +
+          statCard("PAT CAGR", pct(f.derived.patCagr)) +
+          statCard("ROCE", pct(f.derived.roce), "latest year") +
+        "</div>" +
+        card(cardHead("Annual financial summary", f.unit + " \u00B7 " + f.basis,
+            badge("source " + f.dataQuality.source, "warn")) +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr><th>Fiscal year</th><th>Revenue</th>' +
+          "<th>EBITDA</th><th>EBIT</th><th>PAT</th><th>EPS</th><th>Total assets</th><th>Equity</th>" +
+          "<th>Debt</th><th>Cash</th><th>OCF</th><th>FCF</th></tr></thead><tbody>" + rows + "</tbody></table></div>") +
+        '<div style="height:14px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("Margins") + cbody(barChart(f.years.map(function (y) { return fyLabel(y.fiscalYear); }), [
+            { values: f.years.map(function (y) { return (y.ebitda / y.revenue) * 100; }), color: "#1f6feb" },
+            { values: f.years.map(function (y) { return (y.pat / y.revenue) * 100; }), color: "#0b7a3b" }
+          ], { height: 190 }) + '<div class="epa-legend" style="margin-top:6px">' +
+            '<span><i class="epa-swatch" style="background:#1f6feb"></i>EBITDA margin</span>' +
+            '<span><i class="epa-swatch" style="background:#0b7a3b"></i>Net margin</span></div>')) +
+          card(cardHead("Cash flow") + cbody(barChart(f.years.map(function (y) { return fyLabel(y.fiscalYear); }), [
+            { values: f.years.map(function (y) { return y.operatingCashFlow; }), color: "#1f6feb" },
+            { values: f.years.map(function (y) { return y.freeCashFlow; }), color: "#0b7a3b" }
+          ], { height: 190 }) + '<div class="epa-legend" style="margin-top:6px">' +
+            '<span><i class="epa-swatch" style="background:#1f6feb"></i>Operating</span>' +
+            '<span><i class="epa-swatch" style="background:#0b7a3b"></i>Free</span></div>')) +
+        "</div>";
+    }, function () { tabFinancials(host, c); });
+  }
+
+  function tabStatement(host, c, kind) {
+    var call = kind === "pnl" ? API.pnl(c.ticker)
+             : kind === "balance-sheet" ? API.balanceSheet(c.ticker)
+             : API.cashFlow(c.ticker);
+    var title = kind === "pnl" ? "Profit and Loss" : kind === "balance-sheet" ? "Balance Sheet" : "Cash Flow";
+    guard(host, call, function (d) {
+      var head = '<th class="l">Line item</th>' + d.fiscalYears.map(function (y) { return "<th>" + fyLabel(y) + "</th>"; }).join("");
+      var rows = d.rows.map(function (r) {
+        var cls = r.tone === "total" ? "is-total" : r.tone === "subtotal" ? "is-subtotal" : "";
+        return '<tr class="' + cls + '"><td title="' + esc(r.label) + '">' + esc(r.label) + "</td>" +
+          r.values.map(function (v) {
+            return '<td class="num ' + (v < 0 ? "loss" : "") + '">' + crore(v, r.decimals) + "</td>";
+          }).join("") + "</tr>";
+      }).join("");
+      host.innerHTML = card(cardHead(title, d.unit + " \u00B7 " + d.basis,
+          '<button class="epa-btn small" data-action="csv" data-key="' + esc(kind) + '">Export CSV</button>') +
+        '<div class="epa-scroll"><table class="epa-table"><thead><tr>' + head + "</tr></thead><tbody>" +
+        rows + "</tbody></table></div>") +
+        '<div style="height:12px"></div><div class="epa-note">Served by API.' +
+        (kind === "pnl" ? "pnl" : kind === "balance-sheet" ? "balanceSheet" : "cashFlow") +
+        '("' + esc(c.ticker) + '") from the local mock database. No network request was made.</div>';
+    }, function () { tabStatement(host, c, kind); });
+  }
+
+  function tabRatios(host, c) {
+    guard(host, API.ratios(c.ticker), function (d) {
+      var rs = d.rows, last = rs[rs.length - 1];
+      var groups = [
+        { title: "Returns", items: [["ROE", "roe", pct], ["ROCE", "roce", pct], ["ROA", "roa", pct]] },
+        { title: "Margins", items: [["EBITDA margin", "ebitdaMargin", pct], ["EBIT margin", "ebitMargin", pct],
+          ["Net margin", "netMargin", pct], ["FCF margin", "fcfMargin", pct]] },
+        { title: "Leverage", items: [["Debt to equity", "debtToEquity", mult],
+          ["Net debt to EBITDA", "netDebtToEbitda", mult], ["Interest cover", "interestCover", mult]] },
+        { title: "Efficiency", items: [["Asset turnover", "assetTurnover", mult],
+          ["Cash conversion", "cashConversion", pct], ["Effective tax rate", "effectiveTaxRate", pct]] },
+        { title: "Valuation", items: [["P/E", "pe", mult], ["P/B", "pb", mult], ["EV to EBITDA", "evToEbitda", mult]] }
+      ];
+      var head = '<th class="l">Ratio</th>' + rs.map(function (r) { return "<th>" + fyLabel(r.fiscalYear) + "</th>"; }).join("");
+      var body = groups.map(function (g) {
+        return '<tr class="is-subtotal"><td>' + esc(g.title) + "</td>" + rs.map(function () { return "<td></td>"; }).join("") + "</tr>" +
+          g.items.map(function (it) {
+            return "<tr><td>" + esc(it[0]) + "</td>" + rs.map(function (r) {
+              return '<td class="num">' + it[2](r[it[1]]) + "</td>";
+            }).join("") + "</tr>";
+          }).join("");
+      }).join("");
+      host.innerHTML =
+        '<div class="epa-grid epa-g4" style="margin-bottom:14px">' +
+          statCard("ROE", pct(last.roe)) + statCard("ROCE", pct(last.roce)) +
+          statCard("Net debt to EBITDA", mult(last.netDebtToEbitda)) + statCard("P/E", mult(last.pe)) +
+        "</div>" +
+        card(cardHead("Key ratios", "Computed from the mock statements") +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr>' + head + "</tr></thead><tbody>" +
+          body + "</tbody></table></div>");
+    }, function () { tabRatios(host, c); });
+  }
+
+  function tabSharePrice(host, c) {
+    guard(host, API.sharePrice(c.ticker, STATE.price.period), function (d) {
+      var q = d.quote;
+      host.innerHTML =
+        '<div class="epa-grid epa-g4" style="margin-bottom:14px">' +
+          statCard("Last price", rupees(q.currentPrice),
+            '<span class="' + signCls(q.dayChange) + '">' + (q.dayChange >= 0 ? "+" : "") + q.dayChange.toFixed(2) +
+            " (" + signedPct(q.dayChangePercent) + ")</span>") +
+          statCard("Period return", signedPct(d.performance.periodReturn), d.period + " \u00B7 " + d.points + " sessions",
+            d.performance.periodReturn >= 0 ? "gain" : "loss") +
+          statCard("52 week range", rupees(q.week52Low, 0) + " to " + rupees(q.week52High, 0)) +
+          statCard("Volume", plain(q.volume), "avg " + plain(q.avgVolume)) +
+        "</div>" +
+        card(cardHead("OHLCV candles with volume", "Simulated series, " + d.period,
+            ["1M", "3M", "6M", "1Y"].map(function (p) {
+              return '<button class="epa-chip ' + (STATE.price.period === p ? "is-active" : "") +
+                '" data-action="period" data-key="' + p + '">' + p + "</button>";
+            }).join(" ")) +
+          cbody(candleChart(d.series, { height: 280 }))) +
+        '<div style="height:14px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("Quote detail") + cbody(
+            kv("Previous close", rupees(q.previousClose)) + kv("Day high", rupees(q.dayHigh)) +
+            kv("Day low", rupees(q.dayLow)) + kv("Period high", rupees(d.performance.high)) +
+            kv("Period low", rupees(d.performance.low)) + kv("Market cap", marketCapFmt(q.marketCap)) +
+            kv("Source", esc(q.source)))) +
+          card(cardHead("Recent sessions") + '<div class="epa-scroll"><table class="epa-table"><thead><tr>' +
+            '<th class="l">Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr></thead><tbody>' +
+            d.series.slice(-12).reverse().map(function (p) {
+              return "<tr><td>" + dateShort(p.date) + '</td><td class="num">' + plain(p.open, 2) + "</td>" +
+                '<td class="num">' + plain(p.high, 2) + '</td><td class="num">' + plain(p.low, 2) + "</td>" +
+                '<td class="num b">' + plain(p.close, 2) + '</td><td class="num">' + plain(p.volume) + "</td></tr>";
+            }).join("") + "</tbody></table></div>") +
+        "</div>";
+    }, function () { tabSharePrice(host, c); });
+  }
+
+  function tabAI(host, c) {
+    guard(host, API.aiAnalysis(c.ticker), function (a) {
+      var s = a.scores;
+      var scoreRow = function (label, value) {
+        return '<div style="margin-bottom:11px"><div class="epa-row" style="justify-content:space-between">' +
+          '<span class="xs">' + esc(label) + '</span><span class="num b">' + value + "</span></div>" +
+          bar(value, value >= 70 ? "gain" : value < 45 ? "loss" : "") + "</div>";
+      };
+      host.innerHTML =
+        '<div class="epa-alert warn" style="margin-bottom:12px"><span>!</span><div><strong>' + esc(a.disclaimer) +
+          "</strong><div>Scores are computed by a local rule engine from the mock financials. Engine: " +
+          esc(a.engine) + ". External API calls: " + a.externalCalls + ".</div></div></div>" +
+        '<div class="epa-split" style="margin-bottom:14px">' +
+          card(cardHead("Verdict", "Generated " + dateTime(a.generatedAt), badge(a.verdict,
+              a.verdict === "BUY" ? "gain" : a.verdict === "AVOID" ? "loss" : "accent")) +
+            cbody('<div class="epa-verdict ' + a.tone + '">' +
+              '<div class="epa-row" style="justify-content:space-between"><span class="b">' + esc(a.verdict) +
+              '</span>' + badge("Confidence " + Math.round(a.confidence * 100) + "%") + "</div>" +
+              '<p class="sm" style="margin-top:6px">' + esc(a.reasoning) + "</p></div>")) +
+          card(cardHead("Scores", "0 to 100") + cbody(
+            '<div class="epa-row" style="justify-content:space-between;margin-bottom:8px">' +
+            '<span class="epa-statlabel">Overall</span><span class="num b" style="font-size:1.4rem">' + s.overall + "</span></div>" +
+            bar(s.overall, s.overall >= 70 ? "gain" : s.overall < 45 ? "loss" : "") +
+            '<div class="epa-divider"></div>' +
+            scoreRow("Fundamental", s.fundamental) + scoreRow("Growth", s.growth) +
+            scoreRow("Profitability", s.profitability) + scoreRow("Valuation", s.valuation) +
+            scoreRow("Financial health", s.financialHealth))) +
+        "</div>" +
+        '<div class="epa-split">' +
+          card(cardHead("Key positives") + cbody(a.keyPositives.map(function (p) {
+            return '<div class="epa-timeline"><span class="epa-dot"></span><span class="sm">' + esc(p) + "</span></div>";
+          }).join(""))) +
+          card(cardHead("Key risks") + cbody(a.keyRisks.map(function (p) {
+            return '<div class="epa-timeline"><span class="epa-dot" style="border-color:#b3261e"></span><span class="sm">' +
+              esc(p) + "</span></div>";
+          }).join(""))) +
+        "</div>" +
+        '<div style="height:14px"></div>' +
+        card(cardHead("Engine inputs", "Every value below came from the mock database") +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr><th class="l">Input</th><th>Value</th></tr></thead><tbody>' +
+          Object.keys(a.inputs).map(function (k) {
+            var v = a.inputs[k];
+            var shown = (k.indexOf("Cagr") !== -1 || k === "roe" || k === "roce" || k === "netMargin" ||
+                         k === "cashConversion") ? pct(v) : mult(v);
+            return "<tr><td>" + esc(k) + '</td><td class="num">' + shown + "</td></tr>";
+          }).join("") + "</tbody></table></div>");
+    }, function () { tabAI(host, c); });
+  }
+
+  function tabNews(host, c) {
+    guard(host, API.news(c.ticker), function (items) {
+      var tone = { positive: "gain", negative: "loss", neutral: "" };
+      host.innerHTML = '<div class="epa-split">' +
+        card(cardHead("Latest news", items.length + " simulated items", badge("MOCK FEED", "warn")) +
+          cbody(items.map(function (n) {
+            return '<div class="epa-timeline"><span class="epa-dot"></span>' +
+              '<div class="epa-row" style="gap:6px;margin-bottom:3px">' + badge(n.category) +
+              badge(n.sentiment, tone[n.sentiment]) + '<span class="tiny muted">' + dateShort(n.publishedAt) +
+              " \u00B7 " + esc(n.source) + "</span></div>" +
+              '<div class="sm b">' + esc(n.headline) + "</div>" +
+              '<div class="xs muted" style="margin-top:3px">' + esc(n.summary) + "</div></div>";
+          }).join(""))) +
+        card(cardHead("Sentiment mix") + cbody(["positive", "neutral", "negative"].map(function (k) {
+          var n = items.filter(function (i) { return i.sentiment === k; }).length;
+          var p = Math.round((n / items.length) * 100);
+          return '<div style="margin-bottom:11px"><div class="epa-row" style="justify-content:space-between">' +
+            '<span class="xs" style="text-transform:capitalize">' + k + '</span><span class="num">' + p + "%</span></div>" +
+            bar(p, k === "positive" ? "gain" : k === "negative" ? "loss" : "") + "</div>";
+        }).join(""))) +
+        "</div>";
+    }, function () { tabNews(host, c); });
+  }
+
+  function tabPeers(host, c) {
+    guard(host, API.peers(c.ticker), function (d) {
+      var cols = [
+        { k: "marketCap", label: "Market cap", f: marketCapFmt },
+        { k: "revenue", label: "Revenue", f: function (v) { return crore(v, 0); } },
+        { k: "pat", label: "PAT", f: function (v) { return crore(v, 0); } },
+        { k: "pe", label: "P/E", f: function (v) { return mult(v, 1); } },
+        { k: "pb", label: "P/B", f: function (v) { return mult(v, 1); } },
+        { k: "roe", label: "ROE", f: pct },
+        { k: "roce", label: "ROCE", f: pct },
+        { k: "debtToEquity", label: "D/E", f: mult },
+        { k: "eps", label: "EPS", f: function (v) { return plain(v, 2); } }
+      ];
+      host.innerHTML = card(cardHead("Peer comparison", d.basis, badge(d.rows.length + " companies", "accent")) +
+        '<div class="epa-scroll"><table class="epa-table"><thead><tr><th class="l">Company</th>' +
+        cols.map(function (col) { return "<th>" + esc(col.label) + "</th>"; }).join("") + "</tr></thead><tbody>" +
+        d.rows.map(function (p) {
+          return '<tr class="' + (p.isSelf ? "is-subtotal" : "") + '"><td>' +
+            '<span class="num epa-link b" data-action="open" data-key="' + esc(p.ticker) + '">' + esc(p.ticker) + "</span>" +
+            (p.isSelf ? " " + badge("this company", "accent") : "") +
+            '<div class="tiny muted">' + esc(p.name) + "</div></td>" +
+            cols.map(function (col) { return '<td class="num">' + col.f(p[col.k]) + "</td>"; }).join("") + "</tr>";
+        }).join("") +
+        '<tr class="is-total"><td>Sector median</td>' +
+        cols.map(function (col) { return '<td class="num">' + col.f(d.sectorMedian[col.k]) + "</td>"; }).join("") +
+        "</tr></tbody></table></div>") +
+        '<div style="height:14px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("P/E versus peers") + cbody(barChart(d.rows.map(function (p) { return p.ticker.slice(0, 7); }),
+            [{ values: d.rows.map(function (p) { return p.pe; }), color: "#1f6feb" }], { height: 190 }))) +
+          card(cardHead("ROCE versus peers") + cbody(barChart(d.rows.map(function (p) { return p.ticker.slice(0, 7); }),
+            [{ values: d.rows.map(function (p) { return p.roce * 100; }), color: "#0b7a3b" }], { height: 190 }))) +
+        "</div>";
+    }, function () { tabPeers(host, c); });
+  }
+
+  /* ==========================================================================
+     15. PAGE: WATCHLIST
+     ========================================================================== */
+  function pageWatchlist(view) {
+    guard(view, API.watchlist(), function (lists) {
+      if (!lists.length) {
+        view.innerHTML = card(emptyState("No watchlists", "Create one to start tracking names.") +
+          cbody('<button class="epa-btn primary" data-action="wl-new">Create watchlist</button>'));
+        return;
+      }
+      var current = STATE.watch.listId;
+      if (!current || !lists.some(function (w) { return w.id === current; })) current = lists[0].id;
+      STATE.watch.listId = current;
+      var wl = lists.filter(function (w) { return w.id === current; })[0];
+      var rows = wl.entries;
+      var triggered = rows.filter(function (r) { return r.triggered; });
+
+      var table = rows.length === 0
+        ? emptyState("Nothing on this list", "Add a ticker below or use Watch on any company row.")
+        : '<div class="epa-scroll"><table class="epa-table"><thead><tr><th>Ticker</th><th class="l">Company</th>' +
+          "<th>Buy price</th><th>Current</th><th>Unrealised</th><th>Buy below</th><th>Upside</th>" +
+          "<th>Status</th><th>P/E</th><th>Market cap</th><th class=\"l\">Note</th><th></th></tr></thead><tbody>" +
+          rows.map(function (r) {
+            return "<tr>" +
+              '<td><span class="num epa-link b" data-action="open" data-key="' + esc(r.ticker) + '">' + esc(r.ticker) + "</span></td>" +
+              '<td class="l">' + esc(r.name) + "</td>" +
+              '<td class="num">' + rupees(r.buyPrice) + "</td>" +
+              '<td class="num">' + rupees(r.currentPrice) + "</td>" +
+              '<td class="num ' + signCls(r.unrealised) + '">' + signedPct(r.unrealised) + "</td>" +
+              '<td class="num">' + rupees(r.buyBelow) + "</td>" +
+              '<td class="num ' + signCls(r.upside) + '">' + signedPct(r.upside) + "</td>" +
+              "<td>" + (r.triggered ? badge("TRIGGERED", "gain") : badge("waiting")) + "</td>" +
+              '<td class="num">' + mult(r.pe, 1) + "</td>" +
+              '<td class="num">' + marketCapFmt(r.marketCap) + "</td>" +
+              '<td class="l xs muted">' + esc(r.note || EM) + "</td>" +
+              '<td><button class="epa-btn small danger" data-action="wl-remove" data-key="' + esc(r.ticker) + '">Remove</button></td></tr>';
+          }).join("") + "</tbody></table></div>";
+
+      view.innerHTML =
+        '<div class="epa-between" style="margin-bottom:12px"><div><h1 class="epa-h1">Watchlist</h1>' +
+        '<p class="epa-sub">Stored in localStorage only. Buy below defaults to 12 percent under the mock price.</p></div>' +
+        '<div class="epa-row"><button class="epa-btn" data-action="wl-new">New watchlist</button>' +
+        '<button class="epa-btn danger" data-action="wl-delete">Delete list</button></div></div>' +
+        tabStrip(lists.map(function (w) { return { key: w.id, label: w.name + " (" + w.entries.length + ")" }; }),
+          current, "wl-select") +
+        (STATE.watch.error ? '<div class="epa-alert err" style="margin-bottom:12px">' + esc(STATE.watch.error) + "</div>" : "") +
+        '<div class="epa-grid epa-g4" style="margin-bottom:14px">' +
+          statCard("Names tracked", plain(rows.length)) +
+          statCard("Triggered", plain(triggered.length), "at or below buy below", triggered.length ? "gain" : "") +
+          statCard("Average unrealised", rows.length ? signedPct(avg(rows.map(function (r) { return r.unrealised; }))) : EM) +
+          statCard("Average upside", rows.length ? signedPct(avg(rows.map(function (r) { return r.upside; }))) : EM) +
+        "</div>" +
+        card(cardHead(wl.name, "Created " + dateShort(wl.createdAt)) + table) +
+        '<div style="height:14px"></div>' +
+        card(cardHead("Add a company") + cbody('<div class="epa-row" style="align-items:flex-end">' +
+          '<div style="flex:1;min-width:140px"><label class="epa-label">Ticker</label>' +
+            '<input class="epa-input" id="epa-wl-ticker" placeholder="MGL" list="epa-tickers"/>' +
+            '<datalist id="epa-tickers">' + DB.companies.slice(0, 140).map(function (c) {
+              return '<option value="' + esc(c.ticker) + '">' + esc(c.name) + "</option>"; }).join("") + "</datalist></div>" +
+          '<div style="width:130px"><label class="epa-label">Buy price</label>' +
+            '<input class="epa-input" id="epa-wl-buy" type="number" placeholder="optional"/></div>' +
+          '<div style="width:130px"><label class="epa-label">Buy below</label>' +
+            '<input class="epa-input" id="epa-wl-below" type="number" placeholder="optional"/></div>' +
+          '<div style="flex:1;min-width:140px"><label class="epa-label">Note</label>' +
+            '<input class="epa-input" id="epa-wl-note" placeholder="optional"/></div>' +
+          '<button class="epa-btn primary" data-action="wl-add">Add</button></div>'));
+    }, function () { pageWatchlist(view); });
+  }
+  function avg(list) {
+    var v = list.filter(has);
+    return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : null;
+  }
+
+  /* ==========================================================================
+     16. PAGE: API TEST CONSOLE
+     ========================================================================== */
+  var API_PRESETS = ["/dashboard", "/companies", "/companies?sector=Automobile&sort=pe&dir=asc",
+    "/search?q=bank", "/company/MGL", "/company/MGL/financials", "/company/MGL/pnl",
+    "/company/MGL/balance-sheet", "/company/MGL/cash-flow", "/company/MGL/ratios",
+    "/company/MGL/share-price?period=1Y", "/company/MGL/peers", "/company/MGL/news",
+    "/company/MGL/ai", "/watchlist", "/sectors", "/meta"];
+
+  function dispatchPath(path) {
+    var clean = String(path || "").trim();
+    if (clean.indexOf("#") === 0) clean = clean.slice(1);
+    if (clean.indexOf("/api/v1") === 0) clean = clean.slice(7);
+    if (clean.charAt(0) !== "/") clean = "/" + clean;
+    var qs = {}, qi = clean.indexOf("?");
+    if (qi !== -1) {
+      clean.slice(qi + 1).split("&").forEach(function (pair) {
+        var kvp = pair.split("=");
+        qs[decodeURIComponent(kvp[0])] = decodeURIComponent(kvp[1] || "");
+      });
+      clean = clean.slice(0, qi);
+    }
+    var seg = clean.split("/").filter(Boolean);
+    if (!seg.length || seg[0] === "dashboard") return API.dashboard();
+    if (seg[0] === "meta") return Promise.resolve(API.meta());
+    if (seg[0] === "sectors") return API.sectors();
+    if (seg[0] === "companies" && seg.length === 1) return API.companies(qs);
+    if (seg[0] === "search") return API.search(qs.q || "", qs);
+    if (seg[0] === "watchlist" || seg[0] === "watchlists") return API.watchlist();
+    if (seg[0] === "companies" && seg.length > 1) seg = ["company"].concat(seg.slice(1));
+    if (seg[0] === "company" && seg[1]) {
+      var t = decodeURIComponent(seg[1]).toUpperCase(), sub = seg[2] || "";
+      if (!sub) return API.company(t);
+      if (sub === "financials") return API.financials(t);
+      if (sub === "pnl") return API.pnl(t);
+      if (sub === "balance-sheet") return API.balanceSheet(t);
+      if (sub === "cash-flow") return API.cashFlow(t);
+      if (sub === "ratios") return API.ratios(t);
+      if (sub === "share-price" || sub === "price") return API.sharePrice(t, qs.period || "6M");
+      if (sub === "news") return API.news(t);
+      if (sub === "peers") return API.peers(t);
+      if (sub === "ai" || sub === "ai-analysis") return API.aiAnalysis(t);
+    }
+    return Promise.reject(new ApiError(404, clean, "No local API method is mapped to this path."));
+  }
+
+  function pageApiTest(view) {
+    view.innerHTML =
+      '<div class="epa-between" style="margin-bottom:12px"><div><h1 class="epa-h1">API Test Console</h1>' +
+      '<p class="epa-sub">Executes the local API layer directly. Nothing leaves the browser.</p></div>' +
+      '<div class="epa-row">' + badge("mode " + (CONFIG.USE_MOCK ? "MOCK" : "LIVE"), "warn") +
+      badge("app " + CONFIG.APP_VERSION) + badge("data " + CONFIG.DATA_VERSION) + "</div></div>" +
+      card(cbody('<div class="epa-row" style="flex-wrap:nowrap;gap:8px">' +
+        '<input class="epa-input mono" id="epa-apipath" value="' + esc(STATE.apiTest.path) + '" placeholder="/company/MGL/ratios"/>' +
+        '<button class="epa-btn primary" data-action="apirun">Execute</button></div>' +
+        '<div class="epa-row" style="margin-top:10px">' + API_PRESETS.map(function (p) {
+          return '<button class="epa-chip" data-action="apipreset" data-key="' + esc(p) + '">' + esc(p) + "</button>";
+        }).join("") + "</div>")) +
+      '<div style="height:12px"></div>' +
+      '<div id="epa-apiout">' + card(cbody('<div class="epa-note">Choose a path and press Execute.</div>')) + "</div>";
+    var input = document.getElementById("epa-apipath");
+    if (input) input.addEventListener("keydown", function (e) { if (e.key === "Enter") runApiTest(); });
+  }
+
+  function runApiTest() {
+    var input = document.getElementById("epa-apipath");
+    var out = document.getElementById("epa-apiout");
+    if (!input || !out) return;
+    var path = input.value;
+    STATE.apiTest.path = path;
+    out.innerHTML = card(cbody(skeletonBlock(3, 26)));
+    var t0 = nowMs();
+    dispatchPath(path).then(function (data) {
+      var ms = (nowMs() - t0).toFixed(1);
+      var json = JSON.stringify(data, null, 2);
+      var truncated = json.length > 60000;
+      out.innerHTML = card(cardHead("200 OK \u00B7 " + esc(path), "resolved in " + ms + " ms \u00B7 " +
+          countRecords(data) + " record(s) \u00B7 mode " + (CONFIG.USE_MOCK ? "MOCK" : "LIVE"),
+          badge("200", "gain")) +
+        cbody('<pre class="epa-json">' + esc(truncated ? json.slice(0, 60000) + "\n... truncated" : json) + "</pre>"));
+    }).catch(function (err) {
+      var ms = (nowMs() - t0).toFixed(1);
+      out.innerHTML = card(cardHead((err.status || 500) + " \u00B7 " + esc(path), "failed in " + ms + " ms",
+          badge(String(err.status || 500), "loss")) +
+        cbody('<div class="epa-alert err"><span>!</span><div>' + esc(err.message) + "</div></div>" +
+          '<div style="margin-top:10px"><button class="epa-btn" data-action="apirun">Retry</button></div>'));
+    });
+  }
+
+  /* ==========================================================================
+     17. EVENTS
+     ========================================================================== */
+  function currentTicker() { return STATE.route.name === "company" ? STATE.route.ticker : store("last-ticker", null); }
+
+  document.addEventListener("click", function (e) {
+    var node = e.target.closest ? e.target.closest("[data-action]") : null;
+    if (!node || !root || !root.contains(node)) return;
+    var action = node.getAttribute("data-action");
+    var key = node.getAttribute("data-key");
+
+    if (action === "nav") { STATE.navOpen = false; go(node.getAttribute("data-href")); }
+    else if (action === "open") { STATE.navOpen = false; go(companyHref(key, "overview")); }
+    else if (action === "ctab") { go(companyHref(STATE.route.ticker, key)); }
+    else if (action === "opennav") { STATE.navOpen = true; render(); }
+    else if (action === "closenav") { STATE.navOpen = false; render(); }
+    else if (action === "theme") { STATE.theme = STATE.theme === "dark" ? "light" : "dark"; save("theme", STATE.theme); render(); }
+    else if (action === "toggledebug") { STATE.debugOpen = !STATE.debugOpen; render(); }
+    else if (action === "cleardebug") { DEBUG.clear(); }
+    else if (action === "sector") { STATE.list.sector = key; STATE.list.q = ""; STATE.list.page = 1; go("/companies"); }
+    else if (action === "sort") {
+      if (STATE.list.sort === key) STATE.list.dir = STATE.list.dir === "asc" ? "desc" : "asc";
+      else { STATE.list.sort = key; STATE.list.dir = key === "name" || key === "ticker" || key === "sector" ? "asc" : "desc"; }
+      STATE.list.page = 1;
+      pageCompanies(document.getElementById("epa-view"));
+    }
+    else if (action === "page") {
+      var pages = STATE.list.pages || 1;
+      if (key === "first") STATE.list.page = 1;
+      else if (key === "last") STATE.list.page = pages;
+      else if (key === "next") STATE.list.page = Math.min(pages, STATE.list.page + 1);
+      else STATE.list.page = Math.max(1, STATE.list.page - 1);
+      pageCompanies(document.getElementById("epa-view"));
+    }
+    else if (action === "resetfilters") {
+      STATE.list = { q: "", sector: "", industry: "", capCategory: "", page: 1, pageSize: CONFIG.PAGE_SIZE,
+                     sort: "marketCap", dir: "desc" };
+      pageCompanies(document.getElementById("epa-view"));
+    }
+    else if (action === "period") {
+      STATE.price.period = key;
+      var c = DB.byTicker[currentTicker()];
+      if (c) tabSharePrice(document.getElementById("epa-ctab"), c);
+    }
+    else if (action === "csv") { exportCsv(currentTicker(), key); }
+    else if (action === "quickwatch") {
+      API.addWatchlist(key, { listId: STATE.watch.listId })
+        .then(function (r) { toast(r.added + " added to the watchlist"); })
+        .catch(function (err) { toast(err.message); });
+    }
+    else if (action === "wl-select") { STATE.watch.listId = key; STATE.watch.error = ""; pageWatchlist(document.getElementById("epa-view")); }
+    else if (action === "wl-add") { watchAdd(); }
+    else if (action === "wl-remove") {
+      API.removeWatchlist(key, { listId: STATE.watch.listId })
+        .then(function () { pageWatchlist(document.getElementById("epa-view")); })
+        .catch(function (err) { STATE.watch.error = err.message; pageWatchlist(document.getElementById("epa-view")); });
+    }
+    else if (action === "wl-new") {
+      var name = window.prompt("Name for the new watchlist", "New watchlist");
+      if (name) API.createWatchlist(name).then(function (wl) {
+        STATE.watch.listId = wl.id; pageWatchlist(document.getElementById("epa-view"));
+      }).catch(function (err) { toast(err.message); });
+    }
+    else if (action === "wl-delete") {
+      if (window.confirm("Delete this watchlist?")) {
+        API.deleteWatchlist(STATE.watch.listId).then(function () {
+          STATE.watch.listId = null; pageWatchlist(document.getElementById("epa-view"));
+        });
+      }
+    }
+    else if (action === "apirun") { runApiTest(); }
+    else if (action === "apipreset") {
+      var el = document.getElementById("epa-apipath");
+      if (el) { el.value = key; STATE.apiTest.path = key; runApiTest(); }
+    }
+    else if (action === "retry") {
+      var fn = RETRY[key];
+      if (fn) fn();
+    }
+  });
+
+  function watchAdd() {
+    var t = document.getElementById("epa-wl-ticker");
+    var buy = document.getElementById("epa-wl-buy");
+    var below = document.getElementById("epa-wl-below");
+    var note = document.getElementById("epa-wl-note");
+    if (!t) return;
+    API.addWatchlist(t.value, {
+      listId: STATE.watch.listId,
+      buyPrice: buy && buy.value ? Number(buy.value) : undefined,
+      buyBelow: below && below.value ? Number(below.value) : undefined,
+      note: note ? note.value : ""
+    }).then(function () {
+      STATE.watch.error = "";
+      pageWatchlist(document.getElementById("epa-view"));
+    }).catch(function (err) {
+      STATE.watch.error = err.message;
+      pageWatchlist(document.getElementById("epa-view"));
+    });
+  }
+
+  var toastTimer;
+  function toast(msg) {
+    var el = document.getElementById("epa-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "epa-toast";
+      el.style.cssText = "position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:99999;" +
+        "background:#0b1f3a;color:#fff;padding:9px 16px;border-radius:6px;font-size:13px;" +
+        "box-shadow:0 10px 30px -8px rgba(0,0,0,.5)";
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.display = "block";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.style.display = "none"; }, 2600);
+  }
+
+  function exportCsv(ticker, kind) {
+    if (!ticker) return;
+    var years = financialsOf(ticker);
+    var c = DB.byTicker[ticker];
+    var d = statement(c, years, kind === "pnl" ? "pnl" : kind === "balance-sheet" ? "balance" : "cash");
+    var lines = [["line_item"].concat(d.fiscalYears.map(fyLabel)).join(",")];
+    d.rows.forEach(function (r) {
+      lines.push(['"' + r.label + '"'].concat(r.values.map(function (v) { return has(v) ? v.toFixed(2) : ""; })).join(","));
+    });
+    var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = ticker + "-" + kind + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast("Exported " + a.download);
+  }
+
+  /* Global search type ahead */
+  document.addEventListener("input", function (e) {
+    if (!e.target || e.target.id !== "epa-globalsearch") return;
+    var q = String(e.target.value || "").trim().toLowerCase();
+    var box = document.getElementById("epa-suggest");
+    if (!box) return;
+    if (!q) { box.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < DB.companies.length && hits.length < 8; i++) {
+      var c = DB.companies[i];
+      if (c.ticker.toLowerCase().indexOf(q) !== -1 || c.name.toLowerCase().indexOf(q) !== -1) hits.push(c);
+    }
+    if (!hits.length) { box.innerHTML = '<div class="epa-results"><div class="epa-result">No match</div></div>'; return; }
+    box.innerHTML = '<div class="epa-results">' + hits.map(function (c) {
+      return '<div class="epa-result" data-action="open" data-key="' + esc(c.ticker) + '">' +
+        '<div><div class="sm b">' + esc(c.name) + '</div><div class="tiny muted">' + esc(c.sector) +
+        " \u00B7 " + esc(c.industry) + "</div></div>" +
+        '<div class="right"><div class="num">' + esc(c.ticker) + '</div><div class="tiny muted">' +
+        marketCapFmt(c.marketCap) + "</div></div></div>";
+    }).join("") + "</div>";
+  });
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+      var input = document.getElementById("epa-globalsearch");
+      if (input) { e.preventDefault(); input.focus(); input.select(); }
+    }
+    if (e.key === "Escape") {
+      var box = document.getElementById("epa-suggest");
+      if (box) box.innerHTML = "";
+      if (STATE.navOpen) { STATE.navOpen = false; render(); }
+    }
+  });
+  document.addEventListener("click", function (e) {
+    var box = document.getElementById("epa-suggest");
+    if (box && (!e.target.closest || !e.target.closest(".epa-searchwrap"))) box.innerHTML = "";
+  });
+
+  /* ==========================================================================
+     18. BOOT
+     ========================================================================== */
+  function showFatal(message) {
+    var target = document.getElementById("epa-app") || document.body;
+    if (!target) return;
+    target.innerHTML = '<div class="epa-content"><div class="epa-card"><div class="epa-cardbody">' +
+      '<div class="epa-alert err"><span>!</span><div><strong>EquityPilotAI could not start.</strong>' +
+      '<div style="margin-top:6px">' + esc(String(message)) + "</div></div></div>" +
+      '<div class="epa-note" style="margin-top:10px">This prototype runs entirely in the browser. ' +
+      "No server, API or network access is required or attempted.</div></div></div></div>";
+  }
+  function boot() {
+    try {
+      var m = mountRoot();
+      root = m.root; app = m.app;
+      buildDatabase();
+      STATE.route = parseHash();
+      render();
+      if (window.console && window.console.info) {
+        window.console.info("EquityPilotAI " + CONFIG.APP_VERSION + " \u00B7 " + DB.companies.length +
+          " mock companies built in " + DB.buildMs + " ms \u00B7 external calls: 0");
+      }
+    } catch (err) {
+      if (window.console && window.console.error) window.console.error("EquityPilotAI:", err);
+      showFatal((err && err.message) ? err.message : err);
+    }
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+  window.addEventListener("error", function (e) {
+    if (!document.querySelector(".epa-shell")) showFatal(e && e.message ? e.message : "Unexpected script error");
+  });
+
+  /* Exposed for the console and for later integration testing. */
+  window.EquityPilotAI = { CONFIG: CONFIG, API: API, DB: DB, DEBUG: DEBUG, version: CONFIG.APP_VERSION };
+})();
+//]]>
+</script>
+</body>
+</html>

@@ -1,0 +1,2441 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<!DOCTYPE html>
+<html b:version='2' class='v2' expr:dir='data:blog.languageDirection'
+      xmlns='http://www.w3.org/1999/xhtml'
+      xmlns:b='http://www.google.com/2005/gml/b'
+      xmlns:data='http://www.google.com/2005/gml/data'
+      xmlns:expr='http://www.google.com/2005/gml/expr'>
+<head>
+<meta charset='UTF-8'/>
+<meta content='width=device-width, initial-scale=1' name='viewport'/>
+<meta content='EquityPilotAI equity research prototype. Demonstration data only, not investment advice.' name='description'/>
+<b:include data='blog' name='all-head-content'/>
+<title><data:blog.pageTitle/></title>
+<b:skin><![CDATA[
+/* ============================================================
+   Blogger integration layer.
+   The application owns the viewport; Blogger chrome is neutral.
+   Every application rule below is namespaced under .epa
+   ============================================================ */
+html, body { margin: 0; padding: 0; background: #ffffff; min-height: 100%; }
+body { -webkit-text-size-adjust: 100%; }
+.section, .widget, .widget-content { margin: 0; padding: 0; }
+
+/* The application root is rendered directly in the document body, so no
+   Blogger widget has to succeed for the page to appear. It must never be
+   collapsed by a leftover rule from a previously installed theme. */
+#epa-root {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  min-height: 100vh;
+}
+#epa-app { display: block; min-height: 60vh; }
+
+/* The Blogger section exists so Layout keeps working. It renders nothing. */
+.epa-host, .epa-host .widget { display: none !important; }
+
+/* Blogger's own navigation bar iframe. */
+.navbar, #navbar, #navbar-iframe { display: none !important; height: 0; visibility: hidden; }
+
+.epa-noscript {
+  margin: 24px auto; max-width: 640px; padding: 16px 18px;
+  border: 1px solid #e2e8f0; border-radius: 8px;
+  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color: #0f172a; background: #f7f9fc;
+}
+
+/* ==========================================================================
+   1. DESIGN TOKENS  (ported from globals.css — navy / white / grey terminal)
+   All selectors are scoped under .epa so Blogger's theme cannot leak in.
+   ========================================================================== */
+.epa{
+  --navy-950:#060f1f; --navy-900:#0b1f3a; --navy-800:#12305c;
+  --accent-500:#1f6feb; --accent-400:#4b8ef5; --accent-600:#1858c4;
+  --gain:#0b7a3b; --loss:#b3261e; --warn:#b45309;
+  --bg:#ffffff; --bg-elevated:#ffffff; --bg-subtle:#f7f9fc;
+  --border:#e2e8f0; --border-strong:#cbd5e1;
+  --text:#0f172a; --text-muted:#64748b; --header:#0b1f3a;
+  --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --sans: ui-sans-serif,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+
+  background:var(--bg); color:var(--text); font-family:var(--sans);
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+  font-feature-settings:"tnum" 1;
+  display:block; width:100%; box-sizing:border-box;
+}
+.epa.epa-dark{
+  --bg:#060f1f; --bg-elevated:#0d1b30; --bg-subtle:#0b1728;
+  --border:#1e304c; --border-strong:#2b4468;
+  --text:#e8eef7; --text-muted:#8fa3bf; --header:#060f1f;
+}
+.epa *,.epa *::before,.epa *::after{box-sizing:border-box;}
+.epa h1,.epa h2,.epa h3,.epa p,.epa ul,.epa ol,.epa figure{margin:0;padding:0;}
+.epa ul{list-style:none;}
+.epa a{color:inherit;text-decoration:none;}
+.epa button,.epa input,.epa select,.epa textarea{font:inherit;color:inherit;}
+.epa img{max-width:100%;}
+.epa :focus-visible{outline:2px solid var(--accent-500);outline-offset:2px;}
+
+/* Numerics are always tabular — a column of figures must align. */
+.epa .num{font-family:var(--mono);font-variant-numeric:tabular-nums;
+  font-size:.8125rem;letter-spacing:-.01em;}
+.epa .gain{color:var(--gain);} .epa .loss{color:var(--loss);}
+.epa .muted{color:var(--text-muted);}
+.epa .mono{font-family:var(--mono);}
+.epa .tiny{font-size:.6875rem;} .epa .xs{font-size:.75rem;} .epa .sm{font-size:.8125rem;}
+.epa .b{font-weight:600;} .epa .right{text-align:right;} .epa .center{text-align:center;}
+.epa .nowrap{white-space:nowrap;}
+
+/* ==========================================================================
+   2. SHELL — sidebar rail + topbar + mobile drawer
+   ========================================================================== */
+.epa-shell{display:flex;min-height:640px;width:100%;}
+.epa-side{
+  width:216px;flex:0 0 216px;background:var(--navy-900);
+  display:flex;flex-direction:column;position:sticky;top:0;
+  max-height:100vh;border-right:1px solid rgba(255,255,255,.07);
+}
+.epa.epa-dark .epa-side{background:#081426;}
+.epa-brand{display:flex;align-items:center;gap:10px;padding:14px 16px;
+  border-bottom:1px solid rgba(255,255,255,.1);}
+.epa-logo{width:32px;height:32px;border-radius:6px;background:var(--accent-500);
+  color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px;flex:0 0 32px;}
+.epa-brand-t{font-size:.8125rem;font-weight:600;color:#fff;line-height:1.15;}
+.epa-brand-s{font-size:.625rem;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.45);}
+.epa-nav{flex:1;overflow-y:auto;padding:8px;}
+.epa-navgroup{font-size:.5625rem;letter-spacing:.1em;text-transform:uppercase;
+  color:rgba(255,255,255,.35);padding:10px 10px 4px;}
+.epa-navlink{display:flex;align-items:center;gap:9px;border-radius:5px;
+  padding:7px 10px;font-size:.8125rem;color:rgba(255,255,255,.65);cursor:pointer;
+  transition:background .12s,color .12s;min-height:34px;}
+.epa-navlink:hover{background:rgba(255,255,255,.1);color:#fff;}
+.epa-navlink.is-active{background:var(--accent-500);color:#fff;}
+.epa-navlink .ico{width:15px;text-align:center;flex:0 0 15px;opacity:.9;}
+.epa-navlink.is-disabled{opacity:.35;cursor:not-allowed;}
+.epa-usercard{border-top:1px solid rgba(255,255,255,.1);padding:11px;}
+.epa-avatar{width:28px;height:28px;border-radius:999px;background:rgba(255,255,255,.15);
+  color:#fff;display:grid;place-items:center;font-size:.6875rem;font-weight:600;flex:0 0 28px;}
+.epa-devnote{margin-top:8px;border:1px solid rgba(180,83,9,.45);background:rgba(180,83,9,.12);
+  color:#f0b46b;border-radius:4px;padding:4px 6px;font-size:.5625rem;line-height:1.3;}
+
+.epa-main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.epa-topbar{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:10px;
+  padding:9px 14px;border-bottom:1px solid var(--border);
+  background:linear-gradient(to bottom,var(--bg-elevated),var(--bg));
+}
+.epa-burger{display:none;}
+.epa-searchwrap{position:relative;flex:1;max-width:520px;min-width:0;}
+.epa-search{
+  width:100%;font-family:var(--mono);font-size:.8125rem;background:var(--bg-subtle);
+  border:1px solid var(--border);border-radius:6px;padding:7px 62px 7px 30px;color:var(--text);
+  transition:border-color .1s,box-shadow .1s;
+}
+.epa-search:focus{border-color:var(--accent-500);box-shadow:0 0 0 3px rgba(31,111,235,.1);outline:none;}
+.epa-searchicon{position:absolute;left:9px;top:50%;transform:translateY(-50%);
+  color:var(--text-muted);font-size:12px;pointer-events:none;}
+.epa-kbd{font-family:var(--mono);font-size:.625rem;padding:1px 5px;border-radius:3px;
+  background:var(--bg-subtle);border:1px solid var(--border);color:var(--text-muted);}
+.epa-searchwrap .epa-kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);}
+.epa-results{
+  position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:60;
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 12px 32px -8px rgba(0,0,0,.25);overflow:hidden;max-height:340px;overflow-y:auto;
+}
+.epa-result{display:flex;justify-content:space-between;gap:10px;padding:8px 11px;cursor:pointer;
+  border-bottom:1px solid var(--border);}
+.epa-result:last-child{border-bottom:0;}
+.epa-result:hover,.epa-result[aria-selected="true"]{background:var(--bg-subtle);}
+.epa-content{padding:18px 16px 44px;max-width:1500px;width:100%;}
+
+.epa-iconbtn{border:1px solid var(--border);background:var(--bg-elevated);border-radius:6px;
+  padding:6px 9px;cursor:pointer;font-size:12px;color:var(--text-muted);min-height:32px;}
+.epa-iconbtn:hover{color:var(--text);border-color:var(--border-strong);}
+
+/* ==========================================================================
+   3. PRIMITIVES — Card / Stat / Badge / Button / Empty / Skeleton
+   ========================================================================== */
+.epa-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 1px 3px rgba(0,0,0,.05);overflow:hidden;min-width:0;}
+.epa.epa-dark .epa-card{box-shadow:0 1px 3px rgba(0,0,0,.25);}
+.epa-cardhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  padding:11px 15px;border-bottom:1px solid var(--border);background:var(--bg-elevated);}
+.epa-cardtitle{font-size:.8125rem;font-weight:600;}
+.epa-cardsub{font-size:.6875rem;color:var(--text-muted);margin-top:2px;}
+.epa-cardbody{padding:15px;}
+.epa-statlabel{font-size:.6875rem;font-weight:500;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--text-muted);}
+.epa-statvalue{margin-top:4px;font-size:1.25rem;font-weight:600;font-family:var(--mono);
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+.epa-stathint{margin-top:2px;font-size:.75rem;color:var(--text-muted);}
+.epa-badge{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);
+  background:var(--bg-subtle);color:var(--text-muted);border-radius:4px;padding:2px 6px;
+  font-size:.6875rem;font-weight:500;white-space:nowrap;}
+.epa-badge.accent{background:rgba(31,111,235,.1);color:var(--accent-500);border-color:rgba(31,111,235,.25);}
+.epa-badge.gain{background:rgba(11,122,59,.1);color:var(--gain);border-color:rgba(11,122,59,.25);}
+.epa-badge.loss{background:rgba(179,38,30,.1);color:var(--loss);border-color:rgba(179,38,30,.25);}
+.epa-badge.warn{background:rgba(180,83,9,.1);color:var(--warn);border-color:rgba(180,83,9,.25);}
+.epa-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border:1px solid var(--border);background:var(--bg-elevated);border-radius:6px;
+  padding:7px 12px;font-size:.75rem;font-weight:500;cursor:pointer;min-height:34px;
+  transition:background .1s,border-color .1s;}
+.epa-btn:hover{border-color:var(--border-strong);background:var(--bg-subtle);}
+.epa-btn.primary{background:var(--accent-500);border-color:var(--accent-500);color:#fff;}
+.epa-btn.primary:hover{background:var(--accent-600);border-color:var(--accent-600);}
+.epa-btn.danger{color:var(--loss);border-color:rgba(179,38,30,.35);}
+.epa-btn:disabled{opacity:.4;cursor:not-allowed;}
+.epa-btn.small{padding:4px 9px;min-height:28px;font-size:.6875rem;}
+.epa-input,.epa-select{width:100%;background:var(--bg-elevated);border:1px solid var(--border);
+  border-radius:6px;padding:7px 10px;font-size:.8125rem;min-height:34px;}
+.epa-input:focus,.epa-select:focus{outline:none;border-color:var(--accent-500);
+  box-shadow:0 0 0 3px rgba(31,111,235,.1);}
+.epa-label{display:block;font-size:.6875rem;color:var(--text-muted);margin-bottom:4px;}
+.epa-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:52px 22px;text-align:center;}
+.epa-empty .t{font-size:.875rem;font-weight:500;}
+.epa-empty .d{margin-top:5px;font-size:.75rem;color:var(--text-muted);max-width:380px;}
+.epa-skel{border-radius:6px;background:var(--bg-subtle);
+  background-image:linear-gradient(90deg,var(--bg-subtle) 25%,var(--bg-elevated) 50%,var(--bg-subtle) 75%);
+  background-size:200% 100%;animation:epa-shimmer 1.4s infinite linear;}
+@keyframes epa-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes epa-fadeup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.epa-fade{animation:epa-fadeup .26s ease-out both;}
+
+/* Layout helpers */
+.epa-grid{display:grid;gap:14px;}
+.epa-g2{grid-template-columns:repeat(2,minmax(0,1fr));}
+.epa-g3{grid-template-columns:repeat(3,minmax(0,1fr));}
+.epa-g4{grid-template-columns:repeat(4,minmax(0,1fr));}
+.epa-split{display:grid;gap:16px;grid-template-columns:2fr 1fr;}
+.epa-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.epa-between{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;}
+.epa-stack{display:flex;flex-direction:column;gap:16px;}
+.epa-h1{font-size:1.25rem;font-weight:600;letter-spacing:-.01em;}
+.epa-sub{margin-top:3px;font-size:.8125rem;color:var(--text-muted);}
+.epa-sectiontitle{font-size:.75rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text-muted);}
+.epa-divider{height:1px;background:var(--border);margin:12px 0;}
+
+/* ==========================================================================
+   4. DATA GRID — the institutional table (ported .grid-table / .scroll-x)
+   ========================================================================== */
+.epa-scroll{overflow-x:auto;overflow-y:hidden;min-width:0;max-width:100%;
+  -webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;}
+.epa-table{width:100%;border-collapse:separate;border-spacing:0;}
+.epa-table thead th{
+  position:sticky;top:0;z-index:10;background:var(--bg-subtle);
+  border-bottom:1px solid var(--border-strong);
+  font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--text-muted);padding:8px 12px;text-align:right;white-space:nowrap;}
+.epa-table thead th:first-child{text-align:left;position:sticky;left:0;z-index:15;background:var(--bg-subtle);}
+.epa-table tbody td{padding:6px 12px;border-bottom:1px solid var(--border);
+  text-align:right;white-space:nowrap;height:32px;font-size:.8125rem;}
+.epa-table tbody td:first-child{text-align:left;position:sticky;left:0;z-index:5;background:var(--bg-elevated);}
+.epa-table tbody tr:hover td{background:var(--bg-subtle);}
+.epa-table tbody tr.is-subtotal td{font-weight:600;background:rgba(31,111,235,.05);}
+.epa-table tbody tr.is-total td{font-weight:700;background:rgba(31,111,235,.08);
+  border-top:1px solid var(--border-strong);}
+.epa-table td.l,.epa-table th.l{text-align:left;}
+.epa-link{color:var(--accent-500);cursor:pointer;}
+.epa-link:hover{text-decoration:underline;}
+
+/* Tab strips — single scrolling row, never wrap */
+.epa-tabs{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;min-width:0;
+  max-width:100%;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;}
+.epa-tabs::-webkit-scrollbar{display:none;}
+.epa-tab{flex:0 0 auto;white-space:nowrap;margin-bottom:-1px;border:0;background:none;
+  border-bottom:2px solid transparent;padding:8px 12px;font-size:.8125rem;
+  color:var(--text-muted);cursor:pointer;min-height:36px;}
+.epa-tab:hover{color:var(--text);}
+.epa-tab.is-active{border-bottom-color:var(--accent-500);color:var(--accent-500);font-weight:500;}
+
+/* Score bars, verdicts, timeline, chat — ported premium components */
+.epa-bar{height:5px;background:var(--bg-subtle);border-radius:999px;overflow:hidden;}
+.epa-bar>span{display:block;height:100%;border-radius:999px;
+  background:linear-gradient(to right,#1f6feb,#4b8ef5);transition:width .4s cubic-bezier(.4,0,.2,1);}
+.epa-bar.gain>span{background:linear-gradient(to right,#0b7a3b,#15803d);}
+.epa-bar.loss>span{background:linear-gradient(to right,#b3261e,#dc2626);}
+.epa-verdict{border-left:4px solid var(--accent-500);padding:11px 14px;background:var(--bg-subtle);
+  border-radius:0 6px 6px 0;}
+.epa-verdict.bull{border-left-color:var(--gain);} .epa-verdict.bear{border-left-color:var(--loss);}
+.epa-timeline{position:relative;padding-left:26px;padding-bottom:14px;}
+.epa-timeline::before{content:"";position:absolute;left:6px;top:6px;bottom:0;width:2px;background:var(--border);}
+.epa-timeline:last-child::before{display:none;}
+.epa-dot{position:absolute;left:0;top:4px;width:12px;height:12px;border-radius:999px;
+  background:var(--bg-elevated);border:2px solid var(--accent-500);}
+.epa-bubble{max-width:82%;padding:9px 13px;border-radius:8px;font-size:.8125rem;line-height:1.4;}
+.epa-bubble.user{background:var(--accent-500);color:#fff;margin-left:auto;border-bottom-right-radius:2px;}
+.epa-bubble.bot{background:var(--bg-subtle);border:1px solid var(--border);border-bottom-left-radius:2px;}
+.epa-chatlog{display:flex;flex-direction:column;gap:9px;max-height:320px;overflow-y:auto;padding:4px;}
+.epa-chip{border:1px solid var(--border);background:var(--bg-subtle);border-radius:999px;
+  padding:4px 10px;font-size:.6875rem;cursor:pointer;white-space:nowrap;}
+.epa-chip.is-active{background:rgba(31,111,235,.12);border-color:rgba(31,111,235,.35);color:var(--accent-500);}
+.epa-kv{display:flex;justify-content:space-between;gap:12px;padding:5px 0;
+  border-bottom:1px dashed var(--border);font-size:.8125rem;}
+.epa-kv:last-child{border-bottom:0;}
+.epa-note{border:1px solid var(--border);background:var(--bg-subtle);border-radius:6px;
+  padding:9px 11px;font-size:.75rem;color:var(--text-muted);}
+.epa-alert{border-radius:6px;padding:9px 11px;font-size:.75rem;display:flex;gap:8px;}
+.epa-alert.err{border:1px solid rgba(179,38,30,.4);background:rgba(179,38,30,.08);color:var(--loss);}
+.epa-alert.ok{border:1px solid rgba(11,122,59,.4);background:rgba(11,122,59,.08);color:var(--gain);}
+.epa-alert.warn{border:1px solid rgba(180,83,9,.4);background:rgba(180,83,9,.08);color:var(--warn);}
+
+/* Auth screen */
+.epa-auth{display:flex;align-items:center;justify-content:center;padding:48px 16px;min-height:560px;}
+.epa-authbox{width:100%;max-width:380px;}
+.epa-authcard{border:1px solid var(--border);background:var(--bg-elevated);border-radius:10px;
+  padding:20px;box-shadow:0 8px 30px -12px rgba(0,0,0,.2);}
+
+/* Modal */
+.epa-modalwrap{position:fixed;inset:0;z-index:9000;background:rgba(4,10,20,.55);
+  display:flex;align-items:center;justify-content:center;padding:16px;}
+.epa-modal{width:100%;max-width:420px;background:var(--bg-elevated);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 24px 60px -20px rgba(0,0,0,.5);overflow:hidden;}
+
+/* Charts (inline SVG, no library) */
+.epa-chart{width:100%;height:auto;display:block;}
+.epa-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.6875rem;color:var(--text-muted);}
+.epa-swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:5px;}
+.epa-heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;}
+.epa-heatcell{border-radius:5px;padding:8px;color:#fff;font-size:.6875rem;
+  transition:transform .08s,filter .08s;cursor:pointer;}
+.epa-heatcell:hover{transform:scale(1.03);filter:brightness(1.08);}
+
+/* Scrollbars */
+.epa ::-webkit-scrollbar{width:10px;height:10px;}
+.epa ::-webkit-scrollbar-track{background:var(--bg-subtle);}
+.epa ::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:5px;border:2px solid var(--bg-subtle);}
+
+/* ==========================================================================
+   5. RESPONSIVE — mobile drawer + density (mirrors the app's 1024/400 bands)
+   ========================================================================== */
+@media (max-width:1023px){
+  .epa-side{position:fixed;left:0;top:0;bottom:0;z-index:9500;transform:translateX(-105%);
+    transition:transform .22s ease;max-height:100vh;box-shadow:0 0 40px rgba(0,0,0,.4);}
+  .epa-side.is-open{transform:none;}
+  .epa-backdrop{position:fixed;inset:0;background:rgba(4,10,20,.5);z-index:9400;}
+  .epa-burger{display:inline-flex;}
+  .epa-g4{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .epa-g3{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .epa-split{grid-template-columns:minmax(0,1fr);}
+  .epa-table thead th{padding:7px 8px;font-size:.625rem;}
+  .epa-table tbody td{padding:6px 8px;height:30px;font-size:.75rem;}
+  .epa .num{font-size:.75rem;}
+  .epa-table tbody td:first-child,.epa-table thead th:first-child{
+    box-shadow:1px 0 0 0 var(--border);max-width:11.5rem;overflow:hidden;text-overflow:ellipsis;}
+  .epa-content{padding:14px 12px 40px;}
+  .epa ::-webkit-scrollbar{width:6px;height:6px;}
+}
+@media (max-width:640px){
+  .epa-g4,.epa-g3,.epa-g2{grid-template-columns:minmax(0,1fr);}
+  .epa-h1{font-size:1.0625rem;}
+}
+@media (max-width:400px){
+  .epa-table thead th{padding:6px 7px;} .epa-table tbody td{padding:5px 7px;}
+  .epa-table tbody td:first-child{max-width:9rem;} .epa .num{font-size:.6875rem;}
+}
+@media print{ .epa-side,.epa-topbar{display:none;} }
+]]></b:skin>
+</head>
+<body>
+
+<div class='epa' id='epa-root'>
+<div id='epa-app'>
+<div class='epa-content'><div class='epa-skel' style='height:220px'></div></div>
+</div>
+<noscript>
+<div class='epa-noscript'><strong>EquityPilotAI</strong><br/>
+This research prototype runs entirely in your browser. Please enable JavaScript to use it.
+No server, API or network access is required.</div>
+</noscript>
+</div>
+
+<b:section class='epa-host' id='main' maxwidgets='1' showaddelement='no'>
+<b:widget id='HTML1' locked='false' title='EquityPilotAI' type='HTML' visible='false'>
+<b:includable id='main'><div class='epa-host-slot'></div></b:includable>
+</b:widget>
+</b:section>
+
+<script type='text/javascript'>
+//<![CDATA[
+(function () {
+  "use strict";
+
+  /* ==========================================================================
+     A.  MOCK DATABASE   (replace with server data — shapes match the API)
+     ========================================================================== */
+
+  /** Deterministic pseudo-random so every reload shows identical figures. */
+  function seeded(seed) {
+    var s = seed % 2147483647; if (s <= 0) s += 2147483646;
+    return function () { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+  }
+
+  var FISCAL_YEARS = [2019, 2020, 2021, 2022, 2023, 2024, 2025];
+
+  /** Company master — mirrors CompanySummary in lib/types.ts */
+  var COMPANY_SEED = [
+    { id: "MGL",        ticker: "MGL",        name: "Mahanagar Gas Ltd",                      sector: "Utilities",              industry: "Gas Distribution",              rev: 7148,   mgn: 0.243, price: 1418.35,  chg: 12.85,  cap: 14012,  shares: 9.88,  inc: 1995, isin: "INE002S01010" },
+    { id: "M&M",        ticker: "M&M",        name: "Mahindra & Mahindra Ltd",                sector: "Automobile",             industry: "Passenger Vehicles",            rev: 139078, mgn: 0.138, price: 2874.60,  chg: 31.40,  cap: 357420, shares: 124.3, inc: 1945, isin: "INE101A01026" },
+    { id: "J&KBANK",    ticker: "J&KBANK",    name: "Jammu & Kashmir Bank Ltd",               sector: "Financial Services",     industry: "Public Sector Bank",            rev: 11842,  mgn: 0.207, price: 104.75,   chg: -1.35,  cap: 11530,  shares: 110.1, inc: 1938, isin: "INE168A01041" },
+    { id: "M&MFIN",     ticker: "M&MFIN",     name: "Mahindra & Mahindra Financial Services", sector: "Financial Services",     industry: "Non Banking Financial Company", rev: 15230,  mgn: 0.286, price: 272.40,   chg: 3.15,   cap: 33660,  shares: 123.6, inc: 1991, isin: "INE774D01024" },
+    { id: "MINDACORP",  ticker: "MINDACORP",  name: "Minda Corporation Ltd",                  sector: "Automobile",             industry: "Auto Components",               rev: 4699,   mgn: 0.116, price: 561.20,   chg: 7.95,   cap: 13418,  shares: 23.9,  inc: 1985, isin: "INE842C01021" },
+    { id: "RELIANCE",   ticker: "RELIANCE",   name: "Reliance Industries Ltd",                sector: "Energy",                 industry: "Refineries & Petrochemicals",   rev: 792000, mgn: 0.152, price: 1428.60,  chg: 12.35,  cap: 1932000,shares: 1353,  inc: 1973, isin: "INE002A01018" },
+    { id: "TCS",        ticker: "TCS",        name: "Tata Consultancy Services Ltd",          sector: "Information Technology", industry: "IT Services & Consulting",      rev: 240893, mgn: 0.268, price: 3167.45,  chg: -21.80, cap: 1146000,shares: 362,   inc: 1968, isin: "INE467B01029" },
+    { id: "HDFCBANK",   ticker: "HDFCBANK",   name: "HDFC Bank Ltd",                          sector: "Financial Services",     industry: "Private Sector Bank",           rev: 307581, mgn: 0.312, price: 1684.20,  chg: 8.15,   cap: 1284000,shares: 762,   inc: 1994, isin: "INE040A01034" },
+    { id: "INFY",       ticker: "INFY",       name: "Infosys Ltd",                            sector: "Information Technology", industry: "IT Services & Consulting",      rev: 153670, mgn: 0.241, price: 1548.90,  chg: 6.70,   cap: 642000, shares: 415,   inc: 1981, isin: "INE009A01021" },
+    { id: "ITC",        ticker: "ITC",        name: "ITC Ltd",                                sector: "Fast Moving Consumer Goods", industry: "Diversified FMCG",          rev: 69466,  mgn: 0.352, price: 412.75,   chg: -1.95,  cap: 516000, shares: 1250,  inc: 1910, isin: "INE154A01025" },
+    { id: "LT",         ticker: "LT",         name: "Larsen & Toubro Ltd",                    sector: "Capital Goods",          industry: "Engineering & Construction",    rev: 221113, mgn: 0.114, price: 3592.10,  chg: 44.25,  cap: 494000, shares: 137,   inc: 1946, isin: "INE018A01030" },
+    { id: "MARUTI",     ticker: "MARUTI",     name: "Maruti Suzuki India Ltd",                sector: "Automobile",             industry: "Passenger Vehicles",            rev: 141858, mgn: 0.118, price: 12140.00, chg: -86.40, cap: 381000, shares: 31,    inc: 1981, isin: "INE585B01010" },
+    { id: "SUNPHARMA",  ticker: "SUNPHARMA",  name: "Sun Pharmaceutical Industries Ltd",      sector: "Healthcare",             industry: "Pharmaceuticals",               rev: 48497,  mgn: 0.272, price: 1742.30,  chg: 15.05,  cap: 418000, shares: 240,   inc: 1983, isin: "INE044A01036" },
+    { id: "TITAN",      ticker: "TITAN",      name: "Titan Company Ltd",                      sector: "Consumer Durables",      industry: "Gems & Jewellery",              rev: 51084,  mgn: 0.104, price: 3418.00,  chg: 27.90,  cap: 303000, shares: 89,    inc: 1984, isin: "INE280A01028" },
+    { id: "ICICIBANK",  ticker: "ICICIBANK",  name: "ICICI Bank Ltd",                         sector: "Financial Services",     industry: "Private Sector Bank",           rev: 236038, mgn: 0.298, price: 1246.85,  chg: 9.45,   cap: 878000, shares: 704,   inc: 1994, isin: "INE090A01021" }
+  ];
+
+  /** Builds a full statement set for a company. Deterministic per ticker. */
+  function buildFinancials(c) {
+    var rnd = seeded(c.ticker.length * 7919 + c.rev % 9973);
+    var years = [], rev = c.rev / Math.pow(1.11, FISCAL_YEARS.length - 1);
+    for (var i = 0; i < FISCAL_YEARS.length; i++) {
+      var fy = FISCAL_YEARS[i];
+      var growth = 0.06 + rnd() * 0.13;
+      rev = i === 0 ? rev : rev * (1 + growth);
+      var margin = c.mgn * (0.9 + rnd() * 0.2);
+      var ebitda = rev * margin;
+      var dep = rev * (0.031 + rnd() * 0.018);
+      var ebit = ebitda - dep;
+      var interest = rev * (0.009 + rnd() * 0.012);
+      var otherInc = rev * (0.006 + rnd() * 0.008);
+      var pbt = ebit - interest + otherInc;
+      var tax = pbt * (0.235 + rnd() * 0.035);
+      var pat = pbt - tax;
+      var eps = pat / c.shares;
+
+      var equity = rev * (0.55 + rnd() * 0.35);
+      var debt = rev * (0.14 + rnd() * 0.20);
+      var cash = rev * (0.07 + rnd() * 0.11);
+      var netBlock = rev * (0.42 + rnd() * 0.25);
+      var cwip = rev * (0.03 + rnd() * 0.05);
+      var investments = rev * (0.09 + rnd() * 0.12);
+      var inventory = rev * (0.08 + rnd() * 0.06);
+      var receivable = rev * (0.09 + rnd() * 0.05);
+      var otherCA = rev * (0.05 + rnd() * 0.04);
+      var payable = rev * (0.11 + rnd() * 0.06);
+      var otherCL = rev * (0.05 + rnd() * 0.03);
+      var totalAssets = netBlock + cwip + investments + inventory + receivable + otherCA + cash;
+      var otherLiab = totalAssets - equity - debt - payable - otherCL;
+
+      var cfo = pat + dep - rev * (0.012 + rnd() * 0.02);
+      var capex = -(rev * (0.05 + rnd() * 0.045));
+      var cfi = capex - rev * (0.012 + rnd() * 0.02);
+      var dividend = -(pat * (0.16 + rnd() * 0.18));
+      var cff = dividend + rev * (0.004 + rnd() * 0.02) * (rnd() > 0.55 ? 1 : -1);
+
+      years.push({
+        fy: fy,
+        revenue: rev, other_income: otherInc, ebitda: ebitda, ebitda_margin: ebitda / rev,
+        depreciation: dep, ebit: ebit, interest: interest, pbt: pbt, tax: tax,
+        tax_rate: tax / pbt, pat: pat, pat_margin: pat / rev, eps: eps,
+        dps: Math.max(0.5, eps * (0.18 + rnd() * 0.14)),
+        equity: equity, debt: debt, cash: cash, net_debt: debt - cash,
+        net_block: netBlock, cwip: cwip, investments: investments,
+        inventory: inventory, receivables: receivable, other_ca: otherCA,
+        payables: payable, other_cl: otherCL, other_liab: otherLiab,
+        total_assets: totalAssets,
+        cfo: cfo, capex: capex, cfi: cfi, cff: cff, fcf: cfo + capex,
+        net_cash_change: cfo + cfi + cff
+      });
+    }
+    return years;
+  }
+
+  /** Ratio pack — mirrors /companies/{t}/ratios */
+  function buildRatios(c, years) {
+    return years.map(function (y, i) {
+      var prev = i > 0 ? years[i - 1] : y;
+      var avgEquity = (y.equity + prev.equity) / 2;
+      var capEmployed = y.equity + y.debt;
+      return {
+        fy: y.fy,
+        roe: y.pat / avgEquity,
+        roce: y.ebit / capEmployed,
+        roa: y.pat / y.total_assets,
+        ebitda_margin: y.ebitda_margin,
+        pat_margin: y.pat_margin,
+        gross_margin: y.ebitda_margin + 0.14,
+        debt_equity: y.debt / y.equity,
+        net_debt_ebitda: y.net_debt / y.ebitda,
+        interest_cover: y.ebit / y.interest,
+        current_ratio: (y.inventory + y.receivables + y.other_ca + y.cash) / (y.payables + y.other_cl),
+        quick_ratio: (y.receivables + y.cash) / (y.payables + y.other_cl),
+        asset_turnover: y.revenue / y.total_assets,
+        inventory_days: (y.inventory / y.revenue) * 365,
+        receivable_days: (y.receivables / y.revenue) * 365,
+        payable_days: (y.payables / y.revenue) * 365,
+        cash_conversion: y.cfo / y.ebitda,
+        pe: (c.price * c.shares) / y.pat,
+        pb: (c.price * c.shares) / y.equity,
+        ev_ebitda: (c.price * c.shares + y.net_debt) / y.ebitda,
+        dividend_payout: Math.abs(y.dps / y.eps)
+      };
+    });
+  }
+
+  /** Daily price series for the market-data chart. */
+  function buildPriceSeries(c) {
+    var rnd = seeded(c.ticker.length * 104729 + Math.round(c.price));
+    var out = [], p = c.price * 0.82, day = new Date(2025, 7, 20);
+    for (var i = 179; i >= 0; i--) {
+      p = p * (1 + (rnd() - 0.485) * 0.021);
+      var d = new Date(day.getTime() - i * 86400000);
+      out.push({ date: d.toISOString().slice(0, 10), close: p });
+    }
+    out[out.length - 1].close = c.price;
+    return out;
+  }
+
+  var NEWS_TEMPLATES = [
+    { h: "{N} posts {P}% YoY rise in consolidated revenue for Q1 FY26", s: "Business Standard", t: "Results",   sent: "positive" },
+    { h: "Brokerages raise target price on {T} citing margin expansion",  s: "Mint",              t: "Analyst",  sent: "positive" },
+    { h: "{N} board approves capex of Rs {C} crore for capacity addition",s: "Economic Times",    t: "Corporate",sent: "neutral"  },
+    { h: "{T} shares slip as input cost inflation weighs on guidance",    s: "Reuters India",     t: "Market",   sent: "negative" },
+    { h: "{N} announces interim dividend of Rs {D} per share",            s: "BSE Filing",        t: "Corporate",sent: "positive" },
+    { h: "Sector outlook: {S} demand steady into H2, says industry body", s: "CNBC-TV18",         t: "Sector",   sent: "neutral"  },
+    { h: "{N} completes acquisition, expects Rs {C} crore revenue accretion", s: "PTI",           t: "M&A",      sent: "positive" },
+    { h: "Regulator seeks clarification from {T} on related-party disclosure", s: "Moneycontrol", t: "Governance", sent: "negative" }
+  ];
+
+  var AI_CAPABILITIES = [
+    { key: "investment_thesis", label: "Investment Thesis" },
+    { key: "bull_bear",         label: "Bull / Bear Case" },
+    { key: "moat",              label: "Competitive Moat" },
+    { key: "risk",              label: "Risk Assessment" },
+    { key: "quality",           label: "Earnings Quality" },
+    { key: "management",        label: "Management Commentary" }
+  ];
+
+  /** Assemble the in-memory database. */
+  var DB = { companies: [], byId: {}, byTicker: {} };
+  COMPANY_SEED.forEach(function (c, idx) {
+    var years = buildFinancials(c);
+    var latest = years[years.length - 1];
+    var rec = {
+      id: c.id, ticker: c.ticker, name: c.name, sector: c.sector, industry: c.industry,
+      exchange: "NSE", isin: c.isin, incorporated_year: c.inc,
+      website: "https://www." + c.ticker.toLowerCase() + ".example.com",
+      market_cap: c.cap, shares: c.shares,
+      current_price: c.price,
+      market: {
+        live_price: c.price, change: c.chg,
+        change_percent: c.chg / (c.price - c.chg),
+        day_high: c.price * 1.008, day_low: c.price * 0.988,
+        open: c.price - c.chg * 0.6, prev_close: c.price - c.chg,
+        week52_high: c.price * 1.24, week52_low: c.price * 0.72,
+        volume: Math.round(1200000 + (idx + 1) * 386411 % 5400000),
+        avg_volume_10d: Math.round(1500000 + (idx + 1) * 511337 % 4800000),
+        vwap: c.price * 0.998,
+        price_source: "Demo market feed (mock)",
+        last_updated: "2025-08-20T15:30:00+05:30"
+      },
+      years: years, ratios: buildRatios(c, years), prices: buildPriceSeries(c),
+      latest: latest,
+      shareholding: [
+        { group: "Promoters",        pct: 42.7 - (idx % 5) * 3.1 },
+        { group: "FII",              pct: 21.4 + (idx % 4) * 1.7 },
+        { group: "DII",              pct: 17.9 - (idx % 3) * 1.2 },
+        { group: "Public & others",  pct: 0 }
+      ],
+      score: {
+        overall: 58 + ((idx * 13) % 34),
+        categories: [
+          { key: "Growth",       value: 52 + ((idx * 7) % 42) },
+          { key: "Profitability",value: 55 + ((idx * 11) % 40) },
+          { key: "Balance sheet",value: 60 + ((idx * 5) % 35) },
+          { key: "Cash flow",    value: 51 + ((idx * 17) % 44) },
+          { key: "Valuation",    value: 44 + ((idx * 19) % 46) },
+          { key: "Governance",   value: 63 + ((idx * 3) % 31) }
+        ]
+      }
+    };
+    var sh = rec.shareholding;
+    sh[3].pct = Math.round((100 - sh[0].pct - sh[1].pct - sh[2].pct) * 10) / 10;
+    DB.companies.push(rec);
+    DB.byId[rec.id] = rec;
+    DB.byTicker[rec.ticker] = rec;
+  });
+
+  /* ==========================================================================
+     B.  API LAYER  — the ONLY place that produces data.
+         Every method below documents the real endpoint that replaces it.
+         To go live: keep the signatures, swap the bodies for fetch().
+     ========================================================================== */
+
+  var CONFIG = {
+    API_BASE: "",            // e.g. "https://api.equitypilot.ai"
+    USE_MOCK: true,          // flip to false once endpoints exist
+    LATENCY_MS: 220,         // simulated network delay
+    STORAGE_PREFIX: "epa:"   // localStorage namespace
+  };
+
+  function delay(value) {
+    return new Promise(function (resolve) {
+      setTimeout(function () { resolve(JSON.parse(JSON.stringify(value))); }, CONFIG.LATENCY_MS);
+    });
+  }
+  /* Live implementation helper, unused while USE_MOCK is true.
+     function http(path, init){
+       return fetch(CONFIG.API_BASE + path, Object.assign({credentials:"include"}, init))
+         .then(function(r){ if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+     } */
+
+  function store(key, fallback) {
+    try {
+      var raw = window.localStorage.getItem(CONFIG.STORAGE_PREFIX + key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (e) { return fallback; }
+  }
+  function save(key, value) {
+    try { window.localStorage.setItem(CONFIG.STORAGE_PREFIX + key, JSON.stringify(value)); } catch (e) {}
+  }
+
+  var API = {
+
+    /* ---- Auth (frontend only; no auth backend in this prototype) ---------- */
+    // REAL: POST /api/v1/auth/login   -> { access_token, user }
+    login: function (email, password) {
+      if (!email || !password) return Promise.reject(new Error("Enter an email address and password."));
+      if (password.length < 6) return Promise.reject(new Error("Incorrect email or password."));
+      var user = { name: email.split("@")[0], email: email, role: "analyst", is_demo: true };
+      save("session", user);
+      return delay(user);
+    },
+    // REAL: POST /api/v1/auth/password-reset  { email }
+    requestPasswordReset: function (email) {
+      if (!email || email.indexOf("@") === -1) {
+        return Promise.reject(new Error("Enter the email address on your account."));
+      }
+      return delay({ message: "If that address is registered, a reset link has been sent." });
+    },
+    // REAL: POST /api/v1/auth/register
+    register: function (name, email, password) {
+      if (!name || !email || !password) return Promise.reject(new Error("All fields are required."));
+      if (password.length < 8) return Promise.reject(new Error("Password must be at least 8 characters."));
+      var user = { name: name, email: email, role: "analyst", is_demo: true };
+      save("session", user);
+      return delay(user);
+    },
+    // REAL: GET /api/v1/auth/me
+    me: function () { return store("session", null); },
+    logout: function () { save("session", null); },
+
+    /* ---- Dashboard -------------------------------------------------------- */
+    // REAL: GET /api/v1/dashboard/overview
+    dashboard: function () {
+      var sectors = {};
+      DB.companies.forEach(function (c) { sectors[c.sector] = (sectors[c.sector] || 0) + 1; });
+      var sectorList = Object.keys(sectors).map(function (s) { return { sector: s, count: sectors[s] }; })
+        .sort(function (a, b) { return b.count - a.count; });
+      var byCap = DB.companies.slice().sort(function (a, b) { return b.market_cap - a.market_cap; });
+      var movers = DB.companies.slice().sort(function (a, b) {
+        return b.market.change_percent - a.market.change_percent;
+      });
+      return delay({
+        coverage: {
+          companies: DB.companies.length,
+          companies_with_financials: DB.companies.length,
+          sectors: sectorList.length,
+          fact_rows: DB.companies.length * FISCAL_YEARS.length * 46
+        },
+        indices: [
+          { name: "NIFTY 50",       value: 24812.40, change: 118.65, change_percent: 0.0048 },
+          { name: "SENSEX",         value: 81244.10, change: 392.20, change_percent: 0.0048 },
+          { name: "NIFTY BANK",     value: 51488.75, change: -164.30, change_percent: -0.0032 },
+          { name: "INDIA VIX",      value: 12.44,    change: -0.38,  change_percent: -0.0296 }
+        ],
+        largest: byCap.slice(0, 8),
+        gainers: movers.slice(0, 4),
+        losers: movers.slice(-4).reverse(),
+        sectors: sectorList,
+        recently_added: DB.companies.slice(-8).reverse()
+      });
+    },
+
+    /* ---- Company search / list ------------------------------------------- */
+    // REAL: GET /api/v1/companies/sectors
+    sectors: function () {
+      var set = {};
+      DB.companies.forEach(function (c) { set[c.sector] = 1; });
+      return delay(Object.keys(set).sort());
+    },
+    // REAL: GET /api/v1/companies?page=&page_size=&sector=
+    listCompanies: function (page, pageSize, sector) {
+      var rows = DB.companies.filter(function (c) { return !sector || c.sector === sector; });
+      var start = (page - 1) * pageSize;
+      return delay({ total: rows.length, page: page, page_size: pageSize,
+                     results: rows.slice(start, start + pageSize) });
+    },
+    // REAL: GET /api/v1/companies/search?q=&limit=
+    searchCompanies: function (q, limit) {
+      var needle = String(q || "").trim().toLowerCase();
+      var rows = DB.companies.filter(function (c) {
+        return c.name.toLowerCase().indexOf(needle) !== -1 ||
+               c.ticker.toLowerCase().indexOf(needle) !== -1 ||
+               c.sector.toLowerCase().indexOf(needle) !== -1 ||
+               c.industry.toLowerCase().indexOf(needle) !== -1;
+      });
+      return delay({ total: rows.length, results: rows.slice(0, limit || 20) });
+    },
+    /** Synchronous variant for the type-ahead palette (no spinner needed). */
+    searchSync: function (q, limit) {
+      var needle = String(q || "").trim().toLowerCase();
+      if (!needle) return [];
+      return DB.companies.filter(function (c) {
+        return c.name.toLowerCase().indexOf(needle) !== -1 ||
+               c.ticker.toLowerCase().indexOf(needle) !== -1 ||
+               c.sector.toLowerCase().indexOf(needle) !== -1;
+      }).slice(0, limit || 7);
+    },
+
+    /* ---- Company profile & statements ------------------------------------ */
+    // REAL: GET /api/v1/companies/{id}/profile
+    companyProfile: function (id) {
+      var c = DB.byId[id];
+      if (!c) return Promise.reject(new Error("Company not found"));
+      var y = c.latest;
+      return delay({
+        company: c,
+        coverage: { has_data: true, items_populated: FISCAL_YEARS.length * 46, fiscal_years: FISCAL_YEARS },
+        latest_fiscal_year: y.fy,
+        revenue: y.revenue, ebitda: y.ebitda, ebitda_margin: y.ebitda_margin,
+        pat: y.pat, pat_margin: y.pat_margin, eps: y.eps,
+        equity: y.equity, debt: y.debt, cash: y.cash, net_debt: y.net_debt,
+        cfo: y.cfo, fcf: y.fcf,
+        description: c.name + " is a " + c.sector.toLowerCase() + " company listed on the NSE and BSE, " +
+          "operating principally in " + c.industry.toLowerCase() + ". Figures shown in this prototype are " +
+          "demonstration data generated in the browser and are not investment advice."
+      });
+    },
+    // REAL: GET /api/v1/companies/{ticker}/income-statement
+    incomeStatement: function (ticker) { return delay(statement(ticker, "income")); },
+    // REAL: GET /api/v1/companies/{ticker}/balance-sheet
+    balanceSheet:    function (ticker) { return delay(statement(ticker, "balance")); },
+    // REAL: GET /api/v1/companies/{ticker}/cash-flow
+    cashFlow:        function (ticker) { return delay(statement(ticker, "cash")); },
+    // REAL: GET /api/v1/companies/{ticker}/financials
+    financials: function (ticker) {
+      var c = DB.byTicker[ticker];
+      var first = c.years[0], last = c.latest, n = c.years.length - 1;
+      var cagr5 = Math.pow(last.revenue / c.years[Math.max(0, n - 5)].revenue, 1 / Math.min(5, n)) - 1;
+      return delay({
+        has_data: true,
+        summary: c.years, ratios: c.ratios,
+        revenue_cagr_5y: cagr5,
+        revenue_cagr_full: Math.pow(last.revenue / first.revenue, 1 / n) - 1,
+        pat_cagr_full: Math.pow(last.pat / first.pat, 1 / n) - 1,
+        warnings: [
+          "Prototype data set — figures are generated locally for UI testing.",
+          "Consolidated basis assumed; no segment reconciliation performed."
+        ]
+      });
+    },
+    // REAL: GET /api/v1/companies/{ticker}/ratios
+    ratios: function (ticker) { return delay({ has_data: true, ratios: DB.byTicker[ticker].ratios }); },
+    // REAL: GET /api/v1/companies/{ticker}/shareholding
+    shareholding: function (ticker) { return delay(DB.byTicker[ticker].shareholding); },
+
+    /* ---- Market data ------------------------------------------------------ */
+    // REAL: GET /api/v1/market/{ticker}/quote  +  /history?range=6M
+    marketData: function (ticker) {
+      var c = DB.byTicker[ticker];
+      return delay({ quote: c.market, market_cap: c.market_cap, shares: c.shares,
+                     series: c.prices, ratios: c.ratios[c.ratios.length - 1] });
+    },
+
+    /* ---- AI analysis (mock generator — no model call, no paid API) -------- */
+    // REAL: POST /api/v1/companies/{ticker}/ai/analyse  { capability }
+    aiAnalyse: function (ticker, capability) {
+      var c = DB.byTicker[ticker], y = c.latest, r = c.ratios[c.ratios.length - 1];
+      return delay(mockAnalysis(c, y, r, capability));
+    },
+    // REAL: POST /api/v1/companies/{ticker}/ai/chat  { question }
+    aiChat: function (ticker, question) {
+      var c = DB.byTicker[ticker], y = c.latest, r = c.ratios[c.ratios.length - 1];
+      return delay({
+        answer: "Mock response for " + c.ticker + ". On the latest reported year (" + fy(y.fy) + "), " +
+          "revenue stood at Rs " + crore(y.revenue) + " cr with an EBITDA margin of " + pct(y.ebitda_margin) +
+          " and ROCE of " + pct(r.roce) + ". Net debt to EBITDA is " + mult(r.net_debt_ebitda) + ". " +
+          "Once the AI endpoint is connected this paragraph is replaced by a grounded, cited answer.",
+        citations: [
+          { label: fy(y.fy) + " Annual Report, p.84", kind: "filing" },
+          { label: "Q4 " + fy(y.fy) + " earnings call transcript", kind: "transcript" }
+        ],
+        meta: { provider: "mock-local", latency_ms: 180, tokens: 412, question: question }
+      });
+    },
+
+    /* ---- News ------------------------------------------------------------- */
+    // REAL: GET /api/v1/companies/{ticker}/news?limit=
+    news: function (ticker) {
+      var c = DB.byTicker[ticker], y = c.latest, out = [], rnd = seeded(c.ticker.length * 31337);
+      for (var i = 0; i < NEWS_TEMPLATES.length; i++) {
+        var t = NEWS_TEMPLATES[i];
+        var d = new Date(2025, 7, 20 - i * 3, 9 + (i % 8), (i * 17) % 60);
+        out.push({
+          id: c.id + "-n" + i,
+          headline: t.h.replace("{N}", c.name).replace("{T}", c.ticker).replace("{S}", c.sector)
+                      .replace("{P}", (6 + Math.round(rnd() * 18)))
+                      .replace("{C}", plain(Math.round(y.revenue * 0.06)))
+                      .replace("{D}", (Math.max(1, y.dps)).toFixed(1)),
+          source: t.s, category: t.t, sentiment: t.sent,
+          published_at: d.toISOString(),
+          summary: "Demo summary: this item is generated locally so the news rail can be laid out and " +
+                   "tested without a provider. Replace API.news() with the live feed endpoint."
+        });
+      }
+      return delay(out);
+    },
+
+    /* ---- Peer comparison --------------------------------------------------- */
+    // REAL: GET /api/v1/companies/{ticker}/peers?limit=
+    peers: function (ticker, limit) {
+      var c = DB.byTicker[ticker];
+      var peers = DB.companies.filter(function (p) { return p.sector === c.sector && p.id !== c.id; });
+      if (peers.length < 4) {
+        DB.companies.forEach(function (p) {
+          if (peers.length < 5 && p.id !== c.id && peers.indexOf(p) === -1) peers.push(p);
+        });
+      }
+      var pack = [c].concat(peers.slice(0, (limit || 5)));
+      return delay(pack.map(function (p) {
+        var r = p.ratios[p.ratios.length - 1], y = p.latest;
+        return {
+          id: p.id, ticker: p.ticker, name: p.name, sector: p.sector, is_self: p.id === c.id,
+          market_cap: p.market_cap, price: p.current_price,
+          revenue: y.revenue, ebitda_margin: y.ebitda_margin, pat_margin: y.pat_margin,
+          roe: r.roe, roce: r.roce, pe: r.pe, pb: r.pb, ev_ebitda: r.ev_ebitda,
+          debt_equity: r.debt_equity, score: p.score.overall
+        };
+      }));
+    },
+
+    /* ---- Watchlist (localStorage stands in for the DB) --------------------- */
+    // REAL: GET /api/v1/watchlists
+    watchlists: function () { return delay(readWatchlists()); },
+    // REAL: POST /api/v1/watchlists
+    createWatchlist: function (name, description) {
+      var lists = readWatchlists();
+      var wl = { id: Date.now(), name: name, description: description || "", entries: [] };
+      lists.push(wl); save("watchlists", lists);
+      return delay(wl);
+    },
+    // REAL: PATCH /api/v1/watchlists/{id}
+    renameWatchlist: function (id, name) {
+      var lists = readWatchlists();
+      lists.forEach(function (w) { if (w.id === id) w.name = name; });
+      save("watchlists", lists); return delay(true);
+    },
+    // REAL: DELETE /api/v1/watchlists/{id}
+    deleteWatchlist: function (id) {
+      save("watchlists", readWatchlists().filter(function (w) { return w.id !== id; }));
+      return delay(true);
+    },
+    // REAL: POST /api/v1/watchlists/{id}  { ticker, buy_below, note }
+    addToWatchlist: function (id, entry) {
+      var lists = readWatchlists(), ok = false;
+      lists.forEach(function (w) {
+        if (w.id !== id) return;
+        if (!DB.byTicker[entry.ticker]) return;
+        if (w.entries.some(function (e) { return e.ticker === entry.ticker; })) return;
+        w.entries.push({ entry_id: Date.now() + Math.floor(Math.random() * 999),
+                         ticker: entry.ticker, buy_below: entry.buy_below || null,
+                         note: entry.note || "", added_at: new Date().toISOString() });
+        ok = true;
+      });
+      save("watchlists", lists);
+      if (!ok) return Promise.reject(new Error("Unknown ticker, or it is already on this list."));
+      return delay(true);
+    },
+    // REAL: DELETE /api/v1/watchlists/{id}/entries/{entryId}
+    removeFromWatchlist: function (id, entryId) {
+      var lists = readWatchlists();
+      lists.forEach(function (w) {
+        if (w.id === id) w.entries = w.entries.filter(function (e) { return e.entry_id !== entryId; });
+      });
+      save("watchlists", lists); return delay(true);
+    },
+    /** Rows joined with live-ish market figures — REAL: GET /api/v1/watchlists/{id} */
+    watchlistRows: function (id) {
+      var wl = readWatchlists().filter(function (w) { return w.id === id; })[0];
+      if (!wl) return delay([]);
+      return delay(wl.entries.map(function (e) {
+        var c = DB.byTicker[e.ticker];
+        var r = c.ratios[c.ratios.length - 1];
+        var buyBelow = e.buy_below || c.current_price * 0.88;
+        return {
+          entry_id: e.entry_id, id: c.id, ticker: c.ticker, name: c.name, sector: c.sector,
+          price: c.current_price, change_percent: c.market.change_percent,
+          market_cap: c.market_cap, pe: r.pe, roe: r.roe,
+          buy_below: buyBelow, derived: !e.buy_below,
+          upside: (buyBelow - c.current_price) / c.current_price,
+          note: e.note, added_at: e.added_at
+        };
+      }));
+    }
+  };
+
+  function readWatchlists() {
+    var lists = store("watchlists", null);
+    if (!lists) {
+      lists = [{
+        id: 1, name: "Core coverage", description: "Names under active research",
+        entries: [
+          { entry_id: 11, ticker: "TCS",      buy_below: 2950, note: "Add on IT spend recovery", added_at: "2025-07-11T09:20:00Z" },
+          { entry_id: 12, ticker: "HDFCBANK", buy_below: null, note: "Deposit growth watch",     added_at: "2025-07-22T06:05:00Z" },
+          { entry_id: 13, ticker: "ITC",      buy_below: 395,  note: "Cigarette tax risk",       added_at: "2025-08-02T11:40:00Z" }
+        ]
+      }, { id: 2, name: "Tactical ideas", description: "Short-horizon setups", entries: [] }];
+      save("watchlists", lists);
+    }
+    return lists;
+  }
+
+  function statement(ticker, kind) {
+    var c = DB.byTicker[ticker], y = c.years;
+    var rows;
+    if (kind === "income") {
+      rows = [
+        L("Revenue from operations", "revenue"), L("Other income", "other_income"),
+        L("EBITDA", "ebitda", "subtotal"), L("Depreciation & amortisation", "depreciation"),
+        L("EBIT", "ebit", "subtotal"), L("Finance cost", "interest"),
+        L("Profit before tax", "pbt", "subtotal"), L("Tax expense", "tax"),
+        L("Profit after tax", "pat", "total"), L("EPS (basic, Rs)", "eps", "", 2),
+        L("DPS (Rs)", "dps", "", 2)
+      ];
+    } else if (kind === "balance") {
+      rows = [
+        L("Equity share capital + reserves", "equity"), L("Borrowings", "debt"),
+        L("Trade payables", "payables"), L("Other liabilities", "other_liab"),
+        L("Other current liabilities", "other_cl"),
+        L("Total equity & liabilities", "total_assets", "total"),
+        L("Net block (PPE)", "net_block"), L("Capital work in progress", "cwip"),
+        L("Investments", "investments"), L("Inventories", "inventory"),
+        L("Trade receivables", "receivables"), L("Cash & equivalents", "cash"),
+        L("Other current assets", "other_ca"),
+        L("Total assets", "total_assets", "total")
+      ];
+    } else {
+      rows = [
+        L("Cash flow from operations", "cfo", "subtotal"), L("Capital expenditure", "capex"),
+        L("Cash flow from investing", "cfi", "subtotal"), L("Cash flow from financing", "cff", "subtotal"),
+        L("Net change in cash", "net_cash_change", "total"), L("Free cash flow", "fcf", "total")
+      ];
+    }
+    function L(label, key, tone, dec) { return { label: label, key: key, tone: tone || "", decimals: dec }; }
+    return {
+      has_data: true, unit: "Rs crore", basis: "Consolidated",
+      fiscal_years: y.map(function (r) { return r.fy; }),
+      rows: rows.map(function (r) {
+        return { label: r.label, tone: r.tone, decimals: r.decimals,
+                 values: y.map(function (row) { return row[r.key]; }) };
+      })
+    };
+  }
+
+  function mockAnalysis(c, y, r, capability) {
+    var fyl = fy(y.fy);
+    var packs = {
+      investment_thesis: {
+        verdict: r.roce > 0.18 ? "Constructive" : "Neutral",
+        tone: r.roce > 0.18 ? "bull" : "base",
+        summary: c.name + " compounds revenue in the low-to-mid teens with a " + pct(y.ebitda_margin) +
+          " EBITDA margin in " + fyl + ". Return on capital employed of " + pct(r.roce) +
+          " sits above the estimated cost of capital, so incremental growth is value-accretive.",
+        points: [
+          "Revenue of Rs " + crore(y.revenue) + " cr in " + fyl + ", PAT of Rs " + crore(y.pat) + " cr (" + pct(y.pat_margin) + " margin).",
+          "Cash conversion of " + pct(r.cash_conversion) + " of EBITDA indicates earnings are backed by cash.",
+          "Net debt / EBITDA at " + mult(r.net_debt_ebitda) + " leaves capacity for the announced capex cycle.",
+          "Trades at " + mult(r.pe) + " earnings and " + mult(r.ev_ebitda) + " EV/EBITDA on trailing figures."
+        ]
+      },
+      bull_bear: {
+        verdict: "Two-sided", tone: "base",
+        summary: "Bull and bear cases hinge on whether the " + pct(y.ebitda_margin) + " margin in " + fyl + " is structural or cyclical.",
+        points: [
+          "BULL: operating leverage on the new capacity could add 120-180 bps to margin over two years.",
+          "BULL: working capital days improving; receivables at " + Math.round(r.receivable_days) + " days.",
+          "BEAR: " + pct(y.ebitda_margin) + " margin is near the top of the historical band and may mean-revert.",
+          "BEAR: valuation at " + mult(r.pe) + " earnings prices in continued execution with little cushion."
+        ]
+      },
+      moat: {
+        verdict: "Narrow-to-wide", tone: "bull",
+        summary: "Durable advantages come from scale in " + c.industry.toLowerCase() + ", distribution reach and switching costs.",
+        points: [
+          "Sustained ROCE of " + pct(r.roce) + " across the cycle is the clearest quantitative moat evidence.",
+          "Asset turnover of " + mult(r.asset_turnover) + " versus sector median suggests efficient capital deployment.",
+          "Brand and channel investments are expensed, understating the economic asset base.",
+          "Threats: new entrants with lower cost of capital and regulatory tariff changes."
+        ]
+      },
+      risk: {
+        verdict: r.debt_equity > 0.6 ? "Elevated" : "Moderate",
+        tone: r.debt_equity > 0.6 ? "bear" : "base",
+        summary: "Principal risks are input-cost pass-through, leverage of " + mult(r.debt_equity) + " debt/equity, and concentration in " + c.sector + ".",
+        points: [
+          "Interest cover of " + mult(r.interest_cover) + " gives " + (r.interest_cover > 6 ? "comfortable" : "limited") + " headroom.",
+          "Current ratio of " + mult(r.current_ratio) + " and quick ratio of " + mult(r.quick_ratio) + ".",
+          "Promoter holding of " + c.shareholding[0].pct.toFixed(1) + "% - monitor pledge disclosures each quarter.",
+          "Regulatory and commodity exposure typical of the " + c.sector.toLowerCase() + " sector."
+        ]
+      },
+      quality: {
+        verdict: r.cash_conversion > 0.8 ? "High" : "Adequate",
+        tone: r.cash_conversion > 0.8 ? "bull" : "base",
+        summary: "Accrual quality looks " + (r.cash_conversion > 0.8 ? "clean" : "acceptable") +
+          ": CFO of Rs " + crore(y.cfo) + " cr against EBITDA of Rs " + crore(y.ebitda) + " cr.",
+        points: [
+          "Cash conversion " + pct(r.cash_conversion) + "; free cash flow Rs " + crore(y.fcf) + " cr after capex.",
+          "Effective tax rate of " + pct(y.tax_rate) + " is close to the statutory rate.",
+          "Inventory " + Math.round(r.inventory_days) + " days, payables " + Math.round(r.payable_days) + " days.",
+          "No unusual other-income dependence: other income is " + pct(y.other_income / y.revenue) + " of revenue."
+        ]
+      },
+      management: {
+        verdict: "Credible", tone: "base",
+        summary: "Guidance has broadly tracked delivery over the covered period; capital allocation favours organic capex over buybacks.",
+        points: [
+          "Dividend payout of " + pct(r.dividend_payout) + " with the balance reinvested.",
+          "Capex of Rs " + crore(Math.abs(y.capex)) + " cr in " + fyl + ", roughly " + pct(Math.abs(y.capex) / y.revenue) + " of revenue.",
+          "Board commentary emphasises margin defence over volume share gains.",
+          "Related-party transactions disclosed within the usual thresholds."
+        ]
+      }
+    };
+    var pack = packs[capability] || packs.investment_thesis;
+    return {
+      capability: capability, company: c.ticker, generated_at: new Date().toISOString(),
+      verdict: pack.verdict, tone: pack.tone, summary: pack.summary, points: pack.points,
+      confidence: 0.62 + (c.score.overall % 20) / 100,
+      scores: c.score,
+      citations: [
+        { label: fyl + " Annual Report - MD&A", kind: "filing" },
+        { label: "Q4 " + fyl + " investor presentation", kind: "presentation" },
+        { label: "Exchange filing: capex approval", kind: "filing" }
+      ],
+      guardrails: [
+        "Mock output. No AI provider is called in this prototype.",
+        "Figures are quoted only from the local demo data set.",
+        "Not investment advice."
+      ],
+      meta: { provider: "mock-local", model: "prototype-v0", latency_ms: 180, tokens: 634 }
+    };
+  }
+
+  /* ==========================================================================
+     C.  FORMATTERS  (ported from lib/format.ts — Indian grouping, Rs, %, x)
+     ========================================================================== */
+  var EM = "\u2014";
+  function indianGroup(value, decimals) {
+    var neg = value < 0, fixed = Math.abs(value).toFixed(decimals);
+    var parts = fixed.split("."), intPart = parts[0], dec = parts[1], out;
+    if (intPart.length <= 3) { out = intPart; }
+    else {
+      var last3 = intPart.slice(-3), rest = intPart.slice(0, -3);
+      out = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ",") + "," + last3;
+    }
+    var joined = dec ? out + "." + dec : out;
+    return neg ? "(" + joined + ")" : joined;
+  }
+  function num(v) { return v !== null && v !== undefined && !isNaN(v); }
+  function crore(v, d) { return num(v) ? indianGroup(v, d === undefined ? 1 : d) : EM; }
+  function plain(v, d) { return num(v) ? indianGroup(v, d === undefined ? 0 : d) : EM; }
+  function rupees(v, d) { return num(v) ? "\u20B9" + indianGroup(v, d === undefined ? 2 : d) : EM; }
+  function marketCap(v) {
+    if (!num(v)) return EM;
+    if (Math.abs(v) >= 100000) return "\u20B9" + (v / 100000).toFixed(2) + " L Cr";
+    return "\u20B9" + indianGroup(v, 0) + " Cr";
+  }
+  function pct(v, d) {
+    if (!num(v)) return EM;
+    var x = v * 100, s = Math.abs(x).toFixed(d === undefined ? 1 : d) + "%";
+    return x < 0 ? "(" + s + ")" : s;
+  }
+  function signedPct(v, d) {
+    if (!num(v)) return EM;
+    var x = v * 100;
+    return (x >= 0 ? "+" : "\u2212") + Math.abs(x).toFixed(d === undefined ? 2 : d) + "%";
+  }
+  function mult(v, d) { return num(v) ? v.toFixed(d === undefined ? 2 : d) + "x" : EM; }
+  function fy(year) { return "FY" + String(year).slice(-2); }
+  function signCls(v) { return !num(v) ? "muted" : v > 0 ? "gain" : v < 0 ? "loss" : "muted"; }
+  function dateShort(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return EM;
+    return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+  }
+  function dateTime(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "Not available";
+    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  }
+  function esc(s) {
+    return String(s === null || s === undefined ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  /* ==========================================================================
+     D.  TINY VIEW HELPERS  (Card / Stat / Badge, as HTML string builders)
+     ========================================================================== */
+  function card(inner, cls) { return '<div class="epa-card ' + (cls || "") + '">' + inner + "</div>"; }
+  function cardHead(title, sub, action) {
+    return '<div class="epa-cardhead"><div><div class="epa-cardtitle">' + esc(title) + "</div>" +
+      (sub ? '<div class="epa-cardsub">' + esc(sub) + "</div>" : "") + "</div>" +
+      (action ? "<div>" + action + "</div>" : "") + "</div>";
+  }
+  function body(inner, cls) { return '<div class="epa-cardbody ' + (cls || "") + '">' + inner + "</div>"; }
+  function stat(label, value, hint, tone) {
+    return '<div><div class="epa-statlabel">' + esc(label) + "</div>" +
+      '<div class="epa-statvalue ' + (tone || "") + '">' + value + "</div>" +
+      (hint ? '<div class="epa-stathint">' + hint + "</div>" : "") + "</div>";
+  }
+  function statCard(label, value, hint, tone) { return card(body(stat(label, value, hint, tone))); }
+  function badge(text, variant) { return '<span class="epa-badge ' + (variant || "") + '">' + text + "</span>"; }
+  function empty(title, desc, action) {
+    return '<div class="epa-empty"><div class="t">' + esc(title) + "</div>" +
+      (desc ? '<div class="d">' + esc(desc) + "</div>" : "") +
+      (action ? '<div style="margin-top:14px">' + action + "</div>" : "") + "</div>";
+  }
+  function skeleton(h, mb) {
+    return '<div class="epa-skel" style="height:' + h + 'px;margin-bottom:' + (mb || 10) + 'px"></div>';
+  }
+  function loadingBlock(n, h) {
+    var out = ""; for (var i = 0; i < (n || 6); i++) out += skeleton(h || 32, 8); return out;
+  }
+  function scoreBar(value, tone) {
+    return '<div class="epa-bar ' + (tone || "") + '"><span style="width:' +
+      Math.max(0, Math.min(100, value)) + '%"></span></div>';
+  }
+  function tabStrip(tabs, activeKey, action) {
+    return '<div class="epa-tabs" data-tabstrip="' + esc(action) + '">' + tabs.map(function (t) {
+      return '<button class="epa-tab ' + (t.key === activeKey ? "is-active" : "") +
+        '" data-action="' + esc(action) + '" data-key="' + esc(t.key) + '">' + esc(t.label) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  /* Inline SVG charts — no external chart library (Blogger-safe). */
+  function lineChart(points, opts) {
+    opts = opts || {};
+    var w = 720, h = opts.height || 200, pad = 28;
+    var xs = points.length, min = Math.min.apply(null, points), max = Math.max.apply(null, points);
+    if (min === max) { min = min * 0.98; max = max * 1.02; }
+    var stepX = (w - pad * 2) / Math.max(1, xs - 1);
+    var y = function (v) { return h - pad - ((v - min) / (max - min)) * (h - pad * 2); };
+    var d = "", area = "";
+    points.forEach(function (v, i) {
+      var px = pad + i * stepX, py = y(v);
+      d += (i === 0 ? "M" : "L") + px.toFixed(1) + " " + py.toFixed(1) + " ";
+    });
+    area = d + "L" + (pad + (xs - 1) * stepX).toFixed(1) + " " + (h - pad) + " L" + pad + " " + (h - pad) + " Z";
+    var up = points[points.length - 1] >= points[0];
+    var col = up ? "#0b7a3b" : "#b3261e";
+    var grid = "";
+    for (var g = 0; g <= 3; g++) {
+      var gy = pad + g * (h - pad * 2) / 3;
+      grid += '<line x1="' + pad + '" y1="' + gy + '" x2="' + (w - pad) + '" y2="' + gy +
+        '" stroke="currentColor" stroke-opacity=".12" stroke-width="1"/>';
+      var label = (max - (g * (max - min) / 3));
+      grid += '<text x="' + (w - pad + 4) + '" y="' + (gy + 3) + '" font-size="9" fill="currentColor" ' +
+        'fill-opacity=".45" font-family="monospace">' + label.toFixed(0) + "</text>";
+    }
+    return '<svg class="epa-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none" ' +
+      'style="color:var(--text);height:' + h + 'px">' + grid +
+      '<path d="' + area + '" fill="' + col + '" fill-opacity=".08"/>' +
+      '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="1.8" ' +
+      'stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  }
+  function barChart(labels, series, opts) {
+    opts = opts || {};
+    var w = 720, h = opts.height || 220, pad = 30, n = labels.length;
+    var all = [];
+    series.forEach(function (s) { s.values.forEach(function (v) { all.push(v); }); });
+    var max = Math.max.apply(null, all) * 1.12, min = Math.min(0, Math.min.apply(null, all));
+    var groupW = (w - pad * 2) / n, barW = Math.max(4, (groupW - 8) / series.length);
+    var y = function (v) { return h - pad - ((v - min) / (max - min)) * (h - pad * 2); };
+    var out = "";
+    for (var g = 0; g <= 3; g++) {
+      var gy = pad + g * (h - pad * 2) / 3;
+      out += '<line x1="' + pad + '" y1="' + gy + '" x2="' + (w - pad) + '" y2="' + gy +
+        '" stroke="currentColor" stroke-opacity=".12"/>';
+    }
+    labels.forEach(function (lab, i) {
+      series.forEach(function (s, si) {
+        var v = s.values[i], px = pad + i * groupW + 4 + si * barW, py = y(v), zero = y(0);
+        out += '<rect x="' + px.toFixed(1) + '" y="' + Math.min(py, zero).toFixed(1) + '" width="' +
+          (barW - 2).toFixed(1) + '" height="' + Math.max(1, Math.abs(zero - py)).toFixed(1) +
+          '" rx="2" fill="' + s.color + '"/>';
+      });
+      out += '<text x="' + (pad + i * groupW + groupW / 2).toFixed(1) + '" y="' + (h - 10) +
+        '" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity=".55" ' +
+        'font-family="monospace">' + esc(lab) + "</text>";
+    });
+    return '<svg class="epa-chart" viewBox="0 0 ' + w + " " + h + '" preserveAspectRatio="none" ' +
+      'style="color:var(--text);height:' + h + 'px">' + out + "</svg>";
+  }
+  function donut(slices) {
+    var total = slices.reduce(function (a, s) { return a + s.value; }, 0) || 1;
+    var r = 54, c = 2 * Math.PI * r, offset = 0, out = "";
+    slices.forEach(function (s) {
+      var len = (s.value / total) * c;
+      out += '<circle r="' + r + '" cx="70" cy="70" fill="none" stroke="' + s.color +
+        '" stroke-width="22" stroke-dasharray="' + len.toFixed(2) + " " + (c - len).toFixed(2) +
+        '" stroke-dashoffset="' + (-offset).toFixed(2) + '" transform="rotate(-90 70 70)"/>';
+      offset += len;
+    });
+    return '<svg viewBox="0 0 140 140" style="width:140px;height:140px">' + out + "</svg>";
+  }
+
+  /* ==========================================================================
+     E.  APPLICATION STATE + ROUTER
+     ========================================================================== */
+  var STATE = {
+    user: API.me(),
+    theme: store("theme", "light"),
+    navOpen: false,
+    route: { name: "dashboard", id: null, tab: null },
+    search: { q: "", page: 1, sector: "" },
+    lastCompanyId: store("last-company", null),
+    ai: { capability: "investment_thesis", tab: "analysis", chat: [] },
+    watch: { current: null, modal: null, error: "" },
+    fin: { tab: "overview" },
+    market: { range: "6M" }
+  };
+
+  /* Mount points are resolved at boot, never at parse time. Blogger can render
+     a theme widget with its own default includable, in which case the markup in
+     <b:includable> is absent from the page and these ids do not exist. The app
+     then creates them, so it renders whatever Blogger did with the widget. */
+  var root = null, app = null;
+
+  function mountRoot() {
+    var r = document.getElementById("epa-root");
+    if (!r) {
+      r = document.createElement("div");
+      r.id = "epa-root";
+      document.body.appendChild(r);
+    }
+    if ((" " + (r.className || "") + " ").indexOf(" epa ") === -1) {
+      r.className = ("epa " + (r.className || "")).replace(/\s+$/, "");
+    }
+    var a = document.getElementById("epa-app");
+    if (!a) {
+      a = document.createElement("div");
+      a.id = "epa-app";
+      r.appendChild(a);
+    } else if (a.parentNode !== r) {
+      r.appendChild(a);
+    }
+    return { root: r, app: a };
+  }
+
+  /** Turns a blank page into a readable diagnosis on a live blog. */
+  function showFatal(message) {
+    var target = document.getElementById("epa-app") || document.body;
+    if (!target) return;
+    target.innerHTML =
+      '<div class="epa-content"><div class="epa-card"><div class="epa-cardbody">' +
+        '<div class="epa-alert err"><span>!</span><div><strong>EquityPilotAI could not start.</strong>' +
+        '<div style="margin-top:6px">' + esc(String(message)) + "</div></div></div>" +
+        '<div class="epa-note" style="margin-top:10px">This prototype runs entirely in the browser. ' +
+        "No server, API or network access is required or attempted.</div>" +
+      "</div></div></div>";
+  }
+
+  var ROUTES = {
+    "login": renderAuth, "register": renderAuth, "forgot": renderAuth,
+    "dashboard": renderDashboard,
+    "companies": renderSearch,
+    "watchlist": renderWatchlist,
+    "company": renderCompany
+  };
+
+  /** Legacy tab slugs kept working so old bookmarks still resolve. */
+  var TAB_ALIAS = {
+    "balance": "balance-sheet", "cashflow": "cash-flow", "market": "price",
+    "share-price": "price", "profit-and-loss": "pnl", "key-ratios": "ratios"
+  };
+  function decodeSeg(v) { try { return decodeURIComponent(v); } catch (e) { return v; } }
+  /** Hash href for a company, ticker-safe (M&M -> M%26M). */
+  function companyHref(id, tab) {
+    return "/company/" + encodeURIComponent(id) + "/" + (tab || "overview");
+  }
+
+  var COMPANY_TABS = [
+    { key: "overview",      label: "Company Overview" },
+    { key: "financials",    label: "Financials" },
+    { key: "pnl",           label: "Profit & Loss" },
+    { key: "balance-sheet", label: "Balance Sheet" },
+    { key: "cash-flow",     label: "Cash Flow" },
+    { key: "ratios",        label: "Key Ratios" },
+    { key: "price",         label: "Share Price" },
+    { key: "ai",            label: "AI Analysis" },
+    { key: "news",          label: "News" },
+    { key: "peers",         label: "Peer Comparison" }
+  ];
+
+  function parseHash() {
+    var raw = (window.location.hash || "").replace(/^#\/?/, "");
+    var seg = raw.split("/").filter(Boolean);
+    if (!seg.length) return { name: STATE.user ? "dashboard" : "login", id: null, tab: null };
+    if (seg[0] === "company") {
+      var tab = seg[2] ? decodeSeg(seg[2]) : "overview";
+      return { name: "company", id: seg[1] ? decodeSeg(seg[1]) : null, tab: TAB_ALIAS[tab] || tab };
+    }
+    if (seg[0] === "search") return { name: "companies", id: null, tab: null };
+    if (ROUTES[seg[0]]) return { name: seg[0], id: seg[1] ? decodeSeg(seg[1]) : null, tab: seg[2] || null };
+    return { name: "dashboard", id: null, tab: null };
+  }
+  function go(hash) {
+    if (window.location.hash === "#" + hash) { render(); return; }
+    window.location.hash = hash;
+  }
+  window.addEventListener("hashchange", function () { STATE.route = parseHash(); render(); });
+
+  /* ==========================================================================
+     F.  SHELL RENDERING
+     ========================================================================== */
+  function render() {
+    if (!root || !app || !root.parentNode) {
+      var m = mountRoot(); root = m.root; app = m.app;
+    }
+    root.className = "epa" + (STATE.theme === "dark" ? " epa-dark" : "");
+    var r = STATE.route;
+    if (!STATE.user) { app.innerHTML = renderAuthShell(); return; }
+    if (r.name === "login" || r.name === "register" || r.name === "forgot") { go("/dashboard"); return; }
+    if (r.name === "company" && r.id) { STATE.lastCompanyId = r.id; save("last-company", r.id); }
+
+    app.innerHTML =
+      '<div class="epa-shell">' +
+        (STATE.navOpen ? '<div class="epa-backdrop" data-action="closenav"></div>' : "") +
+        sidebar() +
+        '<div class="epa-main">' + topbar() +
+          '<div class="epa-content epa-fade" id="epa-view">' + loadingBlock(4, 60) + "</div>" +
+        "</div>" +
+      "</div>" + (STATE.watch.modal ? STATE.watch.modal : "");
+
+    var view = document.getElementById("epa-view");
+    var fn = ROUTES[r.name] || renderDashboard;
+    fn(view);
+  }
+
+  function sidebar() {
+    var r = STATE.route;
+    var cid = r.name === "company" ? r.id : STATE.lastCompanyId;
+    var mainNav = [
+      { key: "dashboard", label: "Home / Dashboard", ico: "\u25A6", href: "/dashboard" },
+      { key: "companies", label: "Company Search",   ico: "\u2315", href: "/companies" },
+      { key: "watchlist", label: "Watchlist",        ico: "\u2606", href: "/watchlist" }
+    ];
+    var perCompany = COMPANY_TABS.map(function (t) {
+      return { key: "company:" + t.key, label: t.label, ico: companyIcon(t.key),
+               href: cid ? companyHref(cid, t.key) : null };
+    });
+    function item(n) {
+      var active = n.key === r.name || (r.name === "company" && n.key === "company:" + r.tab);
+      if (!n.href) {
+        return '<li class="epa-navlink is-disabled" title="Choose a company first">' +
+          '<span class="ico">' + n.ico + "</span><span>" + esc(n.label) + "</span></li>";
+      }
+      return '<li class="epa-navlink ' + (active ? "is-active" : "") + '" data-action="nav" data-href="' +
+        esc(n.href) + '"><span class="ico">' + n.ico + "</span><span>" + esc(n.label) + "</span></li>";
+    }
+    return '<aside class="epa-side ' + (STATE.navOpen ? "is-open" : "") + '">' +
+      '<div class="epa-brand" data-action="nav" data-href="/dashboard" style="cursor:pointer">' +
+        '<div class="epa-logo">EP</div>' +
+        '<div><div class="epa-brand-t">EquityPilotAI</div>' +
+        '<div class="epa-brand-s">Equity Research</div></div></div>' +
+      '<ul class="epa-nav">' +
+        '<li class="epa-navgroup">Platform</li>' + mainNav.map(item).join("") +
+        '<li class="epa-navgroup">Company research' + (cid && DB.byId[cid] ? " \u00B7 " + esc(DB.byId[cid].ticker) : "") + "</li>" +
+        perCompany.map(item).join("") +
+      "</ul>" +
+      '<div class="epa-usercard">' +
+        '<div class="epa-row" style="flex-wrap:nowrap">' +
+          '<div class="epa-avatar">' + esc((STATE.user.name || "?").slice(0, 1).toUpperCase()) + "</div>" +
+          '<div style="min-width:0;flex:1">' +
+            '<div class="xs" style="color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(STATE.user.name) + "</div>" +
+            '<div class="tiny" style="color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.06em">' + esc(STATE.user.role) + "</div>" +
+          "</div>" +
+          '<button class="epa-btn small" data-action="logout" style="background:transparent;color:rgba(255,255,255,.75);border-color:rgba(255,255,255,.2)">Exit</button>' +
+        "</div>" +
+        '<div class="epa-devnote">PROTOTYPE MODE \u2014 mock data only, no backend calls</div>' +
+      "</div></aside>";
+  }
+  function companyIcon(key) {
+    var map = { "overview": "\u2637", "financials": "\u2261", "pnl": "\u03A3", "balance-sheet": "\u2696",
+      "cash-flow": "\u21C4", "ratios": "\u0025", "price": "\u2197", "ai": "\u2726",
+      "news": "\u25A4", "peers": "\u2194" };
+    return map[key] || "\u25CF";
+  }
+
+  function topbar() {
+    return '<div class="epa-topbar">' +
+      '<button class="epa-iconbtn epa-burger" data-action="opennav" aria-label="Open navigation">\u2630</button>' +
+      '<div class="epa-searchwrap">' +
+        '<span class="epa-searchicon">\u2315</span>' +
+        '<input class="epa-search" id="epa-globalsearch" placeholder="Search company, ticker or sector\u2026" ' +
+          'value="' + esc(STATE.search.q) + '" autocomplete="off"/>' +
+        '<span class="epa-kbd">Ctrl K</span>' +
+        '<div id="epa-suggest"></div>' +
+      "</div>" +
+      '<div style="flex:1"></div>' +
+      '<span class="epa-badge accent nowrap">DEMO DATA</span>' +
+      '<button class="epa-iconbtn" data-action="theme" title="Toggle theme">' +
+        (STATE.theme === "dark" ? "\u2600" : "\u263D") + "</button>" +
+      "</div>";
+  }
+
+  /* ==========================================================================
+     G.  AUTH SCREEN (frontend only)
+     ========================================================================== */
+  var authMode = "login", authMsg = null, authErr = null;
+  function renderAuthShell() {
+    var isReg = authMode === "register", isForgot = authMode === "forgot";
+    return '<div class="epa-auth"><div class="epa-authbox epa-fade">' +
+      '<div class="center" style="margin-bottom:18px">' +
+        '<div class="epa-logo" style="margin:0 auto 10px;width:40px;height:40px;font-size:15px">EP</div>' +
+        '<div style="font-size:1.0625rem;font-weight:600">' +
+          (isReg ? "Create your account" : isForgot ? "Reset your password" : "Sign in to EquityPilotAI") + "</div>" +
+        '<div class="xs muted" style="margin-top:4px">Institutional equity research platform</div>' +
+      "</div>" +
+      '<form class="epa-authcard" id="epa-authform">' +
+        (authMsg ? '<div class="epa-alert ok" style="margin-bottom:12px">' + esc(authMsg) + "</div>" : "") +
+        (authErr ? '<div class="epa-alert err" style="margin-bottom:12px">' + esc(authErr) + "</div>" : "") +
+        (isReg ? '<label class="epa-label">Full name</label>' +
+          '<input class="epa-input" id="epa-name" placeholder="Aditi Sharma" style="margin-bottom:11px"/>' : "") +
+        '<label class="epa-label">Email address</label>' +
+        '<input class="epa-input" id="epa-email" type="email" placeholder="analyst@equitypilot.ai" style="margin-bottom:11px"/>' +
+        (isForgot ? "" :
+          '<label class="epa-label">Password</label>' +
+          '<input class="epa-input" id="epa-pass" type="password" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" style="margin-bottom:11px"/>') +
+        (isReg || isForgot ? "" :
+          '<label class="epa-row xs muted" style="margin-bottom:12px;gap:6px">' +
+          '<input type="checkbox" id="epa-remember"/> Remember me on this device</label>') +
+        '<button class="epa-btn primary" style="width:100%" type="submit">' +
+          (isReg ? "Create account" : isForgot ? "Send reset link" : "Sign in") + "</button>" +
+        '<div class="epa-divider"></div>' +
+        (isForgot ? "" :
+          '<button class="epa-btn" style="width:100%" type="button" data-action="demo">Continue as demo analyst</button>') +
+        '<div class="center xs muted" style="margin-top:12px">' +
+          (isReg
+            ? 'Already registered? <span class="epa-link" data-action="authmode" data-key="login">Sign in</span>'
+            : isForgot
+              ? 'Remembered it? <span class="epa-link" data-action="authmode" data-key="login">Back to sign in</span>' +
+                ' \u00B7 <span class="epa-link" data-action="authmode" data-key="register">Create an account</span>'
+              : 'No account? <span class="epa-link" data-action="authmode" data-key="register">Create one</span>' +
+                ' \u00B7 <span class="epa-link" data-action="authmode" data-key="forgot">Forgot password</span>') +
+        "</div>" +
+      "</form>" +
+      '<div class="epa-note" style="margin-top:14px">' +
+        (isForgot
+          ? "Password reset is a UI prototype. No email is sent and no server is contacted; the screen " +
+            "simply confirms the request the way the real endpoint would."
+          : "Authentication is a UI prototype: credentials are never sent anywhere and the session lives " +
+            "only in this browser. Any email with a 6+ character password works.") + "</div>" +
+      "</div></div>";
+  }
+  function renderAuth() { app.innerHTML = renderAuthShell(); }
+
+  /* ==========================================================================
+     H.  PAGE: HOME / DASHBOARD
+     ========================================================================== */
+  function renderDashboard(view) {
+    API.dashboard().then(function (d) {
+      var indices = d.indices.map(function (i) {
+        return '<div style="flex:1;min-width:150px">' +
+          '<div class="tiny muted b nowrap">' + esc(i.name) + "</div>" +
+          '<div class="num b" style="font-size:1rem">' + plain(i.value, 2) + "</div>" +
+          '<div class="tiny ' + signCls(i.change) + '">' + (i.change >= 0 ? "+" : "") + i.change.toFixed(2) +
+          " (" + signedPct(i.change_percent) + ")</div></div>";
+      }).join("");
+
+      var largest = d.largest.map(function (c) {
+        return "<tr>" +
+          '<td><span class="epa-link b" data-action="open" data-id="' + esc(c.id) + '">' + esc(c.name) + "</span>" +
+          '<div class="num tiny muted">' + esc(c.ticker) + "</div></td>" +
+          '<td class="l xs muted">' + esc(c.sector) + "</td>" +
+          '<td class="num">' + rupees(c.current_price) +
+          '<div class="tiny muted" style="font-weight:400">' + esc(c.market.price_source) + "</div></td>" +
+          '<td class="num ' + signCls(c.market.change_percent) + '">' + signedPct(c.market.change_percent) + "</td>" +
+          '<td class="num b">' + marketCap(c.market_cap) + "</td></tr>";
+      }).join("");
+
+      var moverCell = function (c) {
+        var up = c.market.change_percent >= 0;
+        return '<div class="epa-heatcell" data-action="open" data-id="' + esc(c.id) + '" style="background:' +
+          (up ? "#0b7a3b" : "#b3261e") + '">' +
+          '<div class="b mono">' + esc(c.ticker) + "</div>" +
+          '<div class="mono" style="font-size:.8125rem">' + signedPct(c.market.change_percent) + "</div>" +
+          '<div style="opacity:.8">' + rupees(c.current_price, 0) + "</div></div>";
+      };
+
+      var sectors = d.sectors.map(function (s) {
+        return '<div class="epa-kv"><span class="epa-link" data-action="sector" data-key="' + esc(s.sector) + '">' +
+          esc(s.sector) + "</span>" + badge(s.count + " companies") + "</div>";
+      }).join("");
+
+      var recent = d.recently_added.map(function (c) {
+        return '<div class="epa-card" style="padding:11px;cursor:pointer" data-action="open" data-id="' + esc(c.id) + '">' +
+          '<div class="b sm">' + esc(c.name) + "</div>" +
+          '<div class="tiny muted" style="margin-top:3px">' + esc(c.ticker) + " \u00B7 " + esc(c.sector) + "</div>" +
+          '<div class="num tiny" style="margin-top:6px">' + marketCap(c.market_cap) + "</div></div>";
+      }).join("");
+
+      view.innerHTML =
+        '<div class="epa-between" style="margin-bottom:16px"><div>' +
+          '<h1 class="epa-h1">Dashboard</h1>' +
+          '<p class="epa-sub">Coverage overview for the EquityPilotAI research universe.</p></div>' +
+          '<div class="epa-row"><button class="epa-btn" data-action="nav" data-href="/companies">Browse companies</button>' +
+          '<button class="epa-btn primary" data-action="nav" data-href="/watchlist">Open watchlist</button></div></div>' +
+
+        card('<div class="epa-cardbody epa-row" style="gap:22px">' + indices + "</div>") +
+
+        '<div class="epa-grid epa-g4" style="margin:16px 0">' +
+          statCard("Companies", plain(d.coverage.companies), "covered") +
+          statCard("With financials", plain(d.coverage.companies_with_financials), "statements loaded") +
+          statCard("Sectors", plain(d.coverage.sectors)) +
+          statCard("Financial facts", plain(d.coverage.fact_rows), "canonical rows") +
+        "</div>" +
+
+        '<div class="epa-split" style="margin-bottom:16px">' +
+          card(cardHead("Companies at a glance", "Largest names by market value",
+              '<span class="epa-link xs" data-action="nav" data-href="/companies">View all \u2192</span>') +
+            '<div class="epa-scroll"><table class="epa-table"><thead><tr><th>Company</th><th class="l">Sector</th>' +
+            "<th>Price</th><th>Change</th><th>Market cap</th></tr></thead><tbody>" + largest + "</tbody></table></div>") +
+          '<div class="epa-stack">' +
+            card(cardHead("Top movers", "Session change") +
+              body('<div class="epa-heat">' + d.gainers.map(moverCell).join("") +
+                   d.losers.map(moverCell).join("") + "</div>")) +
+            card(cardHead("Explore by sector") + body(sectors)) +
+          "</div>" +
+        "</div>" +
+
+        card(cardHead("Recently added", "Open a company for overview, statements, ratios and AI analysis") +
+          body('<div class="epa-grid epa-g4">' + recent + "</div>"));
+    });
+  }
+
+  /* ==========================================================================
+     I.  PAGE: COMPANY SEARCH
+     ========================================================================== */
+  function renderSearch(view) {
+    var PAGE_SIZE = 8;
+    var s = STATE.search;
+    Promise.all([
+      API.sectors(),
+      s.q.trim() ? API.searchCompanies(s.q, 50) : API.listCompanies(s.page, PAGE_SIZE, s.sector)
+    ]).then(function (res) {
+      var sectors = res[0], data = res[1];
+      var rows = data.results, total = data.total;
+      var searching = s.q.trim() !== "";
+      var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+      var tbody = rows.map(function (c) {
+        var r = c.ratios[c.ratios.length - 1];
+        return "<tr>" +
+          '<td><span class="num epa-link b" data-action="open" data-id="' + esc(c.id) + '">' + esc(c.ticker) + "</span></td>" +
+          '<td class="l"><span class="epa-link" data-action="open" data-id="' + esc(c.id) + '">' + esc(c.name) + "</span></td>" +
+          '<td class="l xs muted">' + esc(c.sector) + "</td>" +
+          '<td class="l xs muted">' + esc(c.industry) + "</td>" +
+          '<td class="num">' + rupees(c.current_price) + "</td>" +
+          '<td class="num ' + signCls(c.market.change_percent) + '">' + signedPct(c.market.change_percent) + "</td>" +
+          '<td class="num">' + marketCap(c.market_cap) + "</td>" +
+          '<td class="num">' + mult(r.pe, 1) + "</td>" +
+          '<td class="num">' + pct(r.roe) + "</td>" +
+          '<td><button class="epa-btn small" data-action="quickwatch" data-key="' + esc(c.ticker) + '">Watch</button></td>' +
+          "</tr>";
+      }).join("");
+
+      view.innerHTML =
+        '<div class="epa-between" style="margin-bottom:14px"><div>' +
+          '<h1 class="epa-h1">Company Search</h1>' +
+          '<p class="epa-sub">' + total + " " + (searching ? "matching" : "covered") + " companies</p></div>" +
+          '<div class="epa-row">' +
+            '<input class="epa-input" id="epa-filter" placeholder="Filter by name, ticker, sector\u2026" ' +
+              'value="' + esc(s.q) + '" style="width:230px"/>' +
+            '<select class="epa-select" id="epa-sector" style="width:190px" ' + (searching ? "disabled" : "") + ">" +
+              '<option value="">All sectors</option>' +
+              sectors.map(function (x) {
+                return '<option value="' + esc(x) + '" ' + (x === s.sector ? "selected" : "") + ">" + esc(x) + "</option>";
+              }).join("") +
+            "</select></div></div>" +
+
+        card(rows.length === 0
+          ? empty("No companies found", searching ? "Nothing matches \u201C" + s.q + "\u201D." : "Adjust the sector filter.")
+          : '<div class="epa-scroll"><table class="epa-table"><thead><tr>' +
+            '<th>Ticker</th><th class="l">Company</th><th class="l">Sector</th><th class="l">Industry</th>' +
+            "<th>Price</th><th>Chg</th><th>Market cap</th><th>P/E</th><th>ROE</th><th></th>" +
+            "</tr></thead><tbody>" + tbody + "</tbody></table></div>" +
+            (!searching && pages > 1 ?
+              '<div class="epa-row" style="justify-content:space-between;padding:10px 14px;border-top:1px solid var(--border)">' +
+              '<span class="xs muted">Page ' + s.page + " of " + pages + "</span><span>" +
+              '<button class="epa-btn small" data-action="page" data-key="prev" ' + (s.page === 1 ? "disabled" : "") + ">Previous</button> " +
+              '<button class="epa-btn small" data-action="page" data-key="next" ' + (s.page >= pages ? "disabled" : "") + ">Next</button>" +
+              "</span></div>" : ""));
+
+      var filter = document.getElementById("epa-filter");
+      if (filter) {
+        filter.addEventListener("input", debounce(function (e) {
+          STATE.search.q = e.target.value; STATE.search.page = 1;
+          renderSearch(view);
+          var f = document.getElementById("epa-filter");
+          if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+        }, 220));
+      }
+      var sel = document.getElementById("epa-sector");
+      if (sel) sel.addEventListener("change", function (e) {
+        STATE.search.sector = e.target.value; STATE.search.page = 1; renderSearch(view);
+      });
+    });
+  }
+
+  /* ==========================================================================
+     J.  PAGE: COMPANY (tabbed workspace)
+     ========================================================================== */
+  function renderCompany(view) {
+    var id = STATE.route.id, tab = STATE.route.tab || "overview";
+    if (!DB.byId[id]) {
+      view.innerHTML = card(empty("Company not found", "This company is not in the coverage universe.",
+        '<button class="epa-btn" data-action="nav" data-href="/companies">Back to search</button>'));
+      return;
+    }
+    API.companyProfile(id).then(function (p) {
+      var c = p.company;
+      view.innerHTML = companyHeader(c, p) +
+        tabStrip(COMPANY_TABS, tab, "ctab") +
+        '<div id="epa-ctab">' + loadingBlock(5, 40) + "</div>";
+      var host = document.getElementById("epa-ctab");
+      var fns = {
+        "overview": tabOverview, "financials": tabFinancials, "pnl": tabPnl,
+        "balance-sheet": tabBalance, "cash-flow": tabCashflow, "ratios": tabRatios,
+        "price": tabMarket, "ai": tabAI, "news": tabNews, "peers": tabPeers
+      };
+      (fns[tab] || tabOverview)(host, c, p);
+    });
+  }
+
+  function companyHeader(c, p) {
+    var m = c.market, up = m.change >= 0;
+    return card(body(
+      '<div class="epa-between" style="align-items:flex-start">' +
+        '<div style="min-width:0">' +
+          '<div class="epa-row">' +
+            '<span class="num b" style="background:var(--accent-500);color:#fff;border-radius:4px;padding:2px 8px">' + esc(c.ticker) + "</span>" +
+            badge(c.exchange) + badge(c.sector, "accent") +
+            badge("\u2713 " + p.coverage.items_populated + " facts", "gain") +
+          "</div>" +
+          '<h1 class="epa-h1" style="margin-top:8px">' + esc(c.name) + "</h1>" +
+          '<p class="xs muted" style="margin-top:2px">' + esc(c.industry) + " \u00B7 ISIN " + esc(c.isin) +
+            " \u00B7 Est. " + c.incorporated_year + "</p>" +
+        "</div>" +
+        '<div style="min-width:190px">' +
+          '<div class="tiny muted b">CURRENT PRICE</div>' +
+          '<div class="epa-row" style="gap:8px">' +
+            '<div class="num b" style="font-size:1.5rem">' + rupees(m.live_price) + "</div>" +
+            badge("Live", "gain") + "</div>" +
+          '<div class="tiny b ' + signCls(m.change) + '">' + (up ? "+" : "") + m.change.toFixed(2) +
+            " (" + signedPct(m.change_percent) + ")</div>" +
+          '<div class="tiny muted" style="margin-top:4px">Source: ' + esc(m.price_source) + "</div>" +
+          '<div class="tiny muted">Updated: ' + dateTime(m.last_updated) + "</div>" +
+          '<div class="tiny muted">Market cap: ' + marketCap(c.market_cap) + "</div>" +
+          '<button class="epa-btn primary small" style="margin-top:8px" data-action="quickwatch" data-key="' +
+            esc(c.ticker) + '">+ Add to watchlist</button>' +
+        "</div>" +
+      "</div>"), "epa-fade") + '<div style="height:14px"></div>';
+  }
+
+  /* ---- Tab: Company overview -------------------------------------------- */
+  function tabOverview(host, c, p) {
+    var y = c.latest, r = c.ratios[c.ratios.length - 1];
+    var revSeries = c.years.map(function (x) { return x.revenue; });
+    var labels = c.years.map(function (x) { return fy(x.fy); });
+    var sh = c.shareholding;
+    var colors = ["#1f6feb", "#0b7a3b", "#b45309", "#64748b"];
+
+    host.innerHTML =
+      '<div class="epa-grid epa-g4" style="margin-bottom:16px">' +
+        statCard("Revenue " + fy(y.fy), crore(y.revenue), "Rs crore") +
+        statCard("EBITDA", crore(y.ebitda), pct(y.ebitda_margin) + " margin") +
+        statCard("PAT", crore(y.pat), pct(y.pat_margin) + " margin") +
+        statCard("EPS (basic)", "\u20B9" + y.eps.toFixed(2), "per share") +
+      "</div>" +
+      '<div class="epa-split" style="margin-bottom:16px">' +
+        card(cardHead("Revenue & profit trend", labels[0] + " \u2013 " + labels[labels.length - 1]) +
+          body(barChart(labels, [
+            { values: c.years.map(function (x) { return x.revenue; }), color: "#1f6feb" },
+            { values: c.years.map(function (x) { return x.ebitda; }), color: "#4b8ef5" },
+            { values: c.years.map(function (x) { return x.pat; }),    color: "#0b7a3b" }
+          ]) +
+          '<div class="epa-legend" style="margin-top:8px">' +
+            '<span><i class="epa-swatch" style="background:#1f6feb"></i>Revenue</span>' +
+            '<span><i class="epa-swatch" style="background:#4b8ef5"></i>EBITDA</span>' +
+            '<span><i class="epa-swatch" style="background:#0b7a3b"></i>PAT</span></div>')) +
+        card(cardHead("Shareholding pattern", "Latest quarter") +
+          body('<div class="epa-row" style="justify-content:center">' + donut(sh.map(function (s, i) {
+            return { value: s.pct, color: colors[i] };
+          })) + "</div>" +
+          sh.map(function (s, i) {
+            return '<div class="epa-kv"><span><i class="epa-swatch" style="background:' + colors[i] + '"></i>' +
+              esc(s.group) + '</span><span class="num">' + s.pct.toFixed(1) + "%</span></div>";
+          }).join(""))) +
+      "</div>" +
+      '<div class="epa-split" style="margin-bottom:16px">' +
+        card(cardHead("Financial position", "Latest reported \u2014 " + fy(y.fy)) +
+          body(
+            kv("Net worth", "\u20B9" + crore(y.equity) + " cr") +
+            kv("Gross debt", "\u20B9" + crore(y.debt) + " cr") +
+            kv("Cash & equivalents", "\u20B9" + crore(y.cash) + " cr") +
+            kv("Net debt", "\u20B9" + crore(y.net_debt) + " cr") +
+            kv("Cash from operations", "\u20B9" + crore(y.cfo) + " cr") +
+            kv("Free cash flow", "\u20B9" + crore(y.fcf) + " cr") +
+            kv("Debt / equity", mult(r.debt_equity)) +
+            kv("Interest cover", mult(r.interest_cover)))) +
+        card(cardHead("Valuation snapshot", "Trailing, on demo prices") +
+          body(
+            kv("P/E", mult(r.pe)) + kv("P/B", mult(r.pb)) +
+            kv("EV / EBITDA", mult(r.ev_ebitda)) +
+            kv("ROE", pct(r.roe)) + kv("ROCE", pct(r.roce)) +
+            kv("Dividend payout", pct(r.dividend_payout)) +
+            '<div class="epa-divider"></div>' +
+            '<div class="epa-statlabel">EquityPilot score</div>' +
+            '<div class="epa-row" style="margin-top:6px"><div class="num b" style="font-size:1.5rem">' +
+              c.score.overall + '</div><div style="flex:1">' + scoreBar(c.score.overall,
+              c.score.overall > 70 ? "gain" : c.score.overall < 50 ? "loss" : "") + "</div></div>")) +
+      "</div>" +
+      card(cardHead("About the company") +
+        body('<p class="sm">' + esc(p.description) + "</p>" +
+          '<div class="epa-divider"></div>' +
+          '<div class="epa-row">' +
+            '<button class="epa-btn small" data-action="ctab" data-key="financials">Financials</button>' +
+            '<button class="epa-btn small" data-action="ctab" data-key="ai">AI analysis</button>' +
+            '<button class="epa-btn small" data-action="ctab" data-key="peers">Peer comparison</button>' +
+            '<button class="epa-btn small" data-action="ctab" data-key="news">News</button></div>'));
+  }
+  function kv(k, v) {
+    return '<div class="epa-kv"><span class="muted">' + esc(k) + '</span><span class="num b">' + v + "</span></div>";
+  }
+
+  /* ---- Tab: Financials (summary across all statements) ------------------- */
+  function tabFinancials(host, c) {
+    API.financials(c.ticker).then(function (d) {
+      var last = d.summary[d.summary.length - 1];
+      var rows = d.summary.map(function (y, i) {
+        var r = d.ratios[i];
+        return "<tr>" +
+          "<td>" + fy(y.fy) + "</td>" +
+          '<td class="num">' + crore(y.revenue) + "</td>" +
+          '<td class="num">' + crore(y.ebitda) + "</td>" +
+          '<td class="num">' + pct(y.ebitda_margin) + "</td>" +
+          '<td class="num">' + crore(y.pat) + "</td>" +
+          '<td class="num">' + y.eps.toFixed(2) + "</td>" +
+          '<td class="num">' + crore(y.cfo) + "</td>" +
+          '<td class="num ' + signCls(y.fcf) + '">' + crore(y.fcf) + "</td>" +
+          '<td class="num">' + crore(y.net_debt) + "</td>" +
+          '<td class="num">' + pct(r.roe) + "</td>" +
+          '<td class="center">' + badge("Ties", "gain") + "</td></tr>";
+      }).join("");
+      host.innerHTML =
+        '<div class="epa-alert warn" style="margin-bottom:14px"><span>\u26A0</span><div>' +
+          d.warnings.map(esc).join("<br/>") + "</div></div>" +
+        '<div class="epa-grid epa-g4" style="margin-bottom:16px">' +
+          statCard("Revenue CAGR (5Y)", pct(d.revenue_cagr_5y), "compound annual") +
+          statCard("Revenue CAGR (full)", pct(d.revenue_cagr_full), d.summary.length + " years") +
+          statCard("PAT CAGR (full)", pct(d.pat_cagr_full)) +
+          statCard("ROCE (latest)", pct(d.ratios[d.ratios.length - 1].roce), "pre-tax") +
+        "</div>" +
+        card(cardHead("Annual summary", "Rs crore \u00B7 consolidated") +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr><th>Fiscal year</th>' +
+          "<th>Revenue</th><th>EBITDA</th><th>Margin</th><th>PAT</th><th>EPS</th><th>CFO</th>" +
+          "<th>FCF</th><th>Net debt</th><th>ROE</th><th>Audit</th></tr></thead><tbody>" +
+          rows + "</tbody></table></div>") +
+        '<div style="height:16px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("Margin trend") + body(lineChart(d.summary.map(function (y) {
+            return y.ebitda_margin * 100; }), { height: 180 }) +
+            '<div class="epa-legend" style="margin-top:6px"><span>EBITDA margin %, ' +
+            fy(d.summary[0].fy) + "\u2013" + fy(last.fy) + "</span></div>")) +
+          card(cardHead("Statement shortcuts") + body(
+            '<button class="epa-btn" style="width:100%;margin-bottom:8px" data-action="ctab" data-key="pnl">Profit &amp; Loss</button>' +
+            '<button class="epa-btn" style="width:100%;margin-bottom:8px" data-action="ctab" data-key="balance">Balance Sheet</button>' +
+            '<button class="epa-btn" style="width:100%;margin-bottom:8px" data-action="ctab" data-key="cashflow">Cash Flow</button>' +
+            '<button class="epa-btn" style="width:100%" data-action="ctab" data-key="ratios">Key Ratios</button>')) +
+        "</div>";
+    });
+  }
+
+  /* ---- Tabs: P&L / Balance sheet / Cash flow ----------------------------- */
+  function statementTab(host, c, kind, title, subtitle) {
+    var call = kind === "income" ? API.incomeStatement : kind === "balance" ? API.balanceSheet : API.cashFlow;
+    call(c.ticker).then(function (d) {
+      var head = '<th class="l">Line item</th>' + d.fiscal_years.map(function (y) {
+        return "<th>" + fy(y) + "</th>"; }).join("");
+      var rows = d.rows.map(function (row) {
+        var cls = row.tone === "total" ? "is-total" : row.tone === "subtotal" ? "is-subtotal" : "";
+        return '<tr class="' + cls + '"><td title="' + esc(row.label) + '">' + esc(row.label) + "</td>" +
+          row.values.map(function (v) {
+            return '<td class="num ' + (v < 0 ? "loss" : "") + '">' + crore(v, row.decimals) + "</td>";
+          }).join("") + "</tr>";
+      }).join("");
+      var growth = "";
+      if (kind === "income") {
+        var revRow = d.rows[0].values;
+        growth = card(cardHead("YoY growth", "Revenue, %") + body(barChart(
+          d.fiscal_years.slice(1).map(fy),
+          [{ values: revRow.slice(1).map(function (v, i) { return ((v / revRow[i]) - 1) * 100; }), color: "#1f6feb" }],
+          { height: 170 })));
+      }
+      host.innerHTML =
+        card(cardHead(title, subtitle + " \u00B7 " + d.unit + " \u00B7 " + d.basis,
+          '<button class="epa-btn small" data-action="csv" data-key="' + esc(kind) + '">Export CSV</button>') +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr>' + head + "</tr></thead><tbody>" +
+          rows + "</tbody></table></div>") +
+        (growth ? '<div style="height:16px"></div>' + growth : "") +
+        '<div style="height:12px"></div>' +
+        '<div class="epa-note">Values are demonstration figures produced in the browser. ' +
+          "Replace API." + (kind === "income" ? "incomeStatement" : kind === "balance" ? "balanceSheet" : "cashFlow") +
+          "() with the live endpoint to show reported statements.</div>";
+    });
+  }
+  function tabPnl(host, c)      { statementTab(host, c, "income",  "Profit & Loss", "Annual, as reported"); }
+  function tabBalance(host, c)  { statementTab(host, c, "balance", "Balance Sheet", "As at fiscal year end"); }
+  function tabCashflow(host, c) { statementTab(host, c, "cash",    "Cash Flow",     "Indirect method"); }
+
+  /* ---- Tab: Key ratios ---------------------------------------------------- */
+  function tabRatios(host, c) {
+    API.ratios(c.ticker).then(function (d) {
+      var rs = d.ratios;
+      var groups = [
+        { title: "Returns", items: [["ROE", "roe", pct], ["ROCE", "roce", pct], ["ROA", "roa", pct]] },
+        { title: "Margins", items: [["Gross margin", "gross_margin", pct], ["EBITDA margin", "ebitda_margin", pct],
+          ["PAT margin", "pat_margin", pct]] },
+        { title: "Leverage & liquidity", items: [["Debt / equity", "debt_equity", mult],
+          ["Net debt / EBITDA", "net_debt_ebitda", mult], ["Interest cover", "interest_cover", mult],
+          ["Current ratio", "current_ratio", mult], ["Quick ratio", "quick_ratio", mult]] },
+        { title: "Efficiency", items: [["Asset turnover", "asset_turnover", mult],
+          ["Inventory days", "inventory_days", function (v) { return Math.round(v); }],
+          ["Receivable days", "receivable_days", function (v) { return Math.round(v); }],
+          ["Payable days", "payable_days", function (v) { return Math.round(v); }],
+          ["Cash conversion", "cash_conversion", pct]] },
+        { title: "Valuation", items: [["P/E", "pe", mult], ["P/B", "pb", mult],
+          ["EV / EBITDA", "ev_ebitda", mult], ["Dividend payout", "dividend_payout", pct]] }
+      ];
+      var head = '<th class="l">Ratio</th>' + rs.map(function (r) { return "<th>" + fy(r.fy) + "</th>"; }).join("");
+      var bodyRows = groups.map(function (g) {
+        return '<tr class="is-subtotal"><td>' + esc(g.title) + "</td>" +
+          rs.map(function () { return "<td></td>"; }).join("") + "</tr>" +
+          g.items.map(function (it) {
+            return "<tr><td>" + esc(it[0]) + "</td>" + rs.map(function (r) {
+              return '<td class="num">' + it[2](r[it[1]]) + "</td>"; }).join("") + "</tr>";
+          }).join("");
+      }).join("");
+      var latest = rs[rs.length - 1];
+      host.innerHTML =
+        '<div class="epa-grid epa-g4" style="margin-bottom:16px">' +
+          statCard("ROE", pct(latest.roe), "latest year") +
+          statCard("ROCE", pct(latest.roce), "pre-tax") +
+          statCard("Net debt / EBITDA", mult(latest.net_debt_ebitda)) +
+          statCard("P/E", mult(latest.pe), "trailing") +
+        "</div>" +
+        card(cardHead("Key ratios", "Computed from the annual statements",
+            '<button class="epa-btn small" data-action="csv" data-key="ratios">Export CSV</button>') +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr>' + head + "</tr></thead><tbody>" +
+          bodyRows + "</tbody></table></div>") +
+        '<div style="height:16px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("ROE vs ROCE") + body(barChart(rs.map(function (r) { return fy(r.fy); }), [
+            { values: rs.map(function (r) { return r.roe * 100; }),  color: "#1f6feb" },
+            { values: rs.map(function (r) { return r.roce * 100; }), color: "#0b7a3b" }
+          ], { height: 190 }) + '<div class="epa-legend" style="margin-top:8px">' +
+            '<span><i class="epa-swatch" style="background:#1f6feb"></i>ROE %</span>' +
+            '<span><i class="epa-swatch" style="background:#0b7a3b"></i>ROCE %</span></div>')) +
+          card(cardHead("Scorecard", "Category scores, 0\u2013100") + body(
+            c.score.categories.map(function (s) {
+              return '<div style="margin-bottom:11px"><div class="epa-row" style="justify-content:space-between">' +
+                '<span class="xs">' + esc(s.key) + '</span><span class="num b">' + s.value + "</span></div>" +
+                scoreBar(s.value, s.value > 70 ? "gain" : s.value < 50 ? "loss" : "") + "</div>";
+            }).join(""))) +
+        "</div>";
+    });
+  }
+
+  /* ---- Tab: Share price / market data ------------------------------------ */
+  function tabMarket(host, c) {
+    API.marketData(c.ticker).then(function (d) {
+      var ranges = { "1M": 22, "3M": 66, "6M": 132, "1Y": 180 };
+      var n = ranges[STATE.market.range] || 132;
+      var slice = d.series.slice(-n);
+      var closes = slice.map(function (p) { return p.close; });
+      var first = closes[0], last = closes[closes.length - 1];
+      var q = d.quote;
+      host.innerHTML =
+        '<div class="epa-grid epa-g4" style="margin-bottom:16px">' +
+          statCard("Last price", rupees(q.live_price),
+            '<span class="' + signCls(q.change) + '">' + (q.change >= 0 ? "+" : "") + q.change.toFixed(2) +
+            " (" + signedPct(q.change_percent) + ")</span>") +
+          statCard("Day range", rupees(q.day_low, 0) + " \u2013 " + rupees(q.day_high, 0), "open " + rupees(q.open, 0)) +
+          statCard("52-week range", rupees(q.week52_low, 0) + " \u2013 " + rupees(q.week52_high, 0)) +
+          statCard("Volume", plain(q.volume), "10d avg " + plain(q.avg_volume_10d)) +
+        "</div>" +
+        card(cardHead("Price history", STATE.market.range + " \u00B7 " +
+            (last >= first ? "+" : "") + (((last / first) - 1) * 100).toFixed(2) + "% over period",
+            ["1M", "3M", "6M", "1Y"].map(function (rg) {
+              return '<button class="epa-chip ' + (STATE.market.range === rg ? "is-active" : "") +
+                '" data-action="range" data-key="' + rg + '">' + rg + "</button>";
+            }).join(" ")) +
+          body(lineChart(closes, { height: 240 }) +
+            '<div class="epa-row xs muted" style="justify-content:space-between;margin-top:6px">' +
+            "<span>" + dateShort(slice[0].date) + "</span><span>" +
+            dateShort(slice[slice.length - 1].date) + "</span></div>")) +
+        '<div style="height:16px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("Quote detail", "Delayed demo feed") + body(
+            kv("Previous close", rupees(q.prev_close)) + kv("Open", rupees(q.open)) +
+            kv("VWAP", rupees(q.vwap)) + kv("Market cap", marketCap(d.market_cap)) +
+            kv("Shares outstanding", plain(d.shares) + " cr") +
+            kv("P/E (trailing)", mult(d.ratios.pe)) + kv("P/B", mult(d.ratios.pb)) +
+            kv("EV / EBITDA", mult(d.ratios.ev_ebitda)))) +
+          card(cardHead("Recent sessions") +
+            '<div class="epa-scroll"><table class="epa-table"><thead><tr><th class="l">Date</th>' +
+            "<th>Close</th><th>Change</th></tr></thead><tbody>" +
+            slice.slice(-12).reverse().map(function (p, i, arr) {
+              var prev = arr[i + 1] ? arr[i + 1].close : p.close;
+              var ch = (p.close - prev) / prev;
+              return "<tr><td>" + dateShort(p.date) + '</td><td class="num">' + rupees(p.close) + "</td>" +
+                '<td class="num ' + signCls(ch) + '">' + signedPct(ch) + "</td></tr>";
+            }).join("") + "</tbody></table></div>") +
+        "</div>" +
+        '<div style="height:12px"></div>' +
+        '<div class="epa-note">Prices are simulated locally. Point API.marketData() at your quote/history ' +
+          "endpoint to show real market data.</div>";
+    });
+  }
+
+  /* ---- Tab: AI analysis (mock) ------------------------------------------- */
+  function tabAI(host, c) {
+    var sub = STATE.ai.tab;
+    var subTabs = [
+      { key: "analysis", label: "Analysis" }, { key: "chat", label: "Chat" },
+      { key: "evidence", label: "Evidence" }
+    ];
+    host.innerHTML = tabStrip(subTabs, sub, "aitab") + '<div id="epa-aibody">' + loadingBlock(4, 40) + "</div>";
+    var b = document.getElementById("epa-aibody");
+    if (sub === "chat") return aiChatView(b, c);
+    if (sub === "evidence") return aiEvidenceView(b, c);
+    aiAnalysisView(b, c);
+  }
+
+  function aiAnalysisView(b, c) {
+    API.aiAnalyse(c.ticker, STATE.ai.capability).then(function (a) {
+      b.innerHTML =
+        '<div class="epa-row" style="margin-bottom:12px">' +
+          AI_CAPABILITIES.map(function (cap) {
+            return '<button class="epa-chip ' + (cap.key === STATE.ai.capability ? "is-active" : "") +
+              '" data-action="aicap" data-key="' + cap.key + '">' + esc(cap.label) + "</button>";
+          }).join("") + "</div>" +
+        card(cardHead("AI research note \u2014 " +
+            (AI_CAPABILITIES.filter(function (x) { return x.key === a.capability; })[0] || {}).label,
+            "Generated " + dateTime(a.generated_at) + " \u00B7 provider " + a.meta.provider,
+            badge("MOCK OUTPUT", "warn")) +
+          body(
+            '<div class="epa-verdict ' + a.tone + '" style="margin-bottom:12px">' +
+              '<div class="epa-row" style="justify-content:space-between">' +
+                '<span class="b">Verdict: ' + esc(a.verdict) + "</span>" +
+                badge("Confidence " + Math.round(a.confidence * 100) + "%") + "</div>" +
+              '<p class="sm" style="margin-top:6px">' + esc(a.summary) + "</p></div>" +
+            "<ul>" + a.points.map(function (pt) {
+              return '<li class="epa-timeline"><span class="epa-dot"></span><span class="sm">' + esc(pt) + "</span></li>";
+            }).join("") + "</ul>")) +
+        '<div style="height:16px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("Scores behind the view") + body(
+            '<div class="epa-row" style="justify-content:space-between;margin-bottom:10px">' +
+              '<span class="epa-statlabel">Overall</span><span class="num b" style="font-size:1.25rem">' +
+              a.scores.overall + "</span></div>" + scoreBar(a.scores.overall) +
+            '<div class="epa-divider"></div>' +
+            a.scores.categories.map(function (s) {
+              return '<div style="margin-bottom:10px"><div class="epa-row" style="justify-content:space-between">' +
+                '<span class="xs">' + esc(s.key) + '</span><span class="num">' + s.value + "</span></div>" +
+                scoreBar(s.value, s.value > 70 ? "gain" : s.value < 50 ? "loss" : "") + "</div>";
+            }).join(""))) +
+          '<div class="epa-stack">' +
+            card(cardHead("Citations", "Grounding sources") + body(a.citations.map(function (ct) {
+              return '<div class="epa-kv"><span class="sm">' + esc(ct.label) + "</span>" + badge(ct.kind) + "</div>";
+            }).join(""))) +
+            card(cardHead("Guardrails") + body('<ul>' + a.guardrails.map(function (g) {
+              return '<li class="xs muted" style="margin-bottom:5px">\u2022 ' + esc(g) + "</li>"; }).join("") + "</ul>")) +
+          "</div>" +
+        "</div>";
+    });
+  }
+
+  function aiChatView(b, c) {
+    var log = STATE.ai.chat.map(function (t) {
+      return '<div class="epa-bubble ' + (t.role === "user" ? "user" : "bot") + '">' + esc(t.text) +
+        (t.meta ? '<div class="tiny" style="opacity:.7;margin-top:5px">' + esc(t.meta) + "</div>" : "") + "</div>";
+    }).join("");
+    b.innerHTML = card(
+      cardHead("Ask about " + c.ticker, "Mock analyst chat \u2014 answers are generated locally", badge("MOCK", "warn")) +
+      body('<div class="epa-chatlog" id="epa-chatlog">' + (log ||
+          '<div class="epa-bubble bot">Ask a question about ' + esc(c.name) +
+          " \u2014 for example: how has the margin trended, or what is the leverage position?</div>") + "</div>" +
+        '<div class="epa-row" style="margin-top:12px;flex-wrap:nowrap">' +
+          '<input class="epa-input" id="epa-chatinput" placeholder="Type a question\u2026"/>' +
+          '<button class="epa-btn primary" data-action="chatsend">Send</button></div>' +
+        '<div class="epa-row" style="margin-top:8px">' +
+          ["What drove the margin change?", "Is the balance sheet stretched?", "How is cash conversion?"]
+            .map(function (q) { return '<button class="epa-chip" data-action="chatpreset" data-key="' + esc(q) + '">' + esc(q) + "</button>"; })
+            .join("") + "</div>"));
+    var input = document.getElementById("epa-chatinput");
+    if (input) input.addEventListener("keydown", function (e) { if (e.key === "Enter") sendChat(c, input.value); });
+  }
+  function sendChat(c, question) {
+    if (!question || !question.trim()) return;
+    STATE.ai.chat.push({ role: "user", text: question.trim() });
+    STATE.ai.chat.push({ role: "assistant", text: "Thinking\u2026" });
+    tabAI(document.getElementById("epa-ctab"), c);
+    API.aiChat(c.ticker, question).then(function (res) {
+      STATE.ai.chat[STATE.ai.chat.length - 1] = {
+        role: "assistant", text: res.answer,
+        meta: "provider " + res.meta.provider + " \u00B7 " + res.meta.latency_ms + " ms \u00B7 " +
+              res.citations.length + " citations"
+      };
+      tabAI(document.getElementById("epa-ctab"), c);
+    });
+  }
+
+  function aiEvidenceView(b, c) {
+    var y = c.latest;
+    b.innerHTML = card(cardHead("Evidence pack", "What the mock analyst was given") + body(
+      '<div class="epa-scroll"><table class="epa-table"><thead><tr><th class="l">Fact</th><th>Value</th>' +
+      '<th class="l">Source</th></tr></thead><tbody>' +
+      [["Revenue " + fy(y.fy), crore(y.revenue) + " cr", "Statement of P&L"],
+       ["EBITDA margin", pct(y.ebitda_margin), "Derived"],
+       ["PAT " + fy(y.fy), crore(y.pat) + " cr", "Statement of P&L"],
+       ["Net debt", crore(y.net_debt) + " cr", "Balance sheet"],
+       ["CFO", crore(y.cfo) + " cr", "Cash flow statement"],
+       ["Promoter holding", c.shareholding[0].pct.toFixed(1) + "%", "Shareholding pattern"],
+       ["Market cap", marketCap(c.market_cap), "Market data"]].map(function (r) {
+        return "<tr><td>" + esc(r[0]) + '</td><td class="num">' + r[1] + '</td><td class="l xs muted">' +
+          esc(r[2]) + "</td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<div class="epa-note" style="margin-top:12px">No external model is called. When you wire a provider, ' +
+      "this pack becomes the retrieval context sent with the prompt.</div>"));
+  }
+
+  /* ---- Tab: News ---------------------------------------------------------- */
+  function tabNews(host, c) {
+    API.news(c.ticker).then(function (items) {
+      var tone = { positive: "gain", negative: "loss", neutral: "" };
+      host.innerHTML =
+        '<div class="epa-split">' +
+          card(cardHead("Latest news", esc(c.name) + " \u00B7 " + items.length + " items",
+              badge("DEMO FEED", "warn")) +
+            body(items.map(function (n) {
+              return '<div class="epa-timeline"><span class="epa-dot"></span>' +
+                '<div class="epa-row" style="gap:6px;margin-bottom:3px">' +
+                  badge(n.category) + badge(n.sentiment, tone[n.sentiment]) +
+                  '<span class="tiny muted">' + dateShort(n.published_at) + " \u00B7 " + esc(n.source) + "</span></div>" +
+                '<div class="sm b">' + esc(n.headline) + "</div>" +
+                '<div class="xs muted" style="margin-top:3px">' + esc(n.summary) + "</div></div>";
+            }).join(""))) +
+          '<div class="epa-stack">' +
+            card(cardHead("Sentiment mix") + body(
+              ["positive", "neutral", "negative"].map(function (k) {
+                var n = items.filter(function (i) { return i.sentiment === k; }).length;
+                var p = Math.round((n / items.length) * 100);
+                return '<div style="margin-bottom:11px"><div class="epa-row" style="justify-content:space-between">' +
+                  '<span class="xs" style="text-transform:capitalize">' + k + '</span><span class="num">' + p + "%</span></div>" +
+                  scoreBar(p, k === "positive" ? "gain" : k === "negative" ? "loss" : "") + "</div>";
+              }).join(""))) +
+            card(cardHead("Filters") + body(
+              ["All", "Results", "Corporate", "Analyst", "Market", "M&A", "Governance"].map(function (f) {
+                return '<button class="epa-chip" style="margin:0 6px 6px 0">' + esc(f) + "</button>"; }).join("") +
+              '<div class="epa-note" style="margin-top:8px">Filtering is presentational in the prototype; ' +
+              "wire it to API.news(ticker, {category}) when the feed exists.</div>")) +
+          "</div>" +
+        "</div>";
+    });
+  }
+
+  /* ---- Tab: Peer comparison ---------------------------------------------- */
+  function tabPeers(host, c) {
+    API.peers(c.ticker, 5).then(function (peers) {
+      var cols = [
+        { k: "market_cap", label: "Market cap", f: marketCap },
+        { k: "revenue", label: "Revenue", f: function (v) { return crore(v, 0); } },
+        { k: "ebitda_margin", label: "EBITDA %", f: pct },
+        { k: "pat_margin", label: "PAT %", f: pct },
+        { k: "roe", label: "ROE", f: pct },
+        { k: "roce", label: "ROCE", f: pct },
+        { k: "pe", label: "P/E", f: function (v) { return mult(v, 1); } },
+        { k: "pb", label: "P/B", f: function (v) { return mult(v, 1); } },
+        { k: "ev_ebitda", label: "EV/EBITDA", f: function (v) { return mult(v, 1); } },
+        { k: "debt_equity", label: "D/E", f: mult },
+        { k: "score", label: "Score", f: function (v) { return Math.round(v); } }
+      ];
+      var median = function (key) {
+        var vals = peers.map(function (p) { return p[key]; }).sort(function (a, b) { return a - b; });
+        var m = Math.floor(vals.length / 2);
+        return vals.length % 2 ? vals[m] : (vals[m - 1] + vals[m]) / 2;
+      };
+      host.innerHTML =
+        card(cardHead("Peer comparison", "Sector: " + esc(c.sector) + " \u00B7 latest reported year",
+            badge(peers.length + " companies", "accent")) +
+          '<div class="epa-scroll"><table class="epa-table"><thead><tr><th class="l">Company</th>' +
+          cols.map(function (col) { return "<th>" + esc(col.label) + "</th>"; }).join("") +
+          "</tr></thead><tbody>" +
+          peers.map(function (p) {
+            return '<tr class="' + (p.is_self ? "is-subtotal" : "") + '"><td>' +
+              '<span class="epa-link b" data-action="open" data-id="' + esc(p.id) + '">' + esc(p.ticker) + "</span>" +
+              (p.is_self ? " " + badge("this company", "accent") : "") +
+              '<div class="tiny muted">' + esc(p.name) + "</div></td>" +
+              cols.map(function (col) { return '<td class="num">' + col.f(p[col.k]) + "</td>"; }).join("") + "</tr>";
+          }).join("") +
+          '<tr class="is-total"><td>Peer median</td>' +
+          cols.map(function (col) { return '<td class="num">' + col.f(median(col.k)) + "</td>"; }).join("") +
+          "</tr></tbody></table></div>") +
+        '<div style="height:16px"></div>' +
+        '<div class="epa-split">' +
+          card(cardHead("Valuation vs peers", "P/E, trailing") + body(barChart(
+            peers.map(function (p) { return p.ticker.slice(0, 6); }),
+            [{ values: peers.map(function (p) { return p.pe; }), color: "#1f6feb" }], { height: 190 }))) +
+          card(cardHead("Profitability vs peers", "ROCE %") + body(barChart(
+            peers.map(function (p) { return p.ticker.slice(0, 6); }),
+            [{ values: peers.map(function (p) { return p.roce * 100; }), color: "#0b7a3b" }], { height: 190 }))) +
+        "</div>";
+    });
+  }
+
+  /* ==========================================================================
+     K.  PAGE: WATCHLIST
+     ========================================================================== */
+  function renderWatchlist(view) {
+    API.watchlists().then(function (lists) {
+      if (!lists.length) {
+        view.innerHTML = card(empty("No watchlists yet", "Create one to start tracking names.",
+          '<button class="epa-btn primary" data-action="wl-newprompt">Create watchlist</button>'));
+        return;
+      }
+      var current = STATE.watch.current;
+      if (!current || !lists.some(function (w) { return w.id === current; })) current = lists[0].id;
+      STATE.watch.current = current;
+      var wl = lists.filter(function (w) { return w.id === current; })[0];
+
+      API.watchlistRows(current).then(function (rows) {
+        var tabs = lists.map(function (w) {
+          return { key: String(w.id), label: w.name + " (" + w.entries.length + ")" };
+        });
+        var table = rows.length === 0
+          ? empty("Nothing on this list", "Add a ticker below, or use \u201CWatch\u201D on any company row.")
+          : '<div class="epa-scroll"><table class="epa-table"><thead><tr>' +
+            '<th>Ticker</th><th class="l">Company</th><th class="l">Sector</th><th>Price</th><th>Chg</th>' +
+            "<th>Buy below</th><th>Upside</th><th>P/E</th><th>ROE</th><th>Market cap</th>" +
+            '<th class="l">Note</th><th></th></tr></thead><tbody>' +
+            rows.map(function (r) {
+              return "<tr>" +
+                '<td><span class="num epa-link b" data-action="open" data-id="' + esc(r.id) + '">' + esc(r.ticker) + "</span></td>" +
+                '<td class="l">' + esc(r.name) + "</td>" +
+                '<td class="l xs muted">' + esc(r.sector) + "</td>" +
+                '<td class="num">' + rupees(r.price) + "</td>" +
+                '<td class="num ' + signCls(r.change_percent) + '">' + signedPct(r.change_percent) + "</td>" +
+                '<td class="num">' + rupees(r.buy_below, 0) +
+                  (r.derived ? '<div class="tiny muted">derived</div>' : "") + "</td>" +
+                '<td class="num ' + signCls(r.upside) + '">' + signedPct(r.upside, 1) + "</td>" +
+                '<td class="num">' + mult(r.pe, 1) + "</td>" +
+                '<td class="num">' + pct(r.roe) + "</td>" +
+                '<td class="num">' + marketCap(r.market_cap) + "</td>" +
+                '<td class="l xs muted">' + esc(r.note || EM) + "</td>" +
+                '<td><button class="epa-btn small danger" data-action="wl-remove" data-key="' + r.entry_id + '">Remove</button></td>' +
+                "</tr>";
+            }).join("") + "</tbody></table></div>";
+
+        var triggered = rows.filter(function (r) { return r.price <= r.buy_below; });
+
+        view.innerHTML =
+          '<div class="epa-between" style="margin-bottom:14px"><div>' +
+            '<h1 class="epa-h1">Watchlist</h1>' +
+            '<p class="epa-sub">Names under coverage but not yet owned. Buy-below is derived at a 12% ' +
+            "margin of safety where you have not set one.</p></div>" +
+            '<div class="epa-row">' +
+              '<button class="epa-btn" data-action="wl-rename">Rename</button>' +
+              '<button class="epa-btn danger" data-action="wl-delete">Delete list</button>' +
+              '<button class="epa-btn primary" data-action="wl-newprompt">+ New watchlist</button></div></div>' +
+
+          tabStrip(tabs, String(current), "wl-select") +
+
+          (STATE.watch.error ? '<div class="epa-alert err" style="margin-bottom:12px">' +
+             esc(STATE.watch.error) + "</div>" : "") +
+
+          '<div class="epa-grid epa-g4" style="margin-bottom:16px">' +
+            statCard("Names tracked", plain(rows.length)) +
+            statCard("At or below target", plain(triggered.length), "buy-below triggered",
+              triggered.length ? "gain" : "") +
+            statCard("Average upside to target",
+              rows.length ? signedPct(rows.reduce(function (a, r) { return a + r.upside; }, 0) / rows.length, 1) : EM) +
+            statCard("List", esc(wl.name), esc(wl.description || "no description")) +
+          "</div>" +
+
+          card(cardHead(wl.name, wl.description || "Tracked names") + table) +
+          '<div style="height:16px"></div>' +
+          card(cardHead("Add a company", "Ticker must exist in coverage") + body(
+            '<div class="epa-row" style="align-items:flex-end">' +
+              '<div style="flex:1;min-width:150px"><label class="epa-label">Ticker</label>' +
+                '<input class="epa-input" id="epa-wl-ticker" placeholder="e.g. INFY" list="epa-tickers"/>' +
+                '<datalist id="epa-tickers">' + DB.companies.map(function (c) {
+                  return '<option value="' + esc(c.ticker) + '">' + esc(c.name) + "</option>"; }).join("") +
+                "</datalist></div>" +
+              '<div style="width:150px"><label class="epa-label">Buy below (Rs)</label>' +
+                '<input class="epa-input" id="epa-wl-price" type="number" placeholder="optional"/></div>' +
+              '<div style="flex:1;min-width:150px"><label class="epa-label">Note</label>' +
+                '<input class="epa-input" id="epa-wl-note" placeholder="optional"/></div>' +
+              '<button class="epa-btn primary" data-action="wl-add">Add to list</button>' +
+            "</div>"));
+      });
+    });
+  }
+
+  /* ==========================================================================
+     L.  EVENTS
+     ========================================================================== */
+  function debounce(fn, ms) {
+    var t; return function () {
+      var args = arguments, self = this;
+      clearTimeout(t); t = setTimeout(function () { fn.apply(self, args); }, ms);
+    };
+  }
+
+  function currentCompany() {
+    return STATE.route.name === "company" ? DB.byId[STATE.route.id] : null;
+  }
+
+  document.addEventListener("click", function (e) {
+    var node = e.target.closest ? e.target.closest("[data-action]") : null;
+    if (!node || !root.contains(node)) return;
+    var action = node.getAttribute("data-action");
+    var key = node.getAttribute("data-key");
+    var id = node.getAttribute("data-id");
+
+    if (action === "nav")       { STATE.navOpen = false; go(node.getAttribute("data-href")); }
+    else if (action === "open") { STATE.navOpen = false; go(companyHref(id, "overview")); }
+    else if (action === "opennav")  { STATE.navOpen = true; render(); }
+    else if (action === "closenav") { STATE.navOpen = false; render(); }
+    else if (action === "theme")    { STATE.theme = STATE.theme === "dark" ? "light" : "dark"; save("theme", STATE.theme); render(); }
+    else if (action === "logout")   { API.logout(); STATE.user = null; authMode = "login"; authMsg = "You have been signed out."; render(); }
+    else if (action === "authmode") { authMode = key; authErr = null; authMsg = null; render(); }
+    else if (action === "showforgot") { authMode = "forgot"; authErr = null; authMsg = null; render(); }
+    else if (action === "demo") {
+      API.login("demo.analyst@equitypilot.ai", "demo1234").then(function (u) {
+        STATE.user = u; STATE.route = { name: "dashboard", id: null, tab: null }; go("/dashboard");
+      });
+    }
+    else if (action === "sector") { STATE.search.sector = key; STATE.search.q = ""; STATE.search.page = 1; go("/companies"); }
+    else if (action === "page")   {
+      STATE.search.page += (key === "next" ? 1 : -1);
+      if (STATE.search.page < 1) STATE.search.page = 1;
+      renderSearch(document.getElementById("epa-view"));
+    }
+    else if (action === "ctab")   { go(companyHref(STATE.route.id, key)); }
+    else if (action === "aitab")  { STATE.ai.tab = key; tabAI(document.getElementById("epa-ctab"), currentCompany()); }
+    else if (action === "aicap")  { STATE.ai.capability = key; tabAI(document.getElementById("epa-ctab"), currentCompany()); }
+    else if (action === "range")  { STATE.market.range = key; tabMarket(document.getElementById("epa-ctab"), currentCompany()); }
+    else if (action === "chatsend")   { var i = document.getElementById("epa-chatinput"); if (i) sendChat(currentCompany(), i.value); }
+    else if (action === "chatpreset") { sendChat(currentCompany(), key); }
+    else if (action === "csv")        { exportCsv(currentCompany(), key); }
+    else if (action === "quickwatch") { quickWatch(key); }
+    else if (action === "wl-select")  { STATE.watch.current = Number(key); STATE.watch.error = ""; renderWatchlist(document.getElementById("epa-view")); }
+    else if (action === "wl-add")     { watchAdd(); }
+    else if (action === "wl-remove")  {
+      API.removeFromWatchlist(STATE.watch.current, Number(key))
+        .then(function () { renderWatchlist(document.getElementById("epa-view")); });
+    }
+    else if (action === "wl-newprompt") {
+      var name = window.prompt("Name for the new watchlist:", "New watchlist");
+      if (name) API.createWatchlist(name, "").then(function (wl) {
+        STATE.watch.current = wl.id; renderWatchlist(document.getElementById("epa-view"));
+      });
+    }
+    else if (action === "wl-rename") {
+      var nn = window.prompt("Rename this watchlist:", "");
+      if (nn) API.renameWatchlist(STATE.watch.current, nn)
+        .then(function () { renderWatchlist(document.getElementById("epa-view")); });
+    }
+    else if (action === "wl-delete") {
+      if (window.confirm("Delete this watchlist and its entries?")) {
+        API.deleteWatchlist(STATE.watch.current).then(function () {
+          STATE.watch.current = null; renderWatchlist(document.getElementById("epa-view"));
+        });
+      }
+    }
+  });
+
+  function watchAdd() {
+    var t = document.getElementById("epa-wl-ticker");
+    var p = document.getElementById("epa-wl-price");
+    var n = document.getElementById("epa-wl-note");
+    if (!t) return;
+    API.addToWatchlist(STATE.watch.current, {
+      ticker: (t.value || "").trim().toUpperCase(),
+      buy_below: p && p.value ? Number(p.value) : null,
+      note: n ? n.value : ""
+    }).then(function () {
+      STATE.watch.error = ""; renderWatchlist(document.getElementById("epa-view"));
+    }).catch(function (err) {
+      STATE.watch.error = err.message; renderWatchlist(document.getElementById("epa-view"));
+    });
+  }
+
+  function quickWatch(ticker) {
+    API.watchlists().then(function (lists) {
+      var target = STATE.watch.current || (lists[0] && lists[0].id);
+      if (!target) return;
+      API.addToWatchlist(target, { ticker: ticker })
+        .then(function () { toast(ticker + " added to \u201C" + lists.filter(function (w) { return w.id === target; })[0].name + "\u201D"); })
+        .catch(function (err) { toast(err.message); });
+    });
+  }
+
+  var toastTimer;
+  function toast(msg) {
+    var el = document.getElementById("epa-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "epa-toast";
+      el.style.cssText = "position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:9999;" +
+        "background:#0b1f3a;color:#fff;padding:9px 16px;border-radius:6px;font-size:13px;" +
+        "box-shadow:0 10px 30px -8px rgba(0,0,0,.5);font-family:inherit";
+      document.body.appendChild(el);
+    }
+    el.textContent = msg; el.style.display = "block";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.style.display = "none"; }, 2600);
+  }
+
+  /** CSV export straight from the mock data — no server round trip. */
+  function exportCsv(c, kind) {
+    if (!c) return;
+    var lines = [];
+    if (kind === "ratios") {
+      var rs = c.ratios, keys = Object.keys(rs[0]).filter(function (k) { return k !== "fy"; });
+      lines.push(["ratio"].concat(rs.map(function (r) { return fy(r.fy); })).join(","));
+      keys.forEach(function (k) {
+        lines.push([k].concat(rs.map(function (r) { return (r[k] || 0).toFixed(4); })).join(","));
+      });
+    } else {
+      var d = statement(c.ticker, kind);
+      lines.push(["line_item"].concat(d.fiscal_years.map(fy)).join(","));
+      d.rows.forEach(function (row) {
+        lines.push(['"' + row.label + '"'].concat(row.values.map(function (v) { return v.toFixed(2); })).join(","));
+      });
+    }
+    var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = c.ticker + "-" + kind + ".csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    toast("Exported " + a.download);
+  }
+
+  /* Auth form submit */
+  document.addEventListener("submit", function (e) {
+    if (!e.target || e.target.id !== "epa-authform") return;
+    e.preventDefault();
+    var email = (document.getElementById("epa-email") || {}).value;
+    var pass = (document.getElementById("epa-pass") || {}).value;
+    var nameEl = document.getElementById("epa-name");
+    if (authMode === "forgot") {
+      API.requestPasswordReset(email).then(function (res) {
+        authMode = "login"; authErr = null; authMsg = res.message; render();
+      }).catch(function (err) { authErr = err.message; render(); });
+      return;
+    }
+    var p = authMode === "register" ? API.register(nameEl ? nameEl.value : "", email, pass)
+                                    : API.login(email, pass);
+    p.then(function (u) {
+      STATE.user = u; authErr = null; authMsg = null;
+      STATE.route = { name: "dashboard", id: null, tab: null };
+      go("/dashboard"); render();
+    }).catch(function (err) { authErr = err.message; render(); });
+  });
+
+  /* Global search type-ahead + Ctrl/Cmd-K */
+  document.addEventListener("input", function (e) {
+    if (!e.target || e.target.id !== "epa-globalsearch") return;
+    var q = e.target.value;
+    var box = document.getElementById("epa-suggest");
+    var hits = API.searchSync(q, 7);
+    if (!hits.length) { box.innerHTML = ""; return; }
+    box.innerHTML = '<div class="epa-results">' + hits.map(function (c) {
+      return '<div class="epa-result" data-action="open" data-id="' + esc(c.id) + '">' +
+        '<div><div class="sm b">' + esc(c.name) + "</div>" +
+        '<div class="tiny muted">' + esc(c.sector) + " \u00B7 " + esc(c.industry) + "</div></div>" +
+        '<div class="right"><div class="num">' + esc(c.ticker) + "</div>" +
+        '<div class="tiny muted">' + marketCap(c.market_cap) + "</div></div></div>";
+    }).join("") + "</div>";
+  });
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+      var input = document.getElementById("epa-globalsearch");
+      if (input) { e.preventDefault(); input.focus(); input.select(); }
+    }
+    if (e.key === "Escape") {
+      var box = document.getElementById("epa-suggest");
+      if (box) box.innerHTML = "";
+      if (STATE.navOpen) { STATE.navOpen = false; render(); }
+    }
+  });
+  document.addEventListener("click", function (e) {
+    var box = document.getElementById("epa-suggest");
+    if (!box) return;
+    if (!e.target.closest || !e.target.closest(".epa-searchwrap")) box.innerHTML = "";
+  });
+
+  /* ==========================================================================
+     M.  BOOT
+     ========================================================================== */
+  function boot() {
+    try {
+      var m = mountRoot();
+      root = m.root; app = m.app;
+      STATE.route = parseHash();
+      if (!STATE.user && STATE.route.name !== "login" && STATE.route.name !== "register" &&
+          STATE.route.name !== "forgot") {
+        STATE.route = { name: "login", id: null, tab: null };
+      }
+      render();
+    } catch (err) {
+      if (window.console && window.console.error) window.console.error("EquityPilotAI:", err);
+      showFatal((err && err.message) ? err.message : err);
+    }
+  }
+
+  /* Blogger injects its own scripts and may place this block before the widget
+     markup is parsed, so boot is deferred until the document is ready. */
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+
+  /* Last resort: if something throws before anything was painted, say so on the
+     page rather than leaving a blank blog. */
+  window.addEventListener("error", function (e) {
+    var painted = document.querySelector(".epa-shell") || document.getElementById("epa-authform");
+    if (!painted) showFatal(e && e.message ? e.message : "Unexpected script error");
+  });
+})();
+//]]>
+</script>
+</body>
+</html>
