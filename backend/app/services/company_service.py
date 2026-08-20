@@ -34,6 +34,7 @@ from app.schemas.company import (
 )
 from app.services.live_market import LiveMarketService
 from app.services.platform.cache import Namespace, cache
+from app.services.universe.resolution import resolve_company
 
 #: Valid canonical keys, used to skip unknown rows defensively.
 _VALID_ITEMS = {item.value for item in LineItem}
@@ -64,8 +65,11 @@ class CompanyService:
         return LiveMarketService.attach(detail, company, self.db)
 
     def get_by_ticker(self, ticker: str) -> Company | None:
-        stmt = select(Company).where(func.upper(Company.ticker) == ticker.upper())
-        return self.db.execute(stmt).scalar_one_or_none()
+        # Canonical resolution rather than scalar_one_or_none(): a legacy
+        # duplicate pair would make the latter raise MultipleResultsFound
+        # (a 500 for every caller), and an arbitrary first row is exactly the
+        # behaviour that fed facts to one twin while the other stayed empty.
+        return resolve_company(self.db, ticker)
 
     def search(self, query: str, limit: int = 20) -> list[CompanySummary]:
         """Name/ticker/sector search, ranked so exact ticker hits come first."""

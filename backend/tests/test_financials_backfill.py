@@ -408,3 +408,48 @@ def test_batched_runs_resume_with_the_next_uncovered_companies(db):
 def test_default_sweep_limit_is_twenty_five():
     """The safe default for a scheduled sweep is exactly 25 companies."""
     assert DEFAULT_SWEEP_LIMIT == 25
+
+
+# ------------------------------------------------------ canonical-company regressions
+def test_company_with_twelve_fiscal_years_is_not_reported_missing(db):
+    """Regression: an M&M-style company with 12 fiscal years of history must
+    never appear in companies_without_financials().
+
+    The duplicate-company defect surfaced exactly this way: a legacy duplicate
+    row with zero facts was (correctly, per the LEFT JOIN) reported as
+    uncovered, while its twin owned the full history. After the deduplication
+    migration there is one row, and it must be treated as covered.
+    """
+    _company(db, "M&M", years=12)
+    service = FinancialsBackfillService(db, delay_seconds=0)
+
+    selected = service.companies_without_financials()
+    assert [t.ticker for t in selected] == []
+
+
+def test_only_genuinely_uncovered_companies_are_selected(db):
+    """Selection returns exactly the companies with no usable history — no
+    more, no fewer — which is the invariant the duplicate rows broke."""
+    _company(db, "COVERED", years=12)
+    _company(db, "COVERED2", years=5)
+    _company(db, "EMPTY1", years=0)
+    _company(db, "EMPTY2", years=0)
+
+    service = FinancialsBackfillService(db, delay_seconds=0)
+    selected = {t.ticker for t in service.companies_without_financials()}
+
+    assert selected == {"EMPTY1", "EMPTY2"}
+
+
+def test_coverage_snapshot_counts_each_company_once(db):
+    """A duplicate row inflated `without_financials` even when the ticker was
+    fully covered. Post-dedup, the snapshot must count one row per company."""
+    _company(db, "DUP1", years=12)
+    _company(db, "DUP2", years=12)
+    _company(db, "MISS1", years=0)
+
+    snapshot = FinancialsBackfillService(db, delay_seconds=0).coverage_snapshot()
+
+    assert snapshot["companies"] == 3
+    assert snapshot["with_financials"] == 2
+    assert snapshot["without_financials"] == 1

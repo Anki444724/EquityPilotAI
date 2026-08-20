@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.data.nse_universe import NSE_UNIVERSE, is_financial
@@ -30,6 +31,7 @@ from app.domain.financials.canonical import Precedence
 from app.domain.financials.line_items import LineItem as LI
 from app.models.company import Company, FinancialFact
 from app.models.financials import FinancialFactVersion
+from app.services.universe.resolution import resolve_company
 
 
 def _utcnow() -> datetime:
@@ -388,7 +390,12 @@ def ingest_company(
         shares = facts.get(LI.WEIGHTED_SHARES, {}).get(latest)
     market_cap = screener.market_cap or (price * shares if price and shares else None)
 
-    existing = db.scalar(select(Company).where(Company.ticker == ticker))
+    # Canonical resolution: an Indian company is matched inside the Indian
+    # venue family (NSE preferred), never against a foreign listing that
+    # happens to share a symbol, and never against an *arbitrary* row when
+    # legacy duplicates still exist (the dedup migration merges those; until
+    # then the financial-history owner wins).
+    existing = resolve_company(db, ticker, exchange="NSE")
     company_id = existing.id if existing else str(uuid.uuid4())
 
     if existing is not None:
@@ -402,6 +409,24 @@ def ingest_company(
             sector=sector, industry=industry,
         )
         db.add(company)
+        try:
+            # Flush here so a concurrent ingest/import of the same ticker is
+            # arbitrated by uq_company_ticker_exchange *now*, before any fact
+            # is written. The loser re-reads the winner instead of failing the
+            # sweep — the same race protocol the US provisioner documents.
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            existing = resolve_company(db, ticker, exchange="NSE")
+            if existing is None:  # pragma: no cover — the constraint said a row exists
+                raise
+            company = existing
+            company_id = existing.id
+            db.execute(
+                delete(FinancialFact).where(FinancialFact.company_id == company_id)
+            )
+            company.name, company.sector, company.industry = name, sector, industry
+            company.data_version = (company.data_version or 1) + 1
 
     company.current_price = price
     company.shares_outstanding = shares

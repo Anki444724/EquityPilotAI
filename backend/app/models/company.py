@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
-    UniqueConstraint,
+    UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -135,6 +135,16 @@ class Company(Base):
         # Phase 3 note: the constraint is (ticker, exchange), not ticker
         # alone, which is what allows a US listing to coexist with an Indian
         # one that happens to share a symbol.
+        #
+        # Case-insensitive guard over the same key: every creation path
+        # upper-cases the ticker, but the database is the last line of
+        # defence — this index turns a hypothetical "m&m" insert next to
+        # "M&M" into a constraint violation instead of a near-duplicate
+        # company that every case-sensitive lookup would miss.
+        Index(
+            "uq_companies_exchange_ticker_ci", "exchange", func.upper(ticker),
+            unique=True,
+        ),
         Index("ix_company_sector_mcap", "sector", "market_cap"),
         Index("ix_company_listing_status", "listing_status"),
         Index("ix_company_exchange", "exchange"),

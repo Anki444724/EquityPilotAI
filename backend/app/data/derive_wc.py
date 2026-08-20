@@ -37,6 +37,7 @@ from app.data.screener_source import ScreenerError, ScreenerFinancials, fetch_sc
 from app.domain.financials.canonical import Precedence
 from app.domain.financials.line_items import LineItem as LI
 from app.models.company import Company, FinancialFact
+from app.services.universe.resolution import resolve_company
 
 DAYS_IN_YEAR = 365.0
 
@@ -72,7 +73,7 @@ def derive_from_ratios(
     db: Session, ticker: str, reference: ScreenerFinancials | None = None,
 ) -> DeriveResult:
     """Fill working-capital items by inverting the reported days ratios."""
-    company = db.scalar(select(Company).where(Company.ticker == ticker))
+    company = resolve_company(db, ticker, exchange="NSE")
     if company is None:
         return DeriveResult(ticker=ticker, ok=False, error="not ingested")
 

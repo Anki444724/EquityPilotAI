@@ -391,13 +391,11 @@ def handle_filing_crawl(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
 
     if tickers:
         # Targeted run, used by the admin panel and by verification.
-        from app.models.company import Company
+        from app.services.universe.resolution import resolve_company
 
         results = []
         for ticker in tickers:
-            company = db.scalar(
-                select(Company).where(Company.ticker == str(ticker).upper())
-            )
+            company = resolve_company(db, str(ticker), exchange="NSE")
             if company is None:
                 continue
             results.append(collector.crawl_company(

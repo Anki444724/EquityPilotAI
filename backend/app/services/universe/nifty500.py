@@ -37,8 +37,10 @@ from typing import Any
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.company import Company
+from app.services.universe.resolution import resolve_company
 
 log = structlog.get_logger(__name__)
 
@@ -231,17 +233,16 @@ class Nifty500Importer:
         ISIN, and matching on symbol alone would create a duplicate row for
         the same security. Symbol is the fallback for the 135 companies
         already present, some of which predate ISIN being populated.
+
+        The symbol fallback resolves through :func:`resolve_company` so a
+        legacy duplicate can never make the import write to an arbitrary twin
+        — the financial-history owner is the canonical row.
         """
         if isin:
             found = self.db.scalar(select(Company).where(Company.isin == isin))
             if found is not None:
                 return found
-        return self.db.scalar(
-            select(Company).where(
-                Company.ticker == symbol,
-                Company.exchange.in_(("NSE", "BSE", "NSE/BSE")),
-            )
-        )
+        return resolve_company(self.db, symbol, exchange="NSE")
 
     def run(self, *, dry_run: bool = False) -> ImportReport:
         started = time.perf_counter()
@@ -313,9 +314,22 @@ class Nifty500Importer:
                 currency="INR",
                 reporting_scale="crore",
             ))
-            self.db.flush()
-            report.created += 1
-            return
+            try:
+                # The flush is the race arbiter: uq_company_ticker_exchange
+                # rejects a concurrent duplicate insert for the same symbol,
+                # and the losing import merges into the winner instead of
+                # leaving two identity rows.
+                self.db.flush()
+            except IntegrityError:
+                self.db.rollback()
+                company = self._existing(item.symbol, item.isin)
+                if company is None:  # pragma: no cover — the constraint said a row exists
+                    raise
+                log.warning("nifty500 import lost a creation race; "
+                            "merging into the existing row", symbol=item.symbol)
+            else:
+                report.created += 1
+                return
 
         # Update only fields this import is authoritative for, and only when
         # they actually change — so `updated` means something.

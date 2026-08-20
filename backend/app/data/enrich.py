@@ -28,6 +28,7 @@ from app.data.yahoo_source import (
 from app.domain.financials.canonical import Precedence
 from app.domain.financials.line_items import LineItem as LI
 from app.models.company import Company, FinancialFact
+from app.services.universe.resolution import resolve_company
 
 
 @dataclass(slots=True)
@@ -53,7 +54,7 @@ def _coverage(db: Session, company_id: str, year: int) -> float:
 
 def enrich_company(db: Session, ticker: str) -> EnrichResult:
     """Add Yahoo's granular lines to an already-ingested company."""
-    company = db.scalar(select(Company).where(Company.ticker == ticker))
+    company = resolve_company(db, ticker, exchange="NSE")
     if company is None:
         return EnrichResult(ticker=ticker, ok=False, error="not ingested")
 

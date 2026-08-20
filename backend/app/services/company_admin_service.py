@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.company import Company, CompanyVersion
@@ -32,6 +33,7 @@ from app.schemas.company import (
     CompanyCreate, CompanyDetail, CompanyUpdate, CompanyVersionOut,
 )
 from app.services.platform.recycle_bin import RecycleBinService
+from app.services.universe.resolution import resolve_company, venue_family
 
 
 class CompanyAdminError(Exception):
@@ -102,6 +104,16 @@ class CompanyAdminService:
                 func.upper(Company.ticker) == t,
                 Company.deleted_at.is_(None),
             )
+            # The database identity is (ticker, exchange), so a ticker is only
+            # "taken" inside the venue family it would live in: Indian venues
+            # share one namespace (an NSE row occupies "M&M" for BSE too),
+            # while a US listing may reuse a symbol an Indian company holds.
+            if exchange:
+                family = venue_family(exchange)
+                if family:
+                    stmt = stmt.where(
+                        func.upper(Company.exchange).in_(family)
+                    )
             if exclude_id:
                 stmt = stmt.where(Company.id != exclude_id)
             if self.db.execute(stmt).first() is not None:
@@ -159,7 +171,11 @@ class CompanyAdminService:
         ticker = _normalise_ticker(payload.ticker)
         if not payload.name or not ticker:
             raise CompanyAdminError("name and ticker are required")
-        self._check_unique(ticker=ticker, isin=payload.isin, bse_code=payload.bse_code)
+        exchange = (payload.exchange or "NSE").strip().upper()
+        self._check_unique(
+            ticker=ticker, exchange=exchange, isin=payload.isin,
+            bse_code=payload.bse_code,
+        )
 
         listing_date = None
         if payload.listing_date:
@@ -174,7 +190,7 @@ class CompanyAdminService:
             id=str(uuid.uuid4()),
             name=payload.name.strip(),
             ticker=ticker,
-            exchange=(payload.exchange or "NSE").upper(),
+            exchange=exchange,
             isin=_normalise_isin(payload.isin),
             bse_code=payload.bse_code,
             sector=payload.sector,
@@ -193,7 +209,17 @@ class CompanyAdminService:
             index_membership=payload.index_membership,
         )
         self.db.add(company)
-        self.db.flush()
+        try:
+            # The application-level check above cannot see a concurrent
+            # insert; the unique constraint is the arbiter, and a losing race
+            # becomes a friendly error instead of a second row.
+            self.db.flush()
+        except IntegrityError:
+            self.db.rollback()
+            raise CompanyAdminError(
+                f"A company already exists with NSE symbol '{ticker}' "
+                f"on exchange '{exchange}'."
+            ) from None
         self._record_version(
             company, actor_id=actor_id, actor_email=actor_email,
             changes={}, change_type="create",
@@ -478,12 +504,9 @@ class CompanyAdminService:
                 if tid:
                     company = self.get(tid)
                 if company is None and ticker:
-                    company = self.db.execute(
-                        select(Company).where(
-                            func.upper(Company.ticker) == ticker,
-                            Company.deleted_at.is_(None),
-                        )
-                    ).scalars().first()
+                    company = resolve_company(self.db, ticker)
+                    if company is not None and company.deleted_at is not None:
+                        company = None
                 if company is not None:
                     payload = CompanyUpdate(**{
                         k: v for k, v in row.items()

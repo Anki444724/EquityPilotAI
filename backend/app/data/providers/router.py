@@ -388,9 +388,10 @@ class MarketDataRouter:
             from sqlalchemy import select
 
             from app.models.company import Company
+            from app.services.universe.resolution import resolve_company
 
             symbol = ticker.upper().split(".")[0]
-            company = db.scalar(select(Company).where(Company.ticker == symbol))
+            company = resolve_company(db, symbol, exchange="NSE")
             if company is None:
                 return None
 
@@ -429,7 +430,7 @@ class MarketDataRouter:
             from app.services.documents.service import DocumentService
 
             symbol = ticker.upper().split(".")[0]
-            company = db.scalar(select(Company).where(Company.ticker == symbol))
+            company = resolve_company(db, symbol, exchange="NSE")
             if company is None:
                 return None
 

@@ -40,6 +40,7 @@ from app.models.portfolio import (
 )
 from app.schemas.company import LiveMarket
 from app.services.live_market import LiveMarketService
+from app.services.universe.resolution import resolve_company
 from app.services.portfolio.engine import PortfolioEngine, PortfolioView
 
 logger = logging.getLogger(__name__)
@@ -198,9 +199,7 @@ class PortfolioService:
         book. The insert is rolled back if the ledger will not replay.
         """
         self._require(portfolio_id)
-        company = self.db.scalar(
-            select(Company).where(Company.ticker == ticker.upper())
-        ) if ticker else None
+        company = resolve_company(self.db, ticker) if ticker else None
 
         if sequence is None:
             sequence = self.db.scalar(
@@ -875,9 +874,7 @@ class PortfolioService:
         watchlist = self.db.get(Watchlist, watchlist_id)
         if watchlist is None:
             raise PortfolioError(f"watchlist {watchlist_id} not found")
-        company = self.db.scalar(
-            select(Company).where(Company.ticker == ticker.upper())
-        )
+        company = resolve_company(self.db, ticker)
         existing = self.db.scalar(
             select(WatchlistEntry).where(
                 WatchlistEntry.watchlist_id == watchlist_id,
@@ -916,9 +913,7 @@ class PortfolioService:
         rows: list[dict] = []
         live_market = LiveMarketService(self.db)
         for entry in watchlist.entries:
-            company = self.db.scalar(
-                select(Company).where(Company.ticker == entry.ticker)
-            )
+            company = resolve_company(self.db, entry.ticker)
             if company:
                 market = live_market.snapshot(company)
                 price = market.live_price

@@ -243,13 +243,15 @@ def test_handle_filing_crawl(mock_collector, mock_db):
     res = handle_filing_crawl(mock_db, {"max_companies": 10})
     assert res["crawled"] == 5
 
-    # Target tickers
+    # Target tickers — resolved through the canonical resolver, not
+    # Session.scalar (which picks an arbitrary row when duplicates exist).
     mock_company = MagicMock()
     mock_company.ticker = "TCS"
-    mock_db.scalar.return_value = mock_company
     mock_collector.return_value.crawl_company.return_value.as_dict.return_value = {"ticker": "TCS"}
 
-    res = handle_filing_crawl(mock_db, {"tickers": ["TCS"]})
+    with patch("app.services.universe.resolution.resolve_company",
+               return_value=mock_company):
+        res = handle_filing_crawl(mock_db, {"tickers": ["TCS"]})
     assert res["companies"] == 1
     assert res["results"][0]["ticker"] == "TCS"
 

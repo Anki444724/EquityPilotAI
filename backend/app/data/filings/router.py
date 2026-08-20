@@ -71,9 +71,10 @@ class UploadedReportProvider(FilingProvider):
 
             from app.models.company import Company
             from app.services.documents.service import DocumentService
+            from app.services.universe.resolution import resolve_company
 
             base = (ticker or "").upper().split(".")[0]
-            company = self.db.scalar(select(Company).where(Company.ticker == base))
+            company = resolve_company(self.db, base, exchange="NSE")
             if company is None:
                 return FilingResult(
                     filings=[], source=self.name, category=self.category,

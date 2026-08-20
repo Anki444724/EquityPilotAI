@@ -24,6 +24,7 @@ from app.domain.quality.score import (
 )
 from app.models.analysis import QuarterlyResult, ShareholdingSnapshot
 from app.models.company import Company, FinancialFact
+from app.services.universe.resolution import resolve_company
 from app.models.document import Document, DocumentChunk, DocumentFact
 from app.models.filing_collection import CompanyCrawlState, DiscoveredFiling
 from app.models.knowledge import (
@@ -139,9 +140,7 @@ class DataQualityService:
         return result
 
     def score_ticker(self, ticker: str) -> QualityScore | None:
-        company = self.db.scalar(
-            select(Company).where(Company.ticker == ticker.upper())
-        )
+        company = resolve_company(self.db, ticker, exchange="NSE")
         return self.score_company(company) if company else None
 
     # -------------------------------------------------------- 1. identity
