@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.data.screener_source import ScreenerError, ScreenerFinancials, fetch_screener
@@ -110,23 +110,48 @@ class PeriodicBackfillService:
         db: Session,
         *,
         delay_seconds: float = 0.3,
-        fetch: Callable[..., ScreenerFinancials] = fetch_screener,
+        fetch: Callable[..., ScreenerFinancials] | None = None,
     ) -> None:
         self.db = db
         self.delay_seconds = delay_seconds
-        self._fetch = fetch
+        # `fetch` resolves from the module at CONSTRUCTION time when not
+        # injected, so tests (or operator harnesses) can monkeypatch
+        # `periodic_backfill.fetch_screener` and newly built services pick
+        # up the patch — the same seam the financials service's `ingest=`
+        # parameter provides.
+        self._fetch = fetch or fetch_screener
 
     # ------------------------------------------------------------ selection
     def targets(self, *, limit: int | None = None) -> list[Company]:
-        """Active companies, largecap first — same ordering rationale as the
-        annual sweep: an interrupted run should leave the most-viewed
-        companies covered."""
+        """Active companies, **stalest quarterly data first**.
+
+        Ordering matters more here than in the annual sweep: a bounded
+        nightly batch must walk FORWARD through the universe, not re-fetch
+        the same head of the list every night. Ranking by the newest
+        quarterly period each company holds (companies with no quarters
+        first) makes every run advance — once a company's quarters are
+        refreshed it sinks to the tail until it ages, and the next run picks
+        the next-stalest company. Quarterly and shareholding arrive on the
+        same Screener page, so one freshness proxy serves both.
+        """
+        newest = (
+            select(
+                QuarterlyResult.company_id.label("cid"),
+                func.max(
+                    QuarterlyResult.fiscal_year * 10 + QuarterlyResult.quarter,
+                ).label("newest_period"),
+            )
+            .group_by(QuarterlyResult.company_id)
+            .subquery()
+        )
         stmt = (
             select(Company)
+            .outerjoin(newest, newest.c.cid == Company.id)
             .where(Company.listing_status == "active")
             .order_by(
-                Company.market_cap_category.is_(None),
-                Company.market_cap_category,
+                # NULL (no quarters yet) sorts first: never-covered is the
+                # stalest case.
+                newest.c.newest_period.asc().nullsfirst(),
                 Company.ticker,
             )
         )

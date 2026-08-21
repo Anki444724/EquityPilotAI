@@ -66,6 +66,13 @@ def _phase1_schedules() -> list[ScheduleSpec]:
             enabled=settings.HISTORICAL_PRICE_SYNC_INTERVAL_SECONDS > 0,
         ),
         ScheduleSpec(
+            JobKind.PERIODIC_SYNC,
+            settings.PERIODIC_SYNC_INTERVAL_SECONDS,
+            "Refresh quarterly results and shareholding for the stalest "
+            "batch of companies (Task 7).",
+            enabled=settings.PERIODIC_SYNC_INTERVAL_SECONDS > 0,
+        ),
+        ScheduleSpec(
             JobKind.FAILED_DATA_RETRY,
             settings.FAILED_RETRY_INTERVAL_SECONDS,
             "Re-drive ingestion failures whose backoff has elapsed.",

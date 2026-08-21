@@ -926,6 +926,86 @@ def handle_historical_price_sync(db: Session, payload: dict[str, Any]) -> dict[s
         raise
 
 
+# ===========================================================================
+# Task 7: scheduled quarterly/shareholding sync
+# ===========================================================================
+def handle_periodic_sync(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Refresh quarterly results and shareholding for the stalest batch.
+
+    Drives the SAME `PeriodicBackfillService` that the manual
+    `deploy/backfill_periodic.py` script uses — one implementation, not two
+    drifting copies. Selection is stalest-quarterly-first, so a bounded
+    nightly batch walks forward through the universe instead of re-fetching
+    the same head every night; a company sinks to the tail once its
+    quarters are refreshed. Per-company failures are already filed under
+    `ingestion_failures` (kind ``periodic_sync``) by the service itself
+    (Task 2), which is also the kind `failed_data_retry` re-drives.
+
+    A transient provider failure escalates exactly like the financials
+    backfill: the job fails, the kind's bounded retry policy runs, and the
+    retry's re-selection naturally skips companies that already succeeded
+    (their quarters are fresh, so they are no longer stalest).
+    """
+    from app.core.config import settings
+
+    # DATA_PROVIDER=mock: quarterly/shareholding come from Screener, which is
+    # a real-provider operation — report an honest skip rather than fetching
+    # or fabricating (same rule as financial refresh).
+    if settings.DATA_PROVIDER.lower() == "mock":
+        return {
+            "skipped": True,
+            "reason": "periodic sync is a real-provider operation; "
+                      "DATA_PROVIDER=mock serves deterministic data",
+        }
+
+    from sqlalchemy import select as _select
+
+    from app.models.company import Company
+    from app.services.universe.financials_backfill import (
+        FailureKind, classify_ingest_failure,
+    )
+    from app.services.universe.periodic_backfill import PeriodicBackfillService
+
+    tickers = [str(t) for t in (payload.get("tickers") or []) if str(t).strip()]
+    limit = int(payload.get("limit") or settings.PERIODIC_SYNC_BATCH_SIZE)
+
+    service = PeriodicBackfillService(db, delay_seconds=0.3)
+    if tickers:
+        companies = list(db.scalars(
+            _select(Company).where(Company.ticker.in_(tickers))
+        ).all())
+    else:
+        companies = service.targets(limit=limit)
+    report = service.run(companies=companies, progress=False)
+
+    result: dict[str, Any] = {
+        "attempted": len(report.outcomes),
+        "succeeded": len(report.succeeded),
+        "failed": len(report.failed),
+        "quarters_written": report.quarters,
+        "shareholding_written": report.shareholding,
+        "failure_reasons": {},
+        "targeted": bool(tickers),
+    }
+    for outcome in report.failed:
+        reason = (outcome.reason or "unknown")[:80]
+        result["failure_reasons"][reason] = (
+            result["failure_reasons"].get(reason, 0) + 1)
+
+    transient = [
+        o for o in report.failed
+        if classify_ingest_failure(o.reason) == FailureKind.TRANSIENT
+    ]
+    if transient:
+        from app.services.universe.financials_backfill import (
+            TransientIngestionFailure,
+        )
+        raise TransientIngestionFailure(
+            transient=len(transient), attempted=len(report.outcomes),
+        )
+    return result
+
+
 def handle_failed_data_retry(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     """Re-drive ingestion failures whose backoff has elapsed.
 
@@ -964,6 +1044,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.EMBEDDING_BACKFILL: handle_embedding_backfill,
     JobKind.AI_SCORE_REFRESH: handle_ai_score_refresh,
     JobKind.FINANCIALS_BACKFILL: handle_financials_backfill,
+    JobKind.PERIODIC_SYNC: handle_periodic_sync,
     JobKind.COMPANY_UNIVERSE_SYNC: handle_company_universe_sync,
     JobKind.PRICE_SYNC: handle_price_sync,
     JobKind.HISTORICAL_PRICE_SYNC: handle_historical_price_sync,

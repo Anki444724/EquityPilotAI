@@ -75,6 +75,11 @@ class JobKind(StrEnum):
     #: `deploy/backfill_financials.py` drives, so the scheduled sweep and an
     #: on-demand run share one implementation rather than drifting apart.
     FINANCIALS_BACKFILL = "financials_backfill"
+    #: Refresh quarterly results and shareholding patterns (Task 7). Drives
+    #: the existing `PeriodicBackfillService` — the same throttled screener
+    #: path the manual `deploy/backfill_periodic.py` script uses — so the
+    #: scheduled sweep and an on-demand run share one implementation.
+    PERIODIC_SYNC = "periodic_sync"
     # ---- Phase 1: the 5,000-company universe jobs -------------------------
     #: Upsert the company master from the configured source (mock | NSE+BSE
     #: masters). Batched, resumable, identity-preserving.
@@ -107,6 +112,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.EMBEDDING_BACKFILL: "Embedding backfill",
     JobKind.AI_SCORE_REFRESH: "AI score refresh",
     JobKind.FINANCIALS_BACKFILL: "Financials backfill",
+    JobKind.PERIODIC_SYNC: "Quarterly & shareholding sync",
     JobKind.COMPANY_UNIVERSE_SYNC: "Company universe sync",
     JobKind.PRICE_SYNC: "Live price sync",
     JobKind.HISTORICAL_PRICE_SYNC: "Historical price sync",
@@ -199,6 +205,7 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.EMBEDDING_BACKFILL: JobPriority.BACKGROUND,
     JobKind.AI_SCORE_REFRESH: JobPriority.BACKGROUND,
     JobKind.FINANCIALS_BACKFILL: JobPriority.BACKGROUND,
+    JobKind.PERIODIC_SYNC: JobPriority.BACKGROUND,
     JobKind.COMPANY_UNIVERSE_SYNC: JobPriority.BACKGROUND,
     JobKind.PRICE_SYNC: JobPriority.BACKGROUND,
     JobKind.HISTORICAL_PRICE_SYNC: JobPriority.BACKGROUND,
@@ -286,6 +293,10 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # — the target set is recomputed from the database — so a short run is
     # not a lost run.
     JobKind.FINANCIALS_BACKFILL: RetryPolicy(max_attempts=2, base_seconds=900),
+    # Same failure profile as the financials backfill: the usual failure is
+    # the source provider rate-limiting us, and the sweep is resumable by
+    # construction (stalest-first selection), so back off substantially.
+    JobKind.PERIODIC_SYNC: RetryPolicy(max_attempts=2, base_seconds=900),
     # ---- Phase 1 ----------------------------------------------------------
     # Universe sync is idempotent and resumable (stats.next_index), so a retry
     # continues rather than repeats; back off hard because the usual failure

@@ -197,6 +197,15 @@ class Settings(BaseSettings):
     #: results, and it makes a retried batch skip companies that already
     #: succeeded in the earlier attempt. Set 0 to disable.
     FINANCIAL_REFRESH_COOLDOWN_HOURS: float = 20.0
+    #: Quarterly/shareholding sync (Task 7). How often the scheduled job
+    #: refreshes the stalest batch of companies' quarterly results and
+    #: shareholding patterns. 0 disables the schedule.
+    PERIODIC_SYNC_INTERVAL_SECONDS: int = 86_400
+    #: How many companies one quarterly/shareholding batch touches. Small on
+    #: purpose: each company costs one throttled Screener page request, and a
+    #: nightly bounded batch walks the universe stalest-first without ever
+    #: hammering the source.
+    PERIODIC_SYNC_BATCH_SIZE: int = 100
 
 
     OPENROUTER_API_KEY: str | None = None
