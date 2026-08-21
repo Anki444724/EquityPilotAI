@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -563,6 +563,26 @@ def ingest_company(
         )
 
     db.commit()
+
+    if inserted == 0 and updated == 0 and unchanged:
+        # A successful re-fetch that found nothing changed still counts as
+        # "fetched". The refresh cooldown keys on this stamp: without this,
+        # a company whose Screener page has not changed yet would look
+        # never-fetched and be re-downloaded on every run and every batch
+        # retry. One statement, guarded so nothing is rewritten twice.
+        stamp = _utcnow()
+        db.execute(
+            update(FinancialFact)
+            .where(
+                FinancialFact.company_id == company_id,
+                or_(
+                    FinancialFact.fetched_at.is_(None),
+                    FinancialFact.fetched_at < stamp,
+                ),
+            )
+            .values(fetched_at=stamp)
+        )
+        db.commit()
 
     if inserted or updated:
         # The statements cache holds this company's canonical financials by

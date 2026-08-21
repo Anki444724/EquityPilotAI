@@ -189,6 +189,14 @@ class Settings(BaseSettings):
     FAILED_RETRY_MAX_ATTEMPTS: int = 5
     #: How far back the historical sync backfills daily bars (days).
     PRICE_HISTORY_BACKFILL_DAYS: int = 1_825
+    #: Refresh cooldown (Task 5). After a company's financials are fetched,
+    #: wait this many hours before the refresh job will fetch that company
+    #: again — even if it is still "stale" (its newest fiscal year is older
+    #: than the current one). This stops the job from re-downloading the same
+    #: company day after day while it waits for the company to publish new
+    #: results, and it makes a retried batch skip companies that already
+    #: succeeded in the earlier attempt. Set 0 to disable.
+    FINANCIAL_REFRESH_COOLDOWN_HOURS: float = 20.0
 
 
     OPENROUTER_API_KEY: str | None = None

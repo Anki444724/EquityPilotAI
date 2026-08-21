@@ -308,6 +308,7 @@ class FinancialsBackfillService:
 
     def companies_with_stale_financials(
         self, *, limit: int | None = None, only_active: bool = True,
+        cooldown_hours: float | None = None,
     ) -> list[CompanyTarget]:
         """Covered companies whose newest fiscal year predates the current one.
 
@@ -318,15 +319,33 @@ class FinancialsBackfillService:
         the natural throttle — after the annual reporting season the set
         empties and later runs cost one cheap query.
 
+        **Cooldown** (`cooldown_hours`, default the
+        `FINANCIAL_REFRESH_COOLDOWN_HOURS` setting): a company whose facts
+        were FETCHED within the window is skipped even though it is still
+        stale. Plainly: we just asked Screener for this company, so asking
+        again every run until it publishes something new would burn requests
+        for nothing. The same rule is what makes a retried refresh batch skip
+        companies that already succeeded in the earlier attempt: success
+        stamps `fetched_at` with "now", which is inside any sensible cooldown.
+        Companies with no `fetched_at` at all (rows written before Phase 1,
+        or a company whose ingest failed and wrote nothing) are always
+        eligible — absence means "not fetched recently", never "fresh".
+
         Same ordering rationale as the coverage sweep (largecaps first), same
         conservative bound, and it feeds the SAME `run()` — this is a target
         selector, not a second ingestion path.
         """
+        if cooldown_hours is None:
+            from app.core.config import settings
+
+            cooldown_hours = settings.FINANCIAL_REFRESH_COOLDOWN_HOURS
+
         latest = (
             select(
                 FinancialFact.company_id.label("cid"),
                 func.max(FinancialFact.fiscal_year).label("latest_fy"),
                 func.count(func.distinct(FinancialFact.fiscal_year)).label("years"),
+                func.max(FinancialFact.fetched_at).label("last_fetch"),
             )
             .group_by(FinancialFact.company_id)
             .subquery()
@@ -348,6 +367,14 @@ class FinancialsBackfillService:
         )
         if only_active:
             stmt = stmt.where(Company.listing_status == "active")
+        if cooldown_hours and cooldown_hours > 0:
+            from datetime import datetime, timedelta, timezone
+
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)
+            stmt = stmt.where(
+                (latest.c.last_fetch.is_(None))
+                | (latest.c.last_fetch <= cutoff)
+            )
         if limit:
             stmt = stmt.limit(limit)
 

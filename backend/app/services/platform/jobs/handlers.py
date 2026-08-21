@@ -709,8 +709,20 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
         # Conservative refresh of already-covered companies (Task 2): the
         # same bounded batch, the same throttled ingest — only the target
         # selector differs (stale latest-fiscal-year instead of uncovered).
+        # The cooldown (Task 5) is the batch-retry skip: a company that
+        # SUCCEEDED in an earlier attempt carries fetched_at = "now", so the
+        # job-level retry's re-selection naturally excludes it and fetches
+        # only the companies that still need processing. `cooldown_hours` in
+        # the payload lets an operator override the setting per run
+        # (0 disables the skip for a deliberate force-refresh).
         limit = int(payload.get("limit") or DEFAULT_REFRESH_LIMIT)
-        targets = service.companies_with_stale_financials(limit=limit)
+        targets = service.companies_with_stale_financials(
+            limit=limit,
+            cooldown_hours=(
+                float(payload["cooldown_hours"])
+                if payload.get("cooldown_hours") is not None else None
+            ),
+        )
         missing = []
         report = service.run(targets=targets, progress=False)
     else:

@@ -170,6 +170,25 @@ class TestStatementsCacheInvalidation:
         assert cache.get(Namespace.STATEMENTS, gamma.id) is None
 
 
+
+def _age_fetch_stamp(db, ticker: str, hours: float) -> None:
+    """Move a company's facts freshness stamp into the past.
+
+    Task 5 added a refresh cooldown: a company ingested moments ago is
+    (correctly) skipped by the refresh selection for FINANCIAL_REFRESH_
+    COOLDOWN_HOURS (default 20h). Tests that want a company *eligible* for
+    refresh therefore age its stamp, exactly as time passing would."""
+    from datetime import datetime, timedelta, timezone
+
+    company = db.scalar(select(Company).where(Company.ticker == ticker))
+    db.query(FinancialFact).filter(
+        FinancialFact.company_id == company.id,
+    ).update({
+        FinancialFact.fetched_at:
+            datetime.now(timezone.utc) - timedelta(hours=hours),
+    })
+    db.commit()
+
 # ---------------------------------------------------------------- B
 class TestRefreshExistingCompanies:
     def test_B_stale_company_selected_and_reingested(self, db):
@@ -183,6 +202,7 @@ class TestRefreshExistingCompanies:
         _ingest(db, "STRAY", _screener_financials("STRAY", years=(2023,)))
 
         stale_co = db.scalar(select(Company).where(Company.ticker == "STALE"))
+        _age_fetch_stamp(db, "STALE", hours=30)   # outside the 20h cooldown
         service = FinancialsBackfillService(db, delay_seconds=0.0)
         targets = service.companies_with_stale_financials()
         assert [t.ticker for t in targets] == ["STALE"], (
@@ -229,6 +249,7 @@ class TestRefreshExistingCompanies:
             _ingest(db, f"CO{i:02d}", _screener_financials(
                 f"CO{i:02d}", years=(2022, 2023),
             ))
+            _age_fetch_stamp(db, f"CO{i:02d}", hours=30)
         service = FinancialsBackfillService(db, delay_seconds=0.0)
         assert len(service.companies_with_stale_financials(limit=25)) == 25
 
