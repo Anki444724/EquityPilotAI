@@ -465,4 +465,25 @@ class FailedRetryService:
             failure.resolved_at = _utcnow()
             return True
 
+        if kind == "periodic_sync":
+            # Quarterly/shareholding retry: re-run the same periodic service
+            # for the one company, through the same throttled screener path.
+            from app.services.universe.periodic_backfill import (
+                PeriodicBackfillService,
+            )
+
+            company = (
+                self.db.get(Company, failure.company_id)
+                if failure.company_id else None
+            ) or self.db.scalar(
+                select(Company).where(Company.ticker == failure.symbol)
+            )
+            if company is None:
+                return False
+            report = PeriodicBackfillService(
+                self.db, delay_seconds=0.0,
+            ).run(companies=[company], progress=False)
+            outcome = report.outcomes[0] if report.outcomes else None
+            return bool(outcome and outcome.ok)
+
         return False

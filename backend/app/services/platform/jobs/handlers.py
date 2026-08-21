@@ -670,7 +670,7 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
     records real progress rather than the run's own tally.
     """
     from app.services.universe.financials_backfill import (
-        DEFAULT_SWEEP_LIMIT, FinancialsBackfillService,
+        DEFAULT_REFRESH_LIMIT, DEFAULT_SWEEP_LIMIT, FinancialsBackfillService,
         TransientIngestionFailure,
     )
 
@@ -679,7 +679,20 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
     # the full universe loop is exercisable offline. Real mode is unchanged.
     from app.core.config import settings
 
+    mode = str(payload.get("mode", "coverage")).lower()
+    if mode not in ("coverage", "refresh"):
+        raise ValueError(f"unknown financials mode '{mode}'")
+
     if settings.DATA_PROVIDER.lower() == "mock":
+        if mode == "refresh":
+            # Refresh is a real-provider operation; the mock universe is
+            # deterministic, so there is nothing fresher to fetch. Report the
+            # no-op honestly rather than simulating a refresh.
+            return {
+                "skipped": True,
+                "reason": "refresh is a real-provider operation; "
+                          "DATA_PROVIDER=mock serves deterministic data",
+            }
         return _mock_financials_sweep(db, payload)
 
     tickers = [str(t) for t in (payload.get("tickers") or []) if str(t).strip()]
@@ -692,6 +705,14 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
         found = {t.ticker for t in targets}
         missing = [t for t in tickers if t not in found]
         report = service.run(targets=targets, progress=False)
+    elif mode == "refresh":
+        # Conservative refresh of already-covered companies (Task 2): the
+        # same bounded batch, the same throttled ingest — only the target
+        # selector differs (stale latest-fiscal-year instead of uncovered).
+        limit = int(payload.get("limit") or DEFAULT_REFRESH_LIMIT)
+        targets = service.companies_with_stale_financials(limit=limit)
+        missing = []
+        report = service.run(targets=targets, progress=False)
     else:
         limit = int(payload.get("limit") or DEFAULT_SWEEP_LIMIT)
         report = service.run(limit=limit, progress=False)
@@ -699,6 +720,7 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
     after = service.coverage_snapshot()
 
     result: dict[str, Any] = {
+        "mode": mode,
         "attempted": len(report.outcomes),
         "succeeded": len(report.succeeded),
         "failed": len(report.failed),

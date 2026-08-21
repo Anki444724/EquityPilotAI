@@ -168,6 +168,11 @@ class MemoryCache:
                 del self._data[key]
         return len(doomed)
 
+    def delete(self, key: str) -> bool:
+        """Drop one exact key. Returns whether it was present."""
+        with self._lock:
+            return self._data.pop(key, None) is not None
+
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
@@ -228,6 +233,16 @@ class RedisCache:
         except Exception as exc:  # noqa: BLE001
             log.warning("redis namespace purge failed", error=str(exc)[:160])
         return count
+
+    def delete(self, key: str) -> bool:
+        """Drop one exact key from both tiers. A Redis failure degrades to
+        the memory tier only — same rule as every other cache operation."""
+        self.fallback.delete(key)
+        try:
+            return bool(self.client.delete(key))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("redis cache delete failed", error=str(exc)[:160])
+            return False
 
     def clear(self) -> None:
         self.fallback.clear()
@@ -326,6 +341,19 @@ class CacheService:
         log.info("cache namespace invalidated",
                  namespace=namespace.value, dropped=dropped)
         return dropped
+
+    def invalidate_key(self, namespace: Namespace, *parts: Any) -> bool:
+        """Drop ONE entry — e.g. `statements` for ONE company whose facts
+        just changed — without evicting the rest of the namespace.
+
+        The targeted form exists so an ingestion event costs every OTHER
+        company its warm cache entry, which is what a namespace-wide
+        invalidate on every ingest would do at a 5,000-company universe.
+        Failures degrade exactly like reads/writes: a cache problem may
+        cost a stale entry until the TTL, never a failed request.
+        """
+        key = make_key(namespace, *parts)
+        return self.backend.delete(key)
 
     def clear(self) -> None:
         self.backend.clear()

@@ -63,6 +63,22 @@ MIN_USEFUL_YEARS = 2
 #: construction, so the next scheduled run simply picks up the next 25.
 DEFAULT_SWEEP_LIMIT = 25
 
+#: The safe default bound for one REFRESH run (Task 2). Deliberately the same
+#: conservative size as a coverage sweep: refresh visits companies Screener
+#: has already served once, and at 1.1s+ per request a bounded nightly batch
+#: keeps the platform inside the throttle that kept the 500-company ingest
+#: welcome. A 5,000-company universe rolls over fully across scheduled runs,
+#: never in one.
+DEFAULT_REFRESH_LIMIT = 25
+
+
+def current_fiscal_year(today=None) -> int:
+    """The Indian fiscal year (April–March) containing `today`."""
+    from datetime import date
+
+    day = today or date.today()
+    return day.year if day.month >= 4 else day.year - 1
+
 
 class FailureKind(StrEnum):
     """Whether a per-company failure should be retried.
@@ -290,6 +306,63 @@ class FinancialsBackfillService:
             for company, _years in self.db.execute(stmt).all()
         ]
 
+    def companies_with_stale_financials(
+        self, *, limit: int | None = None, only_active: bool = True,
+    ) -> list[CompanyTarget]:
+        """Covered companies whose newest fiscal year predates the current one.
+
+        The refresh counterpart of `companies_without_financials`: it selects
+        companies that HAVE a usable history but have not yet reported (or not
+        yet been ingested on) the current Indian fiscal year. A company drops
+        out of this set the moment a refresh lands its newest year, which is
+        the natural throttle — after the annual reporting season the set
+        empties and later runs cost one cheap query.
+
+        Same ordering rationale as the coverage sweep (largecaps first), same
+        conservative bound, and it feeds the SAME `run()` — this is a target
+        selector, not a second ingestion path.
+        """
+        latest = (
+            select(
+                FinancialFact.company_id.label("cid"),
+                func.max(FinancialFact.fiscal_year).label("latest_fy"),
+                func.count(func.distinct(FinancialFact.fiscal_year)).label("years"),
+            )
+            .group_by(FinancialFact.company_id)
+            .subquery()
+        )
+        stmt = (
+            select(Company)
+            .join(latest, latest.c.cid == Company.id)
+            .where(
+                latest.c.latest_fy < current_fiscal_year(),
+                # A single stray year is not a history worth refreshing —
+                # the coverage sweep owns those until they qualify.
+                latest.c.years >= MIN_USEFUL_YEARS,
+            )
+            .order_by(
+                Company.market_cap_category.is_(None),
+                Company.market_cap_category,
+                Company.ticker,
+            )
+        )
+        if only_active:
+            stmt = stmt.where(Company.listing_status == "active")
+        if limit:
+            stmt = stmt.limit(limit)
+
+        return [
+            CompanyTarget(
+                company_id=company.id,
+                ticker=company.ticker,
+                name=company.name,
+                sector=company.sector,
+                industry=company.industry,
+                market_cap_category=company.market_cap_category,
+            )
+            for company in self.db.scalars(stmt).all()
+        ]
+
     def companies_by_tickers(
         self, tickers: Sequence[str],
     ) -> list[CompanyTarget]:
@@ -330,12 +403,21 @@ class FinancialsBackfillService:
         limit: int | None = None,
         progress: bool = True,
     ) -> BackfillReport:
-        """Ingest each target, recording a reason for every one that fails."""
+        """Ingest each target, recording a reason for every one that fails.
+
+        Every run also files itself under `ingestion_runs` and each failure
+        under `ingestion_failures` (kind ``financials_sync``), so the
+        `failed_data_retry` job — and an operator — can see and re-drive
+        financial failures through the same mechanism the Phase-1 syncs use.
+        Recording is best-effort: an observability failure must never fail
+        the sync it was observing.
+        """
         if targets is None:
             targets = self.companies_without_financials(limit=limit)
 
         report = BackfillReport()
         total = len(targets)
+        failure_run = self._open_failure_run(operation="annual")
 
         for index, target in enumerate(targets, 1):
             started = time.monotonic()
@@ -379,6 +461,15 @@ class FinancialsBackfillService:
                 seconds=round(elapsed, 2),
             )
             report.outcomes.append(outcome)
+            if outcome.ok:
+                if failure_run is not None:
+                    failure_run.succeeded += 1
+            else:
+                self._file_failure(
+                    failure_run, target.ticker, target.company_id,
+                    outcome.reason or "unknown error",
+                    operation="annual", source="screener.in",
+                )
 
             if progress:
                 state = "ok  " if outcome.ok else "FAIL"
@@ -395,7 +486,70 @@ class FinancialsBackfillService:
             if self.delay_seconds and index < total:
                 time.sleep(self.delay_seconds)
 
+        self._close_failure_run(failure_run, report)
         return report
+
+    # ------------------------------------------------- failure observability
+    def _open_failure_run(self, *, operation: str):
+        """Start an `ingestion_runs` row for this sweep, or None if the
+        observability tables are unavailable (older test fixtures, etc.)."""
+        try:
+            from datetime import datetime, timezone
+
+            from app.models.ingestion import IngestionRun
+
+            run = IngestionRun(
+                kind="financials_sync", provider="screener.in",
+                started_at=datetime.now(timezone.utc),
+                stats={"operation": operation},
+            )
+            self.db.add(run)
+            self.db.commit()
+            return run
+        except Exception:  # noqa: BLE001 — observability must not break the sync
+            self.db.rollback()
+            return None
+
+    def _file_failure(
+        self, run, ticker: str, company_id: str | None, error: str, *,
+        operation: str, source: str,
+    ) -> None:
+        if run is None:
+            return
+        try:
+            from datetime import datetime, timezone
+
+            from app.models.ingestion import IngestionFailure
+
+            self.db.add(IngestionFailure(
+                run_id=run.id, kind="financials_sync", symbol=ticker,
+                company_id=company_id, error=(error or "unknown error")[:2000],
+                failure_kind=classify_ingest_failure(error).value,
+                last_attempt_at=datetime.now(timezone.utc),
+                payload={"operation": operation, "source": source},
+            ))
+            run.failed += 1
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+
+    def _close_failure_run(self, run, report: "BackfillReport") -> None:
+        if run is None:
+            return
+        try:
+            from datetime import datetime, timezone
+
+            run.finished_at = datetime.now(timezone.utc)
+            run.stats = {
+                **(run.stats or {}),
+                "attempted": len(report.outcomes),
+                "succeeded": len(report.succeeded),
+                "failed": len(report.failed),
+                "failure_reasons": report.reasons(),
+            }
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
 
     # ------------------------------------------------------------ reporting
     def coverage_snapshot(self) -> dict[str, object]:

@@ -106,6 +106,12 @@ def enrich_company(db: Session, ticker: str) -> EnrichResult:
     if added:
         company.data_version = (company.data_version or 1) + 1
         db.commit()
+        # Same correctness rule as `ingest_company`: the added lines change
+        # what `load_financials` would serve, so the company's statements
+        # cache entry must go now, not when its TTL happens to lapse.
+        from app.services.platform.cache import Namespace, cache
+
+        cache.invalidate_key(Namespace.STATEMENTS, company.id)
 
     return EnrichResult(
         ticker=ticker, ok=True, added=added, items_added=sorted(items),

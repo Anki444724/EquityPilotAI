@@ -564,6 +564,17 @@ def ingest_company(
 
     db.commit()
 
+    if inserted or updated:
+        # The statements cache holds this company's canonical financials by
+        # company_id alone (TTL 1h). Until Phase 2 nothing dropped it on
+        # ingest, so a reader could be served the PREVIOUS statements for up
+        # to an hour after this commit. Invalidation happens after the commit
+        # and may fail without failing the ingest: the cache's TTL remains
+        # the safety net.
+        from app.services.platform.cache import Namespace, cache
+
+        cache.invalidate_key(Namespace.STATEMENTS, company_id)
+
     latest_populated = sum(
         1 for series in facts.values() if latest in series
     )

@@ -244,6 +244,7 @@ class PeriodicBackfillService:
 
         report = PeriodicReport()
         total = len(companies)
+        failure_run = self._open_failure_run()
 
         for index, company in enumerate(companies, 1):
             try:
@@ -269,6 +270,13 @@ class PeriodicBackfillService:
                 )
 
             report.outcomes.append(outcome)
+            if outcome.ok:
+                if failure_run is not None:
+                    failure_run.succeeded += 1
+            else:
+                self._file_failure(
+                    failure_run, company, outcome.reason or "unknown error",
+                )
             if progress:
                 state = "ok  " if outcome.ok else "FAIL"
                 detail = (
@@ -282,4 +290,68 @@ class PeriodicBackfillService:
             if self.delay_seconds and index < total:
                 time.sleep(self.delay_seconds)
 
+        self._close_failure_run(failure_run, report)
         return report
+
+    # ------------------------------------------------- failure observability
+    def _open_failure_run(self):
+        """Same contract as the financials backfill's helper: best-effort."""
+        try:
+            from datetime import datetime, timezone
+
+            from app.models.ingestion import IngestionRun
+
+            run = IngestionRun(
+                kind="periodic_sync", provider="screener.in",
+                started_at=datetime.now(timezone.utc),
+                stats={"operation": "quarterly_and_shareholding"},
+            )
+            self.db.add(run)
+            self.db.commit()
+            return run
+        except Exception:  # noqa: BLE001 — observability must not break the sync
+            self.db.rollback()
+            return None
+
+    def _file_failure(self, run, company: Company, error: str) -> None:
+        if run is None:
+            return
+        try:
+            from datetime import datetime, timezone
+
+            from app.models.ingestion import IngestionFailure
+            from app.services.universe.financials_backfill import (
+                classify_ingest_failure,
+            )
+
+            self.db.add(IngestionFailure(
+                run_id=run.id, kind="periodic_sync", symbol=company.ticker,
+                company_id=company.id, error=(error or "unknown error")[:2000],
+                failure_kind=classify_ingest_failure(error).value,
+                last_attempt_at=datetime.now(timezone.utc),
+                payload={
+                    "operation": "quarterly_and_shareholding",
+                    "source": "screener.in",
+                },
+            ))
+            run.failed += 1
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
+
+    def _close_failure_run(self, run, report: PeriodicReport) -> None:
+        if run is None:
+            return
+        try:
+            from datetime import datetime, timezone
+
+            run.finished_at = datetime.now(timezone.utc)
+            run.stats = {
+                **(run.stats or {}),
+                "attempted": len(report.outcomes),
+                "succeeded": len(report.succeeded),
+                "failed": len(report.failed),
+            }
+            self.db.commit()
+        except Exception:  # noqa: BLE001
+            self.db.rollback()
