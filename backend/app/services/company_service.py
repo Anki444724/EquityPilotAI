@@ -68,10 +68,27 @@ class CompanyService:
         return self.db.execute(stmt).scalar_one_or_none()
 
     def search(self, query: str, limit: int = 20) -> list[CompanySummary]:
-        """Name/ticker/sector search, ranked so exact ticker hits come first."""
+        """Search across every identity field, ranked so exact identifiers
+        come first.
+
+        Phase 1 widens the matched columns from name/ticker/sector to also
+        ISIN, BSE scrip code and industry — the fields a 5,000-company
+        universe is actually looked up by (an ISIN is what a statement or
+        contract carries, not a ticker). Postgres serves the leading-wildcard
+        patterns from the pg_trgm GIN indexes (migration f5c9e1b6a348); the
+        query is unchanged on SQLite, where the test suite runs.
+
+        Results are cached under `search:{query}:{limit}` for 60s: search-
+        as-you-type re-asks the same prefix many times a second, and at this
+        universe size a miss is a genuine scan rather than a rounding error.
+        """
         q = (query or "").strip()
         if not q:
             return []
+        cached = cache.get(Namespace.SEARCH, q, limit)
+        if cached is not None:
+            return cached
+
         pattern = f"%{q.lower()}%"
         stmt = (
             select(Company)
@@ -79,7 +96,10 @@ class CompanyService:
                 or_(
                     func.lower(Company.name).like(pattern),
                     func.lower(Company.ticker).like(pattern),
+                    func.lower(Company.isin).like(pattern),
+                    func.lower(Company.bse_code).like(pattern),
                     func.lower(Company.sector).like(pattern),
+                    func.lower(Company.industry).like(pattern),
                 )
             )
             .limit(limit * 3)
@@ -89,7 +109,7 @@ class CompanyService:
 
         def rank(c: Company) -> tuple[int, float]:
             t, n = c.ticker.lower(), c.name.lower()
-            if t == ql:
+            if t == ql or (c.isin or "").lower() == ql or (c.bse_code or "").lstrip("0") == ql:
                 bucket = 0
             elif t.startswith(ql):
                 bucket = 1
@@ -103,12 +123,14 @@ class CompanyService:
 
         ranked = sorted(rows, key=rank)[:limit]
         market = LiveMarketService(self.db).bulk_quotes(ranked)
-        return [
+        results = [
             CompanySummary.model_validate(c).model_copy(
                 update={"market": market.get(c.ticker)}
             )
             for c in ranked
         ]
+        cache.set(Namespace.SEARCH, results, q, limit)
+        return results
 
     def list_companies(
         self,

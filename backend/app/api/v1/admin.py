@@ -73,7 +73,7 @@ from app.domain.platform.identity import (
     Role, UserStatus, outranks,
 )
 from app.domain.platform.jobs import (
-    JOB_LABELS, JobKind, JobStatus, SCHEDULES,
+    JOB_LABELS, JobKind, JobStatus,
 )
 from app.domain.platform.plans import (
     FEATURE_LABELS, Feature, LIMIT_LABELS, Limit, PlanTier, QUOTA_LABELS,
@@ -1427,10 +1427,12 @@ def queue_depth(db: Session = Depends(get_db)) -> QueueDepthOut:
     dependencies=[Depends(require_operator)],
 )
 def schedules(db: Session = Depends(get_db)) -> list[ScheduleOut]:
-    descriptions = {s.kind.value: s.description for s in SCHEDULES}
+    from app.services.platform.jobs.worker import ALL_SCHEDULES
+
+    descriptions = {s.kind.value: s.description for s in ALL_SCHEDULES}
     rows = {r.kind: r for r in db.scalars(select(ScheduleState))}
     out: list[ScheduleOut] = []
-    for spec in SCHEDULES:
+    for spec in ALL_SCHEDULES:
         row = rows.get(spec.kind.value)
         out.append(ScheduleOut(
             kind=spec.kind.value,

@@ -20,7 +20,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.data.nse_universe import NSE_UNIVERSE, is_financial
@@ -355,6 +357,135 @@ def canonicalise(
     return facts, disagreements, warnings
 
 
+def _upsert_facts(
+    db: Session,
+    company_id: str,
+    facts: dict[LI, dict[int, float]],
+    source_label: str,
+) -> tuple[int, int, int]:
+    """Idempotent upsert of canonical facts — Phase 1.
+
+    Replaces the historical delete-and-replace: existing rows are UPDATED in
+    place on the natural key (company_id, fiscal_year, line_item, precedence),
+    new rows are INSERTed, and unchanged rows are left untouched — their
+    `data_version` is not bumped and `fetched_at` is not rewritten, so a
+    repeated identical sync is a measurable no-op rather than an asserted one.
+
+    Rows the source no longer reports are deliberately RETAINED: dropping a
+    figure because a provider stopped publishing it would erase history the
+    platform has already cited. The version snapshot (below) records exactly
+    what this run wrote, so a later reconciliation can find them.
+
+    Returns (inserted, updated, unchanged) by comparing against a pre-read of
+    the company's rows in the same transaction.
+    """
+    now = _utcnow()
+
+    existing = {
+        (row.line_item, row.fiscal_year, row.precedence): row.value
+        for row in db.execute(
+            select(FinancialFact.line_item, FinancialFact.fiscal_year,
+                   FinancialFact.precedence, FinancialFact.value)
+            .where(FinancialFact.company_id == company_id)
+        ).all()
+    }
+
+    rows = []
+    inserted = updated = unchanged = 0
+    for item, series in facts.items():
+        for year, value in series.items():
+            value = float(value)
+            key = (item.value, year, int(Precedence.STORE))
+            prior = existing.get(key)
+            if prior is None:
+                inserted += 1
+            elif _value_changed(prior, value):
+                updated += 1
+            else:
+                unchanged += 1
+                continue          # nothing to write for this row
+            rows.append({
+                "company_id": company_id,
+                "line_item": item.value,
+                "fiscal_year": year,
+                "value": value,
+                "precedence": int(Precedence.STORE),
+                "source": source_label,
+                "consolidated": True,
+                "fetched_at": now,
+                "data_version": 1,
+            })
+
+    if rows:
+        stmt_cls = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+        for start in range(0, len(rows), 400):
+            chunk = rows[start:start + 400]
+            stmt = stmt_cls(FinancialFact).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[
+                    FinancialFact.__table__.c["company_id"],
+                    FinancialFact.__table__.c["fiscal_year"],
+                    FinancialFact.__table__.c["line_item"],
+                    FinancialFact.__table__.c["precedence"],
+                ],
+                set_={
+                    "value": stmt.excluded.value,
+                    "source": stmt.excluded.source,
+                    "consolidated": stmt.excluded.consolidated,
+                    "fetched_at": stmt.excluded.fetched_at,
+                    # Bump the row revision only when the figure actually
+                    # moved; an identical re-sync leaves it alone.
+                    "data_version": FinancialFact.data_version + 1,
+                },
+            )
+            db.execute(stmt)
+
+    return inserted, updated, unchanged
+
+
+def _value_changed(prior: float | None, new: float) -> bool:
+    if prior is None:
+        return new is not None
+    if new is None:
+        return True
+    return abs(prior - new) > 1e-9
+
+
+def _write_fact_version(
+    db: Session, company_id: str, facts: dict[LI, dict[int, float]],
+    source_label: str, summary: str,
+) -> None:
+    """The immutable per-run snapshot the editor's rollback reads.
+
+    Unchanged from the pre-Phase-1 behaviour except that it is only written
+    when the run actually changed something — an identical re-sync writing a
+    new version row would make 'versions' measure syncs, not edits.
+    """
+    next_ver = (
+        db.execute(
+            select(func.coalesce(func.max(FinancialFactVersion.version), 0))
+            .where(FinancialFactVersion.company_id == company_id)
+        ).scalar_one() + 1
+    )
+    snapshot_facts = [
+        {"fiscal_year": year, "line_item": item.value, "value": float(value),
+         "precedence": int(Precedence.STORE), "source": source_label}
+        for item, series in facts.items()
+        for year, value in series.items()
+    ]
+    db.add(FinancialFactVersion(
+        company_id=company_id, version=next_ver,
+        actor_id=None, actor_email=None,
+        snapshot={
+            "facts": snapshot_facts,
+            "quarterly": [], "shareholding": [], "actions": [],
+        },
+        change_type="import",
+        summary=summary,
+        created_at=_utcnow(),
+    ))
+
+
 def ingest_company(
     db: Session,
     ticker: str,
@@ -392,10 +523,12 @@ def ingest_company(
     company_id = existing.id if existing else str(uuid.uuid4())
 
     if existing is not None:
-        db.execute(delete(FinancialFact).where(FinancialFact.company_id == company_id))
+        # Phase 1: upsert in place. The pre-Phase-1 behaviour deleted every
+        # fact for the company and re-inserted the provider's current view —
+        # idempotent, but a provider that stopped reporting a figure erased
+        # it, and every row looked freshly written on every sync.
         company = existing
         company.name, company.sector, company.industry = name, sector, industry
-        company.data_version = (company.data_version or 1) + 1
     else:
         company = Company(
             id=company_id, name=name, ticker=ticker, exchange="NSE",
@@ -412,53 +545,22 @@ def ingest_company(
     )
 
     source_label = "screener.in+yahoo" if yahoo else "screener.in"
-    written = 0
-    for item, series in facts.items():
-        for year, value in series.items():
-            db.add(FinancialFact(
-                company_id=company_id,
-                line_item=item.value,
-                fiscal_year=year,
-                value=float(value),
-                precedence=int(Precedence.STORE),
-                source=source_label,
-            ))
-            written += 1
-
-    # Every successful ingestion records an immutable version snapshot, in the
-    # same shape the financial editor writes (`financial_admin_service._bump`):
-    # `{"facts": [...], "quarterly": [], "shareholding": [], "actions": []}`.
-    # Annual ingestion only writes canonical facts, so the other three keys are
-    # empty, and each fact row carries its `source` provenance. The snapshot is
-    # built from the in-memory canonical facts, not re-read, so it is exactly
-    # what this run persisted. Nothing is written here on the failure paths
-    # above, which is what keeps "failed/no-facts ⇒ zero facts, zero version".
-    snapshot_facts = [
-        {"fiscal_year": year, "line_item": item.value, "value": float(value),
-         "precedence": int(Precedence.STORE), "source": source_label}
-        for item, series in facts.items()
-        for year, value in series.items()
-    ]
-    next_ver = (
-        db.execute(
-            select(func.coalesce(func.max(FinancialFactVersion.version), 0))
-            .where(FinancialFactVersion.company_id == company_id)
-        ).scalar_one() + 1
+    inserted, updated, unchanged = _upsert_facts(
+        db, company_id, facts, source_label,
     )
-    db.add(FinancialFactVersion(
-        company_id=company_id, version=next_ver,
-        actor_id=None, actor_email=None,
-        snapshot={
-            "facts": snapshot_facts,
-            "quarterly": [], "shareholding": [], "actions": [],
-        },
-        change_type="import",
-        summary=(
-            f"Imported {written} annual fact(s) from {source_label} across "
-            f"{len(screener.fiscal_years)} fiscal year(s)"
-        ),
-        created_at=_utcnow(),
-    ))
+    written = inserted + updated + unchanged
+
+    if inserted or updated:
+        company.data_version = (company.data_version or 1) + 1
+        _write_fact_version(
+            db, company_id, facts, source_label,
+            summary=(
+                f"Upserted {inserted + updated} annual fact(s) from "
+                f"{source_label} across {len(screener.fiscal_years)} fiscal "
+                f"year(s) ({inserted} new, {updated} changed, "
+                f"{unchanged} unchanged)"
+            ),
+        )
 
     db.commit()
 

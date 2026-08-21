@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
-    DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
+    Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -122,6 +122,15 @@ class Company(Base):
     #: Bumped whenever facts change, so cache keys invalidate atomically.
     data_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
+    # ---- Phase 1: universe provenance -----------------------------------
+    #: Which master supplied this identity row: 'nse_master' | 'bse_master'
+    #: | 'mock' | 'admin' | 'seed'. `ticker` remains the NSE symbol and
+    #: `bse_code` the BSE scrip code — identity itself is unchanged.
+    metadata_source: Mapped[str | None] = mapped_column(String(64))
+    #: Last successful metadata refresh, so `company_metadata_sync` can pick
+    #: the stalest rows first instead of re-walking the whole universe.
+    metadata_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     facts: Mapped[list["FinancialFact"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
@@ -186,6 +195,25 @@ class FinancialFact(Base):
     #: Maps to app.domain.financials.canonical.Precedence
     precedence: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     source: Mapped[str | None] = mapped_column(String(120))
+
+    # ---- Phase 1: upsert / provenance metadata --------------------------
+    #: Consolidated (True, the platform's existing presentation) or
+    #: standalone. Defaults to True so every pre-existing row is consolidated
+    #: by definition — the only basis the platform has ingested to date.
+    #: Phase 1 never writes False; the column exists so the upsert key can
+    #: carry the basis when standalone ingestion arrives (Phase 2, and only
+    #: with an approved constraint migration — see docs/PHASE1_5000_UNIVERSE.md).
+    consolidated: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False,
+    )
+    #: When this figure was last fetched from `source`.
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Row-level revision, bumped only when the value actually changes —
+    #: repeated identical syncs leave it alone (idempotent by measurement,
+    #: not by assertion).
+    data_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False,
+    )
 
     company: Mapped[Company] = relationship(back_populates="facts")
 

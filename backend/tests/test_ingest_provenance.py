@@ -123,20 +123,51 @@ def test_successful_ingest_writes_a_version_snapshot_with_provenance(db, monkeyp
 
 
 def test_a_second_ingest_bumps_the_version(db, monkeypatch):
-    """Re-ingesting the same company records a new version (v2), and the new
-    snapshot reflects the freshly persisted facts."""
+    """Re-ingesting CHANGED facts records a new version (v2); re-ingesting
+    IDENTICAL facts records nothing (Phase 1: versions measure edits, not
+    syncs — an identical re-sync writing a version row would make the history
+    measure how often the job ran)."""
     monkeypatch.setattr(
         "app.data.ingest.fetch_screener", lambda ticker: _operating_company(ticker))
     ingest_company(db, "NHPC", "NHPC Ltd", "Power", "Hydro", with_yahoo=False)
-    ingest_company(db, "NHPC", "NHPC Ltd", "Power", "Hydro", with_yahoo=False)
 
+    # Identical re-ingest: no new version, rows untouched (data_version
+    # proves the upsert left the rows alone rather than rewriting them).
+    ingest_company(db, "NHPC", "NHPC Ltd", "Power", "Hydro", with_yahoo=False)
     company = db.scalar(select(Company).where(Company.ticker == "NHPC"))
     versions = db.execute(
         select(FinancialFactVersion).where(
             FinancialFactVersion.company_id == company.id,
         )
     ).scalars().all()
+    assert [v.version for v in versions] == [1]
+    facts = db.execute(
+        select(FinancialFact).where(FinancialFact.company_id == company.id)
+    ).scalars().all()
+    assert facts and all(f.data_version == 1 for f in facts)
+
+    # Changed facts: v2 recorded, and only the moved rows' revisions bump.
+    changed = _operating_company("NHPC")
+    changed.profit_loss["Sales +"] = {2024: 1000.0, 2025: 1200.0, 2026: 1500.0}
+    monkeypatch.setattr(
+        "app.data.ingest.fetch_screener", lambda ticker: changed)
+    ingest_company(db, "NHPC", "NHPC Ltd", "Power", "Hydro", with_yahoo=False)
+    versions = db.execute(
+        select(FinancialFactVersion).where(
+            FinancialFactVersion.company_id == company.id,
+        )
+    ).scalars().all()
     assert [v.version for v in versions] == [1, 2]
+    revenue_rows = db.execute(
+        select(FinancialFact).where(
+            FinancialFact.company_id == company.id,
+            FinancialFact.line_item == "revenue",
+        )
+    ).scalars().all()
+    by_year = {f.fiscal_year: f for f in revenue_rows}
+    assert by_year[2026].value == 1500.0
+    assert by_year[2026].data_version == 2          # changed ⇒ bumped
+    assert by_year[2024].data_version == 1          # unchanged ⇒ untouched
 
 
 def test_failed_ingest_writes_zero_facts_and_zero_versions(db, monkeypatch):

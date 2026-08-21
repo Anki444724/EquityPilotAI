@@ -75,6 +75,17 @@ class JobKind(StrEnum):
     #: `deploy/backfill_financials.py` drives, so the scheduled sweep and an
     #: on-demand run share one implementation rather than drifting apart.
     FINANCIALS_BACKFILL = "financials_backfill"
+    # ---- Phase 1: the 5,000-company universe jobs -------------------------
+    #: Upsert the company master from the configured source (mock | NSE+BSE
+    #: masters). Batched, resumable, identity-preserving.
+    COMPANY_UNIVERSE_SYNC = "company_universe_sync"
+    #: Refresh persisted quotes (market_quotes) + Redis for a bounded batch,
+    #: stalest-first. Never polls the universe from a request.
+    PRICE_SYNC = "price_sync"
+    #: Backfill daily OHLCV bars (price_history) for a bounded batch.
+    HISTORICAL_PRICE_SYNC = "historical_price_sync"
+    #: Re-drive symbols recorded in ingestion_failures whose backoff elapsed.
+    FAILED_DATA_RETRY = "failed_data_retry"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -96,6 +107,10 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.EMBEDDING_BACKFILL: "Embedding backfill",
     JobKind.AI_SCORE_REFRESH: "AI score refresh",
     JobKind.FINANCIALS_BACKFILL: "Financials backfill",
+    JobKind.COMPANY_UNIVERSE_SYNC: "Company universe sync",
+    JobKind.PRICE_SYNC: "Live price sync",
+    JobKind.HISTORICAL_PRICE_SYNC: "Historical price sync",
+    JobKind.FAILED_DATA_RETRY: "Failed data retry",
 }
 
 
@@ -184,6 +199,10 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.EMBEDDING_BACKFILL: JobPriority.BACKGROUND,
     JobKind.AI_SCORE_REFRESH: JobPriority.BACKGROUND,
     JobKind.FINANCIALS_BACKFILL: JobPriority.BACKGROUND,
+    JobKind.COMPANY_UNIVERSE_SYNC: JobPriority.BACKGROUND,
+    JobKind.PRICE_SYNC: JobPriority.BACKGROUND,
+    JobKind.HISTORICAL_PRICE_SYNC: JobPriority.BACKGROUND,
+    JobKind.FAILED_DATA_RETRY: JobPriority.BACKGROUND,
 }
 
 
@@ -267,6 +286,16 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # — the target set is recomputed from the database — so a short run is
     # not a lost run.
     JobKind.FINANCIALS_BACKFILL: RetryPolicy(max_attempts=2, base_seconds=900),
+    # ---- Phase 1 ----------------------------------------------------------
+    # Universe sync is idempotent and resumable (stats.next_index), so a retry
+    # continues rather than repeats; back off hard because the usual failure
+    # is an exchange master rate-limiting us.
+    JobKind.COMPANY_UNIVERSE_SYNC: RetryPolicy(max_attempts=3, base_seconds=600),
+    # Quote batches are short and the next schedule picks up fresh work
+    # anyway; retry quickly but not instantly.
+    JobKind.PRICE_SYNC: RetryPolicy(max_attempts=3, base_seconds=60),
+    JobKind.HISTORICAL_PRICE_SYNC: RetryPolicy(max_attempts=2, base_seconds=600),
+    JobKind.FAILED_DATA_RETRY: RetryPolicy(max_attempts=3, base_seconds=120),
 }
 
 
@@ -437,3 +466,4 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         "Delete data older than each tenant's retention limit.",
     ),
 )
+

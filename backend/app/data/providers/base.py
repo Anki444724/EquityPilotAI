@@ -91,6 +91,13 @@ class Quote:
     day_low: float | None = None
     previous_close: float | None = None
     volume: float | None = None
+    # ---- Phase 1 ---------------------------------------------------------
+    #: 52-week range and market state at fetch time. Optional because the
+    #: pre-existing providers do not report them; a None here means "not
+    #: offered by the tier that answered", never zero.
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+    market_status: str | None = None  # open | closed | weekend | unknown
 
 
 @dataclass(slots=True)
@@ -257,6 +264,19 @@ class BaseMarketProvider(ABC):
     @abstractmethod
     def fetch(self, ticker: str, **kwargs) -> tuple[MarketSnapshot, dict[str, Any]]:
         """Return the normalised snapshot and the raw payloads behind it."""
+
+    # -- Phase 1: narrow fetches for the sync jobs -------------------------
+    # A quote refresh or a daily-bar backfill wants ONE slice, not the full
+    # snapshot (news, statements, earnings). Providers that support the narrow
+    # call override these; the defaults report "not offered" so the sync jobs
+    # can fall back to `fetch()` and record what happened.
+    def fetch_quote(self, ticker: str) -> Quote | None:
+        """Current quote only, or None when this provider does not serve it."""
+        return None
+
+    def fetch_history(self, ticker: str, days: int = 365) -> list[dict[str, Any]] | None:
+        """Daily bars as [{date, open, high, low, close, volume}], or None."""
+        return None
 
     # -- shared HTTP ------------------------------------------------------
     def _throttle(self) -> None:

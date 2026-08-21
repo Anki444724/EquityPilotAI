@@ -51,6 +51,11 @@ class Namespace(StrEnum):
     STATEMENTS = "statements"
     NEWS = "news"
     RAG = "rag"
+    #: Company search (Phase 1). Short TTL: a 5,000-company universe makes a
+    #: miss a real scan, but search-as-you-type means the same prefix arrives
+    #: a dozen times a second from one user, and a new listing does not need
+    #: to be findable within the minute.
+    SEARCH = "search"
 
 
 #: Default lifetime per namespace, in seconds.
@@ -72,6 +77,9 @@ DEFAULT_TTLS: dict[Namespace, int] = {
     # to expire at all is to bound memory and to pick up newly-ingested
     # documents that did not invalidate explicitly.
     Namespace.RAG: 1_800,
+    # Search-as-you-type: long enough to absorb a keystroke burst, short
+    # enough that a freshly synced company is findable almost immediately.
+    Namespace.SEARCH: 60,
 }
 
 

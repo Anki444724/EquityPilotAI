@@ -22,7 +22,9 @@ from app.models import document as document  # noqa: F401
 from app.models import filing_collection as filing_collection  # noqa: F401
 from app.models import financials as financials  # noqa: F401
 from app.models import forecast as forecast  # noqa: F401
+from app.models import ingestion as ingestion  # noqa: F401
 from app.models import knowledge as knowledge  # noqa: F401
+from app.models import market as market  # noqa: F401
 from app.models import market_ops as market_ops  # noqa: F401
 from app.models import platform as platform  # noqa: F401
 from app.models import portfolio as portfolio  # noqa: F401

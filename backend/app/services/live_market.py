@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 
 from app.data.providers.router import SOURCE_INTERNAL
 from app.data.providers.symbols import resolve
-from app.data.providers.yahoo import YahooProvider
 from app.models.company import Company
 from app.schemas.company import LiveMarket
 from app.services.platform.cache import Namespace, cache
@@ -80,7 +79,13 @@ class _QuoteRefresher:
                 self._thread.start()
 
     def _run(self) -> None:
-        provider = YahooProvider()
+        # The head of the configured chain: Yahoo in 'real' mode, the
+        # deterministic mock in 'mock' mode. DATA_PROVIDER selects the whole
+        # chain in one place (providers.default_providers), so the refresher
+        # can never mix tiers.
+        from app.data.providers.router import primary_market_provider
+
+        provider = primary_market_provider()
         while True:
             symbol = self._queue.get()
             try:

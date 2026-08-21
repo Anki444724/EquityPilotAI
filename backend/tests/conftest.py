@@ -328,3 +328,101 @@ def _reset_rate_limiter():
     rate_limit.limiter.reset()
     yield
     rate_limit.limiter.reset()
+
+
+# =========================================================================
+# Phase 1 — sync-suite fixtures (lazy: only used where requested)
+# =========================================================================
+def _register_all_models() -> None:
+    import importlib
+    import pkgutil
+
+    import app.models as models_pkg
+
+    for module in pkgutil.iter_modules(models_pkg.__path__):
+        importlib.import_module(f"app.models.{module.name}")
+
+
+@pytest.fixture()
+def phase1_db():
+    """Fresh in-memory SQLite per test (the services under test commit)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.base import Base
+
+    _register_all_models()
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.fixture(scope="module")
+def big_db(tmp_path_factory):
+    """One file-backed SQLite shared by a module's full-scale scenarios."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+
+    _register_all_models()
+    path = tmp_path_factory.mktemp("phase1") / "universe.db"
+    engine = create_engine(
+        f"sqlite+pysqlite:///{path}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.fixture()
+def mock_provider_mode(monkeypatch):
+    """DATA_PROVIDER=mock for the duration of one test."""
+    from app.data.providers import router as router_module
+
+    monkeypatch.setattr("app.core.config.settings.DATA_PROVIDER", "mock")
+    router_module.reset_router()
+    yield
+    router_module.reset_router()
+
+
+@pytest.fixture()
+def phase1_client(phase1_db):
+    """TestClient whose get_db override points at THIS test's database.
+
+    The suite-wide override binds to the shared seeded database; the Phase-1
+    endpoint tests build their own rows in `phase1_db` and must be served
+    from that same session, not the shared one.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.db.base import get_db
+    from app.main import app
+
+    previous = app.dependency_overrides.get(get_db)
+
+    def _override():
+        yield phase1_db
+
+    app.dependency_overrides[get_db] = _override
+    try:
+        yield TestClient(app)
+    finally:
+        if previous is not None:
+            app.dependency_overrides[get_db] = previous
+        else:
+            app.dependency_overrides.pop(get_db, None)

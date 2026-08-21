@@ -27,13 +27,56 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.domain.platform.jobs import JobKind, SCHEDULES
+from app.domain.platform.jobs import SCHEDULES, JobKind, ScheduleSpec
 from app.models.platform import ScheduleState
 from app.services.platform.jobs.handlers import handler_for
 from app.services.platform.jobs.queue import JobQueue
 from app.services.platform.observability import get_logger
 
 log = get_logger("ierp.worker")
+
+
+def _phase1_schedules() -> list[ScheduleSpec]:
+    """Phase 1 sync schedules — environment-gated, conservative by default.
+
+    Lives in the services layer, not the domain, because intervals are
+    deployment configuration and the domain must stay settings-free (the
+    purity test enforces it). Every interval is a setting and 0 disables the
+    schedule outright: quotes every 5 minutes in bounded batches, the
+    universe and daily bars once a night, retries every 15 minutes.
+    """
+    return [
+        ScheduleSpec(
+            JobKind.COMPANY_UNIVERSE_SYNC,
+            settings.UNIVERSE_SYNC_INTERVAL_SECONDS,
+            "Upsert the company master from the configured source in "
+            "resumable batches.",
+            enabled=settings.UNIVERSE_SYNC_INTERVAL_SECONDS > 0,
+        ),
+        ScheduleSpec(
+            JobKind.PRICE_SYNC,
+            settings.PRICE_SYNC_INTERVAL_SECONDS,
+            "Refresh persisted quotes for the stalest batch of companies.",
+            enabled=settings.PRICE_SYNC_INTERVAL_SECONDS > 0,
+        ),
+        ScheduleSpec(
+            JobKind.HISTORICAL_PRICE_SYNC,
+            settings.HISTORICAL_PRICE_SYNC_INTERVAL_SECONDS,
+            "Backfill daily OHLCV bars for the next batch of companies.",
+            enabled=settings.HISTORICAL_PRICE_SYNC_INTERVAL_SECONDS > 0,
+        ),
+        ScheduleSpec(
+            JobKind.FAILED_DATA_RETRY,
+            settings.FAILED_RETRY_INTERVAL_SECONDS,
+            "Re-drive ingestion failures whose backoff has elapsed.",
+            enabled=settings.FAILED_RETRY_INTERVAL_SECONDS > 0,
+        ),
+    ]
+
+
+#: The standing schedule the scheduler actually walks: the platform's fixed
+#: base plus the environment-gated Phase-1 sync entries.
+ALL_SCHEDULES: tuple[ScheduleSpec, ...] = SCHEDULES + tuple(_phase1_schedules())
 
 
 def _utcnow() -> datetime:
@@ -193,7 +236,7 @@ class Scheduler:
 
         SCHED-001. This previously only INSERTED missing rows, so changing an
         interval in code had no effect on a database that already had the row:
-        the filing crawl was moved from 24h to 12h in `SCHEDULES` and
+        the filing crawl was moved from 24h to 12h in `ALL_SCHEDULES` and
         production kept running it at 86400s, because `sync_schedules` never
         looked at the existing value. The declared schedule is the source of
         truth, so a drifted interval is corrected here.
@@ -202,7 +245,7 @@ class Scheduler:
         a schedule from the admin console must survive a deploy.
         """
         written = 0
-        for spec in SCHEDULES:
+        for spec in ALL_SCHEDULES:
             row = db.scalar(
                 select(ScheduleState).where(ScheduleState.kind == spec.kind.value)
             )
@@ -238,7 +281,7 @@ class Scheduler:
             now = _utcnow()
 
             enqueued = 0
-            for spec in SCHEDULES:
+            for spec in ALL_SCHEDULES:
                 row = db.scalar(
                     select(ScheduleState).where(ScheduleState.kind == spec.kind.value)
                 )

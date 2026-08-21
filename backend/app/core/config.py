@@ -162,6 +162,35 @@ class Settings(BaseSettings):
     MARKET_TIMEOUT_SECONDS: float = 15.0
     MARKET_RETRY_ATTEMPTS: int = 3
 
+    # --- Phase 1: 5,000-company universe + provider switch -----------------
+    #: 'real' | 'mock'. 'real' keeps the production chain (Finnhub/FMP/Yahoo
+    #: -> internal -> documents) and is the default, so an unset variable
+    #: cannot silently turn production data synthetic. 'mock' replaces the
+    #: external tier with the deterministic MockMarketProvider exclusively —
+    #: the two chains are mutually exclusive and can never mix rows.
+    DATA_PROVIDER: str = "real"
+    #: How many deterministic companies the mock universe generates. 5,000 by
+    #: default so a local run exercises the full-scale pipeline.
+    MOCK_UNIVERSE_SIZE: int = 5_000
+    #: 'auto' resolves to the mock source when DATA_PROVIDER=mock and the
+    #: NSE+BSE masters otherwise. Explicit values override, for operators.
+    UNIVERSE_SOURCE: str = "auto"
+    #: Sync knobs. Intervals of 0 disable the schedule entirely. Defaults are
+    #: deliberately conservative: quotes every 5 minutes in bounded batches,
+    #: the universe and daily bars once a night, retries every 15 minutes.
+    UNIVERSE_SYNC_INTERVAL_SECONDS: int = 86_400
+    UNIVERSE_SYNC_BATCH_SIZE: int = 500
+    PRICE_SYNC_INTERVAL_SECONDS: int = 300
+    PRICE_SYNC_BATCH_SIZE: int = 250
+    HISTORICAL_PRICE_SYNC_INTERVAL_SECONDS: int = 86_400
+    HISTORICAL_PRICE_SYNC_BATCH_SIZE: int = 100
+    FAILED_RETRY_INTERVAL_SECONDS: int = 900
+    #: Per-symbol retry budget before a failure is left for an operator.
+    FAILED_RETRY_MAX_ATTEMPTS: int = 5
+    #: How far back the historical sync backfills daily bars (days).
+    PRICE_HISTORY_BACKFILL_DAYS: int = 1_825
+
+
     OPENROUTER_API_KEY: str | None = None
     #: Model OpenRouter serves the writing layer with. Overridable without a
     #: deploy because model availability on a given key changes underneath us:

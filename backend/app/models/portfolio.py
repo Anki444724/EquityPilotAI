@@ -333,6 +333,14 @@ class PriceHistory(Base):
     volume: Mapped[float | None] = mapped_column(Float)
     #: Average daily traded value in ₹, for the liquidity screen.
     traded_value: Mapped[float | None] = mapped_column(Float)
+    # ---- Phase 1: OHLC + provenance for the historical-price sync --------
+    #: Nullable: the demo seed wrote close-only bars, and a figure the source
+    #: did not report is stored as absent rather than back-filled.
+    day_open: Mapped[float | None] = mapped_column(Float)
+    day_high: Mapped[float | None] = mapped_column(Float)
+    day_low: Mapped[float | None] = mapped_column(Float)
+    #: 'mock' | 'yahoo' | 'fmp' | … — which tier supplied the bar.
+    provider: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (
         UniqueConstraint("ticker", "as_of", name="uq_price_ticker_date"),

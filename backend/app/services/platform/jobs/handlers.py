@@ -674,6 +674,14 @@ def handle_financials_backfill(db: Session, payload: dict[str, Any]) -> dict[str
         TransientIngestionFailure,
     )
 
+    # DATA_PROVIDER=mock swaps the provider, not the pipeline: the same job
+    # ingests deterministic synthetic facts through the same upsert path, so
+    # the full universe loop is exercisable offline. Real mode is unchanged.
+    from app.core.config import settings
+
+    if settings.DATA_PROVIDER.lower() == "mock":
+        return _mock_financials_sweep(db, payload)
+
     tickers = [str(t) for t in (payload.get("tickers") or []) if str(t).strip()]
 
     service = FinancialsBackfillService(db)
@@ -742,6 +750,167 @@ def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str
     return summary
 
 
+# ===========================================================================
+# Phase 1: the 5,000-company universe jobs
+# ===========================================================================
+def _mock_financials_sweep(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """The mock-mode twin of the financials sweep (see handler above).
+
+    Targeted (payload["tickers"]) or the next uncovered batch, exactly like
+    the real sweep's shape, but sourcing from the deterministic generator.
+    """
+    from sqlalchemy import func, select
+
+    from app.data.mock_financials import upsert_mock_financials
+    from app.models.company import Company, FinancialFact
+    from app.models.ingestion import IngestionRun
+
+    tickers = [str(t) for t in (payload.get("tickers") or []) if str(t).strip()]
+    limit = int(payload.get("limit") or 50)
+
+    run = IngestionRun(kind="financials_sync", provider="mock",
+                       started_at=datetime.now(timezone.utc))
+    db.add(run)
+    db.commit()
+
+    covered = select(FinancialFact.company_id).distinct()
+    stmt = (
+        select(Company)
+        .where(
+            Company.deleted_at.is_(None),
+            Company.listing_status == "active",
+            Company.id.not_in(covered),
+        )
+        .order_by(Company.ticker.asc())
+        .limit(limit)
+    )
+    if tickers:
+        companies = db.scalars(
+            select(Company).where(Company.ticker.in_(tickers))
+        ).all()
+    else:
+        companies = db.scalars(stmt).all()
+
+    inserted = updated = unchanged = failed = 0
+    for company in companies:
+        result = upsert_mock_financials(db, company.ticker)
+        if result.get("ok"):
+            inserted += int(result.get("inserted", 0))
+            updated += int(result.get("updated", 0))
+            unchanged += int(result.get("unchanged", 0))
+        else:
+            failed += 1
+
+    remaining = int(db.scalar(
+        select(func.count()).select_from(Company).where(
+            Company.deleted_at.is_(None),
+            Company.listing_status == "active",
+            Company.id.not_in(covered),
+        )
+    ) or 0)
+
+    run.succeeded = len(companies) - failed
+    run.failed = failed
+    run.finished_at = datetime.now(timezone.utc)
+    run.stats = {
+        "attempted": len(companies), "inserted": inserted, "updated": updated,
+        "unchanged": unchanged, "universe_without_financials": remaining,
+    }
+    db.commit()
+    return {
+        "provider": "mock", "attempted": len(companies), "failed": failed,
+        "inserted": inserted, "updated": updated, "unchanged": unchanged,
+        "universe_without_financials": remaining,
+    }
+
+
+def handle_company_universe_sync(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Upsert the company master in resumable batches.
+
+    Source resolution follows DATA_PROVIDER unless the payload names one, so
+    mock mode generates its deterministic universe and never touches an
+    exchange master, while real mode walks the NSE+BSE masters. A run resumes
+    from the last unfinished run's `next_index`, is bounded by
+    `max_batches` × batch size per invocation, and records every failure in
+    `ingestion_failures` for the retry job.
+    """
+    from app.core.config import settings
+    from app.services.universe.company_universe import (
+        CompanyUniverseService, records_for_source, resolve_source,
+    )
+
+    source = resolve_source(payload.get("source"))
+    records = records_for_source(source, limit=payload.get("limit"))
+    batch_size = int(payload.get("batch_size") or settings.UNIVERSE_SYNC_BATCH_SIZE)
+    max_batches = payload.get("max_batches")
+
+    service = CompanyUniverseService(db)
+    start_index = payload.get("start_index")
+    if start_index is None:
+        start_index = service.resume_position()
+
+    report = service.sync(
+        records,
+        source=source,
+        batch_size=batch_size,
+        max_batches=int(max_batches) if max_batches is not None else None,
+        start_index=int(start_index),
+    )
+    result = report.as_dict()
+    result["completed"] = report.next_index >= len(records)
+    if transient := result.get("failed"):
+        # A failed row is recorded and skipped, so the job still succeeds;
+        # surfacing the count is reporting, not failure.
+        result["note"] = f"{transient} row(s) failed and are queued for retry"
+    return result
+
+
+def handle_price_sync(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Refresh persisted quotes for the stalest bounded batch of companies."""
+    from app.core.config import settings
+    from app.services.market.sync import PriceSyncService, TransientSyncFailure
+
+    limit = int(payload.get("limit") or settings.PRICE_SYNC_BATCH_SIZE)
+    try:
+        return PriceSyncService(db).sync_batch(limit=limit)
+    except TransientSyncFailure:
+        # The per-symbol results are already recorded; re-raise so the kind's
+        # bounded retry policy runs the remainder sooner than the schedule.
+        raise
+
+
+def handle_historical_price_sync(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Backfill daily OHLCV bars for the next bounded batch."""
+    from app.core.config import settings
+    from app.services.market.sync import HistoricalPriceSyncService, TransientSyncFailure
+
+    limit = int(payload.get("limit") or settings.HISTORICAL_PRICE_SYNC_BATCH_SIZE)
+    days = int(payload.get("days") or settings.PRICE_HISTORY_BACKFILL_DAYS)
+    try:
+        return HistoricalPriceSyncService(db).sync_batch(limit=limit, days=days)
+    except TransientSyncFailure:
+        raise
+
+
+def handle_failed_data_retry(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Re-drive ingestion failures whose backoff has elapsed.
+
+    Permanent failures are skipped (retrying a 404 burns provider quota and
+    changes nothing); transient failures and never-attempted rows are re-run
+    through the same service that failed them. A row whose attempts exceed
+    the budget is left for an operator — visible in the admin console, not
+    silently retried forever.
+    """
+    from app.core.config import settings
+    from app.services.market.sync import FailedRetryService
+
+    limit = int(payload.get("limit") or 200)
+    max_attempts = int(
+        payload.get("max_attempts") or settings.FAILED_RETRY_MAX_ATTEMPTS
+    )
+    return FailedRetryService(db).run(limit=limit, max_attempts=max_attempts)
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.REPORT_GENERATION: handle_report_generation,
     JobKind.DOCUMENT_PROCESSING: handle_document_processing,
@@ -761,6 +930,10 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.EMBEDDING_BACKFILL: handle_embedding_backfill,
     JobKind.AI_SCORE_REFRESH: handle_ai_score_refresh,
     JobKind.FINANCIALS_BACKFILL: handle_financials_backfill,
+    JobKind.COMPANY_UNIVERSE_SYNC: handle_company_universe_sync,
+    JobKind.PRICE_SYNC: handle_price_sync,
+    JobKind.HISTORICAL_PRICE_SYNC: handle_historical_price_sync,
+    JobKind.FAILED_DATA_RETRY: handle_failed_data_retry,
 }
 
 

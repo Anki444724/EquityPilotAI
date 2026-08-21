@@ -214,3 +214,82 @@ class PaginatedCompanies(BaseModel):
     page: int
     page_size: int
     results: list[CompanySummary]
+
+
+# =========================================================================
+# Phase 1: market-data + availability contracts
+# =========================================================================
+class CompanyQuote(BaseModel):
+    """The persisted quote for one company, with explicit provenance.
+
+    `data_kind` is the labelling the brief demands: 'mock' rows come from the
+    deterministic mock provider, 'real' from a live tier, and the field is
+    derived from the provider that wrote the row — never from configuration
+    at read time, so a row written before a provider switch stays labelled
+    with what actually produced it.
+    """
+
+    company_id: str
+    ticker: str
+    exchange: str
+    ltp: float | None = None
+    previous_close: float | None = None
+    day_open: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    volume: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+    market_status: str = "unknown"
+    provider: str
+    data_kind: str = Field("real", description="mock | real — who produced it")
+    fetched_at: datetime | None = None
+
+
+class PriceBar(BaseModel):
+    date: str
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+
+
+class CompanyPrices(BaseModel):
+    """Historical daily bars. `granularity='daily'` is stated explicitly:
+    intraday candles are not served until a licensed feed supplies them."""
+
+    company_id: str
+    ticker: str
+    exchange: str
+    range: str
+    granularity: str = "daily"
+    provider: str | None = None
+    data_kind: str = Field("real", description="mock | real — who produced it")
+    bars: list[PriceBar] = []
+
+
+class CompanyDataStatus(BaseModel):
+    """What data exists for one company, and where it came from.
+
+    'No data' must be a truthful, queryable state — the availability surface
+    for the 5,000-company universe, where most rows are newly synced.
+    """
+
+    company_id: str
+    ticker: str
+    has_financials: bool = False
+    fact_count: int = 0
+    fiscal_years: int = 0
+    latest_fiscal_year: int | None = None
+    quarterly_count: int = 0
+    shareholding_count: int = 0
+    financial_sources: list[str] = []
+    has_quote: bool = False
+    quote_provider: str | None = None
+    price_bars: int = 0
+    metadata_source: str | None = None
+    metadata_synced_at: datetime | None = None
+    data_version: int = 1

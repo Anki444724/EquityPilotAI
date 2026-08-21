@@ -1,6 +1,7 @@
 /** Typed API client. Single place that knows the backend URL. */
 import type {
-  CompanyDetail, CompanyProfile, CoverageResponse, DashboardOverview,
+  CompanyDataStatus, CompanyDetail, CompanyPrices, CompanyProfile,
+  CompanyQuote, CoverageResponse, DashboardOverview, PriceRange,
   DocCapabilities, DocChunk, DocEntity, DocFact, DocSearchResponse,
   DocStatistics, DocTable, DocumentDetail, DocumentSummary, GraphResponse,
   PaginatedCompanies, SearchResponse, SessionUser, UploadResponse,
@@ -92,6 +93,13 @@ export const api = {
     request<CompanyProfile>(`/api/v1/companies/${id}/profile`),
 
   dashboard: () => request<DashboardOverview>("/api/v1/dashboard/overview"),
+
+  // ---- Phase 1: persisted market data + availability (additive) ----------
+  quote: (id: string) => request<CompanyQuote>(`/api/v1/companies/${id}/quote`),
+  prices: (id: string, range: PriceRange = "1M") =>
+    request<CompanyPrices>(`/api/v1/companies/${id}/prices?range=${range}`),
+  dataStatus: (id: string) =>
+    request<CompanyDataStatus>(`/api/v1/companies/${id}/data-status`),
 };
 
 /* ---------------------------------------------------------------- Module 2 */

@@ -11,6 +11,72 @@ export interface LiveMarket {
   volume: number | null;
 }
 
+
+// ---------------------------------------------------------------- Phase 1
+/** Persisted market quote with explicit provenance (backend /companies/{id}/quote). */
+export interface CompanyQuote {
+  company_id: string;
+  ticker: string;
+  exchange: string;
+  ltp: number | null;
+  previous_close: number | null;
+  day_open: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  volume: number | null;
+  change: number | null;
+  change_percent: number | null;
+  week_52_high: number | null;
+  week_52_low: number | null;
+  market_status: string;
+  provider: string;
+  /** mock | real — who produced the figure; travels with the stored row. */
+  data_kind: "mock" | "real";
+  fetched_at: string | null;
+}
+
+export interface PriceBar {
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+}
+
+export type PriceRange = "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "3Y" | "5Y" | "MAX";
+
+/** Historical daily OHLCV bars (backend /companies/{id}/prices). */
+export interface CompanyPrices {
+  company_id: string;
+  ticker: string;
+  exchange: string;
+  range: string;
+  granularity: string;
+  provider: string | null;
+  data_kind: "mock" | "real";
+  bars: PriceBar[];
+}
+
+/** Availability + provenance surface (backend /companies/{id}/data-status). */
+export interface CompanyDataStatus {
+  company_id: string;
+  ticker: string;
+  has_financials: boolean;
+  fact_count: number;
+  fiscal_years: number;
+  latest_fiscal_year: number | null;
+  quarterly_count: number;
+  shareholding_count: number;
+  financial_sources: string[];
+  has_quote: boolean;
+  quote_provider: string | null;
+  price_bars: number;
+  metadata_source: string | null;
+  metadata_synced_at: string | null;
+  data_version: number;
+}
+
 export interface CompanySummary {
   id: string;
   name: string;

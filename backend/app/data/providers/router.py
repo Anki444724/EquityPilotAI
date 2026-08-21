@@ -43,6 +43,40 @@ SOURCE_NONE = "Unavailable"
 
 
 # ===========================================================================
+# Provider selection — DATA_PROVIDER (Phase 1)
+# ===========================================================================
+def default_providers() -> list[BaseMarketProvider]:
+    """The external tier for the configured DATA_PROVIDER.
+
+    'mock' selects the deterministic MockMarketProvider *exclusively* — the
+    real providers are not even constructed, so mock mode can never consult,
+    let alone write, a real figure, and 'real' never constructs the mock.
+    The two chains are mutually exclusive by construction, which is the
+    guarantee behind "never mix mock data into production real-data records".
+    """
+    from app.core.config import settings
+
+    if settings.DATA_PROVIDER.lower() == "mock":
+        from app.data.providers.mock import MockMarketProvider
+        return [MockMarketProvider()]
+    return [FinnhubProvider(), FMPProvider(), YahooProvider()]
+
+
+def active_provider_name() -> str:
+    """Provenance label for rows written by the selected chain."""
+    from app.core.config import settings
+
+    if settings.DATA_PROVIDER.lower() == "mock":
+        return "mock"
+    return "real"
+
+
+def primary_market_provider() -> BaseMarketProvider:
+    """The head of the active chain — the live-quote refresher's fetcher."""
+    return default_providers()[0]
+
+
+# ===========================================================================
 # Cache
 # ===========================================================================
 @dataclass(slots=True)
@@ -215,8 +249,7 @@ class MarketDataRouter:
         ttl_cache: TTLCache | None = None,
     ) -> None:
         self.providers = sorted(
-            providers if providers is not None
-            else [FinnhubProvider(), FMPProvider(), YahooProvider()],
+            providers if providers is not None else default_providers(),
             key=lambda p: p.priority,
         )
         self.cache = ttl_cache or _CACHE
