@@ -63,8 +63,10 @@ export function MetricGrid({
   return (
     <Card>
       {title && <CardHeader title={title} subtitle={subtitle} action={action} />}
-      <div className="scroll-x">
-        <table className="grid-table">
+      {/* ≥768px — the institutional grid, exactly as before. `metric-table`
+          carries the tablet-only column-width overrides in globals.css. */}
+      <div className="scroll-x hidden md:block">
+        <table className="grid-table metric-table">
           <thead>
             <tr>
               <th className="min-w-[19rem]">Metric</th>
@@ -81,7 +83,63 @@ export function MetricGrid({
           </tbody>
         </table>
       </div>
+      {/* <768px — the same data as one stacked block per metric. The label
+          takes the full card width and wraps naturally, and the fiscal-year
+          values become a row of chips that scrolls INSIDE the card, so the
+          page itself never scrolls sideways and no value is ever clipped or
+          overlapped. Values are formatted by the exact same formatValue()
+          as the desktop table — nothing is recomputed. */}
+      <div className="md:hidden">
+        {sections.map((section) => (
+          <div key={section.key} className="metric-stack-section">
+            <div className="metric-stack-title">{section.title}</div>
+            {section.rows.map((row) => (
+              <StackedMetricRow
+                key={`${section.key}-${row.key}`}
+                row={row}
+                periods={periods}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
     </Card>
+  );
+}
+
+/** Mobile counterpart of `Row`: label on top, period chips underneath. */
+function StackedMetricRow({ row, periods }: { row: MetricRow; periods: PeriodMeta }) {
+  const last = row.values.length - 1;
+  return (
+    <div className="metric-stack-row" data-subtotal={row.is_subtotal}>
+      <div className="metric-stack-label">
+        <span
+          className="metric-stack-text"
+          style={{ paddingLeft: `${row.indent * 0.85}rem` }}
+        >
+          {row.label}
+          {row.note && (
+            <span
+              title={row.note}
+              className="ml-1 inline-flex cursor-help align-[-0.125em] text-[var(--text-muted)]"
+            >
+              <Info size={11} />
+            </span>
+          )}
+        </span>
+        <span className="metric-stack-unit">{row.unit}</span>
+      </div>
+      <div className="scroll-x metric-chips">
+        {row.values.map((value, i) => (
+          <div key={i} className="metric-chip" data-latest={i === last}>
+            <span className="metric-chip-period">{periods.labels[i] ?? EM_DASH}</span>
+            <span className={cn("num metric-chip-value", valueTone(value, row.unit))}>
+              {formatValue(value, row.unit)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

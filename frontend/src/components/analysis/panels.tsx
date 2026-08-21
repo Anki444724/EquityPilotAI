@@ -46,7 +46,8 @@ export function DebtPanels({ data }: { data: DebtResponse }) {
               )
             }
           />
-          <div className="scroll-x">
+          {/* ≥768px — the eight-column schedule, unchanged. */}
+          <div className="scroll-x hidden md:block">
             <table className="grid-table">
               <thead>
                 <tr>
@@ -72,6 +73,49 @@ export function DebtPanels({ data }: { data: DebtResponse }) {
                 ))}
               </tbody>
             </table>
+          </div>
+          {/* <768px — one card per facility. The instrument name and its
+              amount lead; the remaining fields stack as label:value rows so
+              nothing is squeezed into a 360px-wide eight-column grid.
+              The `md:hidden` wrapper (not a display rule on the list class)
+              is what hides this at md+: an unlayered `display` in
+              globals.css would outrank the layered Tailwind utility. */}
+          <div className="md:hidden">
+            <div className="instrument-list">
+              {data.instruments.map((ins, i) => (
+                <div key={`${ins.instrument}-${i}`} className="instrument-card">
+                  <div className="instrument-card-title">
+                    <span className="min-w-0 break-words">{ins.instrument}</span>
+                    <span className="num shrink-0 text-right">
+                      {crore(ins.amount)}{" "}
+                      <span className="text-[0.625rem] text-[var(--text-muted)]">{ins.currency}</span>
+                    </span>
+                  </div>
+                  <dl className="kv-list">
+                    <div className="kv-row">
+                      <dt>Security</dt>
+                      <dd className="text-xs text-[var(--text-muted)]">{ins.security}</dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Rate type</dt>
+                      <dd className="text-xs text-[var(--text-muted)]">{ins.rate_type}</dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Share of debt</dt>
+                      <dd className="num">{percent(ins.share_of_debt, 1)}</dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Interest rate</dt>
+                      <dd className="num">{percent(ins.interest_rate, 2)}</dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Maturity</dt>
+                      <dd className="num">{ins.maturity_year ?? EM_DASH}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
           </div>
         </Card>
       )}
@@ -104,7 +148,8 @@ export function DebtPanels({ data }: { data: DebtResponse }) {
 
         <Card>
           <CardHeader title="Covenant compliance" subtitle="Tested on the latest reported period" />
-          <div className="scroll-x">
+          {/* ≥768px — the five-column covenant grid, unchanged. */}
+          <div className="scroll-x hidden md:block">
             <table className="grid-table">
               <thead>
                 <tr>
@@ -136,6 +181,51 @@ export function DebtPanels({ data }: { data: DebtResponse }) {
                 ))}
               </tbody>
             </table>
+          </div>
+          {/* <768px — one stacked card per covenant:
+                Covenant name, then Threshold / Actual / Headroom / Status
+                as full-width label:value rows. The same figures, the same
+                formatting as the desktop table; only the layout changes.
+                (Hidden at md+ by the wrapper div — see note on the
+                instrument list above.) */}
+          <div className="md:hidden">
+            <div className="covenant-list">
+              {data.covenants.map((c) => (
+                <div key={c.key} className="covenant-card">
+                  <div className="covenant-card-title">{c.label}</div>
+                  <dl className="kv-list">
+                    <div className="kv-row">
+                      <dt>Threshold</dt>
+                      <dd className="num text-[var(--text-muted)]">
+                        {c.direction === "max" ? "≤" : "≥"} {c.threshold.toFixed(2)}
+                      </dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Actual</dt>
+                      <dd className="num">{c.actual === null ? EM_DASH : c.actual.toFixed(2)}</dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Headroom</dt>
+                      <dd className={cn("num", (c.headroom ?? 0) < 0 && "text-loss")}>
+                        {c.headroom === null ? EM_DASH : percent(c.headroom, 0)}
+                      </dd>
+                    </div>
+                    <div className="kv-row">
+                      <dt>Status</dt>
+                      <dd>
+                        {c.compliant === null ? (
+                          <span className="text-[var(--text-muted)]">{EM_DASH}</span>
+                        ) : c.compliant ? (
+                          <Badge variant="gain">Pass</Badge>
+                        ) : (
+                          <Badge variant="loss">Breach</Badge>
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
           </div>
         </Card>
       </div>

@@ -80,6 +80,7 @@ export function Card({ className, children }: { className?: string; children: Re
   return (
     <div
       className={cn(
+        "card",
         "rounded-lg border bg-[var(--bg-elevated)] shadow-sm",
         "border-[var(--border)]",
         // A Card is almost always a flex or grid child, and such a child
@@ -92,6 +93,10 @@ export function Card({ className, children }: { className?: string; children: Re
         //
         // This has no effect on desktop: the grid tracks there are already
         // wider than their content.
+        //
+        // `.card` carries the width/max-width guarantees (see globals.css);
+        // `overflow: hidden` is applied to it on mobile via the
+        // page-scoped rules there.
         "min-w-0",
         className,
       )}
@@ -105,7 +110,9 @@ export function CardHeader({
   title, subtitle, action, className,
 }: { title: ReactNode; subtitle?: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3", className)}>
+    // `card-header` allows the action to wrap under the title on phones
+    // (globals.css) instead of squeezing the heading.
+    <div className={cn("card-header flex items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3", className)}>
       <div className="min-w-0">
         <h3 className="text-[0.8125rem] font-semibold tracking-wide text-[var(--text)] uppercase">
           {title}
@@ -118,7 +125,8 @@ export function CardHeader({
 }
 
 export function CardBody({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn("p-4", className)}>{children}</div>;
+  // `card-body` takes the reduced mobile padding (globals.css).
+  return <div className={cn("card-body p-4", className)}>{children}</div>;
 }
 
 /* ------------------------------------------------------------- Stat tile */
@@ -142,10 +150,16 @@ export function Stat({
       <div className="text-[0.6875rem] font-medium uppercase tracking-wider text-[var(--text-muted)]">
         {label}
       </div>
-      <div className={cn("mt-1 truncate text-xl font-semibold", mono && "num !text-xl", toneClass)}>
+      {/* `truncate` keeps a long desktop value on one line; on phones the
+          value wraps (and may break within a long numeral) rather than be
+          ellipsized — a financial figure must stay fully visible. */}
+      <div className={cn(
+        "mt-1 truncate text-xl font-semibold max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]",
+        mono && "num !text-xl", toneClass,
+      )}>
         {value}
       </div>
-      {hint && <div className="mt-0.5 truncate text-xs text-[var(--text-muted)]">{hint}</div>}
+      {hint && <div className="mt-0.5 truncate text-xs text-[var(--text-muted)] max-sm:whitespace-normal">{hint}</div>}
     </div>
   );
 }

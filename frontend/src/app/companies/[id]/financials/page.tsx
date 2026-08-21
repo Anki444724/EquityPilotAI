@@ -40,48 +40,55 @@ export default function FinancialsPage({ params }: { params: Promise<{ id: strin
 
   return (
     <AppShell>
-      <CompanyTabs companyId={id} />
-      {profile.isLoading && <Skeleton className="h-24" />}
+      {/* `fin-analysis` scopes the mobile card-overflow rules in
+          globals.css to this page only. `min-w-0` lets the column shrink
+          below its content so the table scrollers clip, not the document. */}
+      <div className="fin-analysis min-w-0">
+        <CompanyTabs companyId={id} />
+        {profile.isLoading && <Skeleton className="h-24" />}
 
-      {profile.data && (
-        <>
-          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <Link href={`/companies/${id}`} className="num text-xs text-accent-500 hover:underline">
-                  {profile.data.company.ticker}
-                </Link>
-                <span className="text-xs text-[var(--text-muted)]">/</span>
-                <span className="text-xs text-[var(--text-muted)]">Financial analysis</span>
+        {profile.data && (
+          <>
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Link href={`/companies/${id}`} className="num text-xs text-accent-500 hover:underline">
+                    {profile.data.company.ticker}
+                  </Link>
+                  <span className="text-xs text-[var(--text-muted)]">/</span>
+                  <span className="text-xs text-[var(--text-muted)]">Financial analysis</span>
+                </div>
+                <h1 className="mt-1 text-lg font-semibold break-words">{profile.data.company.name}</h1>
               </div>
-              <h1 className="mt-1 text-lg font-semibold">{profile.data.company.name}</h1>
+              <Badge variant="accent">
+                {profile.data.coverage.fiscal_years.length} fiscal years
+              </Badge>
             </div>
-            <Badge variant="accent">
-              {profile.data.coverage.fiscal_years.length} fiscal years
-            </Badge>
-          </div>
 
-          {/* Tabs */}
-          <TabStrip className="mb-4 lg:mb-5" label="Financial statements">
-            {TABS.map((t) => (
-              <button data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={cn(
-                  "-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors",
-                  tab === t.key
-                    ? "border-accent-500 text-accent-500"
-                    : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]",
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </TabStrip>
+            {/* Tabs — .tab-strip scrolls horizontally inside itself on
+                mobile and keeps the active tab centred; the page never
+                scrolls sideways because of it. */}
+            <TabStrip className="mb-4 lg:mb-5" label="Financial statements">
+              {TABS.map((t) => (
+                <button data-active={tab === t.key} role="tab" aria-selected={tab === t.key}
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  className={cn(
+                    "-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                    tab === t.key
+                      ? "border-accent-500 text-accent-500"
+                      : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </TabStrip>
 
-          {ticker && <TabContent tab={tab} ticker={ticker} />}
-        </>
-      )}
+            {ticker && <TabContent tab={tab} ticker={ticker} />}
+          </>
+        )}
+      </div>
     </AppShell>
   );
 }
