@@ -96,6 +96,19 @@ def _aware(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+#: Job kinds whose handlers may legitimately run longer than the default
+#: lease (Task 9). A bounded Screener batch is minutes, not seconds: the
+#: Task-8 audit put a worst-case PERIODIC_SYNC batch at ~40 minutes against
+#: a 300s lease. The worker renews these leases while the handler runs, so
+#: a slow batch is never reaped and requeued merely for being slow. Other
+#: kinds keep the plain claim lease — their handlers are short, and an
+#: un-renewed expired lease remains the crash-recovery path.
+LONG_RUNNING_KINDS: frozenset[JobKind] = frozenset({
+    JobKind.PERIODIC_SYNC,
+    JobKind.FINANCIALS_BACKFILL,
+})
+
+
 class Worker:
     """Claims jobs and runs their handlers.
 
@@ -112,6 +125,7 @@ class Worker:
         kinds: list[JobKind] | None = None,
         poll_seconds: float | None = None,
         lease_seconds: int | None = None,
+        heartbeat_interval: float | None = None,
     ) -> None:
         import socket
         import os
@@ -121,12 +135,76 @@ class Worker:
         self.kinds = kinds
         self.poll_seconds = poll_seconds or settings.WORKER_POLL_SECONDS
         self.lease_seconds = lease_seconds or settings.WORKER_LEASE_SECONDS
+        #: How often the lease heartbeat renews while a long-running handler
+        #: works. Default: a third of the lease, so a lost renewal or two
+        #: still leaves the lease alive. Injectable purely so tests can
+        #: drive it deterministically.
+        self.heartbeat_interval = heartbeat_interval or max(
+            5.0, self.lease_seconds / 3.0,
+        )
         self._stop = threading.Event()
         self.processed = 0
         self.failed = 0
 
     def stop(self) -> None:
         self._stop.set()
+
+    # -- lease heartbeat ---------------------------------------------------
+    def _heartbeat_loop(
+        self, job_id: int, stop: threading.Event,
+    ) -> None:
+        """Renew a long-running job's lease until `stop` is set.
+
+        Uses its OWN session per renewal — the handler's session belongs to
+        the handler's thread. Best-effort by design: if a renewal fails
+        (database hiccup) it logs and keeps trying, and if the job has moved
+        on (renewal returns False: completed, failed, or reclaimed) the loop
+        exits rather than fighting the outcome.
+        """
+        while not stop.wait(self.heartbeat_interval):
+            db: Session = self.session_factory()
+            try:
+                renewed = JobQueue(db).extend_lease(
+                    job_id, self.worker_id, seconds=self.lease_seconds,
+                )
+                if not renewed:
+                    return
+                log.debug("lease renewed", job_id=job_id,
+                          seconds=self.lease_seconds)
+            except Exception as exc:  # noqa: BLE001 — heartbeat must never raise
+                log.warning("lease renewal failed", job_id=job_id,
+                            error=str(exc)[:160])
+            finally:
+                db.close()
+
+    def _run_with_heartbeat(self, job, handler, db: Session, payload: dict):
+        """Run `handler`, renewing the lease for long-running kinds.
+
+        The heartbeat is guaranteed to stop when the handler returns OR
+        raises: `stop.set()` plus a bounded join happen in the finally block,
+        BEFORE the caller writes the job's outcome — so a renewal can never
+        race a succeed/fail transition (and `extend_lease`'s locked_by
+        predicate would refuse it anyway).
+        """
+        if JobKind(job.kind) not in LONG_RUNNING_KINDS:
+            return handler(db, payload)
+
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=self._heartbeat_loop, args=(job.id, stop),
+            name=f"lease-heartbeat-{job.id}", daemon=True,
+        )
+        thread.start()
+        try:
+            return handler(db, payload)
+        finally:
+            stop.set()
+            # Bounded wait: the loop is sleeping in `wait(interval)`, which
+            # returns immediately once `stop` is set.
+            thread.join(timeout=self.heartbeat_interval + 5.0)
+            if thread.is_alive():  # pragma: no cover — pathological only
+                log.warning("lease heartbeat did not stop cleanly",
+                            job_id=job.id)
 
     # -- one unit of work ---------------------------------------------
     def run_once(self) -> bool:
@@ -154,7 +232,7 @@ class Worker:
 
             try:
                 handler = handler_for(JobKind(job.kind))
-                result = handler(db, job.payload or {})
+                result = self._run_with_heartbeat(job, handler, db, job.payload or {})
                 queue.succeed(job.id, result)
                 self.processed += 1
                 log.info(
