@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { AccountMenu } from "./account-menu";
 import { CommandPalette } from "./command-palette";
 import { useTheme } from "./theme-provider";
 import { useAuth } from "./auth-provider";
@@ -132,7 +133,20 @@ function NavList({
 }
 
 /** The signed-in user block at the foot of the rail and the drawer. */
-function UserCard({ user }: { user: { name?: string; role?: string; is_dev_identity?: boolean } | undefined }) {
+function UserCard({
+  user,
+  onNavigate,
+}: {
+  user?: {
+    name?: string | null;
+    email?: string | null;
+    role?: string | null;
+    tenant_name?: string | null;
+    is_dev_identity?: boolean;
+  } | null;
+  onNavigate?: () => void;
+}) {
+  const { signOut } = useAuth();
   return (
     <div className="border-t border-white/10 p-3">
       <div className="flex items-center gap-2.5">
@@ -151,6 +165,25 @@ function UserCard({ user }: { user: { name?: string; role?: string; is_dev_ident
           DEV IDENTITY — set NATIVE_AUTH=true for real sign-in
         </p>
       )}
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
+        <Link
+          href="/settings"
+          onClick={onNavigate}
+          className="rounded px-2 py-1.5 text-center text-[0.6875rem] text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          Settings
+        </Link>
+        <button
+          type="button"
+          onClick={async () => {
+            onNavigate?.();
+            await signOut();
+          }}
+          className="rounded px-2 py-1.5 text-[0.6875rem] text-loss/90 hover:bg-white/10"
+        >
+          Logout
+        </button>
+      </div>
     </div>
   );
 }
@@ -258,7 +291,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-56 flex-col border-r border-[var(--border)] bg-[var(--header)] lg:flex">
         <Brand />
         <NavList pathname={pathname} role={sessionUser?.role} companyForNav={companyForNav} />
-        <UserCard user={user} />
+        <UserCard user={user ?? sessionUser ?? undefined} />
       </aside>
 
       {/* Sidebar — mobile drawer. Renders the identical NavList. */}
@@ -295,7 +328,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               companyForNav={companyForNav}
               onNavigate={() => setNavOpen(false)}
             />
-            <UserCard user={user} />
+            <UserCard user={user ?? sessionUser ?? undefined} onNavigate={() => setNavOpen(false)} />
           </aside>
         </div>
       )}
@@ -335,6 +368,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
           </button>
+          <AccountMenu compact identity={user ?? sessionUser ?? undefined} />
         </header>
 
         {/* `min-w-0` lets the main column shrink below its content width, which
