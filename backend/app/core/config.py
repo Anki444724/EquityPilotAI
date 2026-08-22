@@ -286,8 +286,7 @@ class Settings(BaseSettings):
         different product. Reported as degraded, never as blocking.
         """
         return any((
-            self.GEMINI_API_KEY, self.OPENROUTER_API_KEY,
-            self.OPENAI_API_KEY, self.ANTHROPIC_API_KEY,
+            self.OPENROUTER_API_KEY, self.OPENAI_API_KEY, self.GEMINI_API_KEY,
         ))
 
     def production_blocking_problems(self) -> list[str]:
