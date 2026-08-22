@@ -100,11 +100,25 @@ class TestFallbackOrder:
 
     def test_the_chain_follows_the_declared_order(self):
         # Deliberately registered in the wrong order to prove the sort runs.
-        router = ProviderRouter(configs=_configured(claude, openrouter, gemini))
-        assert [c.name for c in router.chain()] == ["OpenRouter", "Gemini", "Claude"]
+        router = ProviderRouter(configs=_configured(gemini, openai, openrouter))
+        assert [c.name for c in router.chain()] == ["OpenRouter", "OpenAI", "Gemini"]
 
-    def test_an_explicit_preference_overrides_the_default_order(self):
+    def test_claude_is_never_selected(self):
+        from app.services.ai.providers import mock
+
+        router = ProviderRouter(
+            configs=_configured(claude, openrouter) + [mock.DEFAULTS],
+        )
+        assert "Claude" not in [c.name for c in router.chain()]
+        assert FALLBACK_ORDER == ("OpenRouter", "OpenAI", "Gemini")
+
+    def test_preference_cannot_skip_configured_openrouter(self):
+        """OpenRouter stays first whenever its key is present."""
         router = ProviderRouter(configs=_configured(gemini, openrouter))
+        assert router.chain(preferred="gemini")[0].name == "OpenRouter"
+
+    def test_preference_applies_when_openrouter_is_absent(self):
+        router = ProviderRouter(configs=_configured(gemini, openai))
         assert router.chain(preferred="gemini")[0].name == "Gemini"
 
     def test_a_live_provider_always_outranks_the_offline_one(self):
@@ -363,6 +377,8 @@ class TestCredentialHygiene:
         text = example.read_text()
         assert "GEMINI_API_KEY" in text
         assert "OPENROUTER_API_KEY" in text
+        assert "OPENAI_API_KEY" in text
+        assert "OpenRouter -> OpenAI -> Gemini -> Offline" in text
 
 
 class TestModelDefaults:
@@ -401,3 +417,166 @@ class TestDegradedOperation:
         router = ProviderRouter(configs=_configured(gemini, key=""))
         with pytest.raises(NoProviderConfigured):
             asyncio.run(router.complete(_request(), use_cache=False))
+
+
+class TestStrictLiveFallback:
+    """Production order: OpenRouter → OpenAI → Gemini → Offline."""
+
+    def _router(self, *modules, offline: bool = True) -> ProviderRouter:
+        from app.services.ai.providers import mock
+
+        configs = _configured(*modules)
+        if offline:
+            configs = configs + [mock.DEFAULTS]
+        return ProviderRouter(configs=configs)
+
+    @staticmethod
+    def _fail(name: str, *, timeout: bool = False, quota: bool = False) -> _Failing:
+        if timeout:
+            return _Failing(ProviderError(
+                f"{name} timed out", provider=name, retryable=True,
+            ))
+        if quota:
+            return _Failing(RateLimitError(
+                "quota", provider=name, retry_after=0.01, quota_exhausted=True,
+            ))
+        return _Failing(ProviderError(f"{name} down", provider=name, retryable=False))
+
+    def test_openrouter_success_stays_on_openrouter(self):
+        router = self._router(openrouter, openai, gemini)
+        mapping = {
+            "OpenRouter": _Answering("OpenRouter"),
+            "OpenAI": _Answering("OpenAI"),
+            "Gemini": _Answering("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert response.provider == "OpenRouter"
+        assert response.fell_back_from is None
+        assert response.providers_attempted == ("OpenRouter",)
+        assert mapping["OpenAI"].attempts == 0
+        assert mapping["Gemini"].attempts == 0
+        assert mapping["Offline"].attempts == 0
+
+    def test_openrouter_failure_falls_to_openai(self):
+        router = self._router(openrouter, openai, gemini)
+        mapping = {
+            "OpenRouter": self._fail("OpenRouter"),
+            "OpenAI": _Answering("OpenAI"),
+            "Gemini": _Answering("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert response.provider == "OpenAI"
+        assert response.fell_back_from == "OpenRouter"
+        assert response.providers_attempted == ("OpenRouter", "OpenAI")
+        assert mapping["Gemini"].attempts == 0
+        assert mapping["Offline"].attempts == 0
+
+    def test_openrouter_and_openai_failure_falls_to_gemini(self):
+        router = self._router(openrouter, openai, gemini)
+        mapping = {
+            "OpenRouter": self._fail("OpenRouter"),
+            "OpenAI": self._fail("OpenAI"),
+            "Gemini": _Answering("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert response.provider == "Gemini"
+        assert response.fell_back_from == "OpenRouter"
+        assert response.providers_attempted == ("OpenRouter", "OpenAI", "Gemini")
+        assert mapping["Offline"].attempts == 0
+
+    def test_all_live_failures_fall_to_offline(self):
+        router = self._router(openrouter, openai, gemini)
+        mapping = {
+            "OpenRouter": self._fail("OpenRouter"),
+            "OpenAI": self._fail("OpenAI"),
+            "Gemini": self._fail("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert response.provider == "Offline"
+        assert response.fell_back_from == "OpenRouter"
+        assert response.providers_attempted == (
+            "OpenRouter", "OpenAI", "Gemini", "Offline",
+        )
+
+    def test_missing_openrouter_key_attempts_openai(self):
+        router = self._router(openai, gemini)
+        mapping = {
+            "OpenAI": _Answering("OpenAI"),
+            "Gemini": _Answering("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert "OpenRouter" not in [c.name for c in router.chain()]
+        assert response.provider == "OpenAI"
+        assert response.fell_back_from is None
+        assert mapping["Gemini"].attempts == 0
+
+    def test_missing_openai_key_attempts_gemini(self):
+        router = self._router(openrouter, gemini)
+        mapping = {
+            "OpenRouter": self._fail("OpenRouter"),
+            "Gemini": _Answering("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert "OpenAI" not in [c.name for c in router.chain()]
+        assert response.provider == "Gemini"
+        assert response.fell_back_from == "OpenRouter"
+
+    def test_all_live_keys_missing_uses_offline(self):
+        router = self._router()
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert [c.name for c in router.chain()] == ["Offline"]
+        assert response.provider == "Offline"
+
+    def test_anthropic_is_never_selected_even_with_a_key(self):
+        from app.services.ai.providers import mock
+
+        router = ProviderRouter(
+            configs=_configured(claude, openrouter, openai, gemini) + [mock.DEFAULTS],
+        )
+        assert [c.name for c in router.chain()] == [
+            "OpenRouter", "OpenAI", "Gemini", "Offline",
+        ]
+        mapping = {
+            "OpenRouter": self._fail("OpenRouter"),
+            "OpenAI": self._fail("OpenAI"),
+            "Gemini": self._fail("Gemini"),
+            "Claude": _Answering("Claude"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert response.provider == "Offline"
+        assert mapping["Claude"].attempts == 0
+        assert "Claude" not in response.providers_attempted
+
+    def test_openrouter_timeout_falls_to_openai(self, monkeypatch):
+        import app.services.ai.providers.router as router_module
+
+        async def instant(_seconds):
+            return None
+
+        monkeypatch.setattr(router_module.asyncio, "sleep", instant)
+        router = self._router(openrouter, openai, gemini)
+        mapping = {
+            "OpenRouter": self._fail("OpenRouter", timeout=True),
+            "OpenAI": _Answering("OpenAI"),
+            "Gemini": _Answering("Gemini"),
+            "Offline": _Answering("Offline"),
+        }
+        router.build = lambda c: mapping[c.name]
+        response = asyncio.run(router.complete(_request(), use_cache=False))
+        assert response.provider == "OpenAI"
+        assert response.fell_back_from == "OpenRouter"
+        assert mapping["OpenRouter"].attempts == MAX_ATTEMPTS

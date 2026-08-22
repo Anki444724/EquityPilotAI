@@ -123,6 +123,7 @@ class AnalysisResponse(BaseModel):
     latency_ms: float = 0.0
     cached: bool = False
     fell_back_from: str | None = None
+    providers_attempted: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     #: Never optional in practice — populated for every response so a client
     #: can always state how good the underlying data is.

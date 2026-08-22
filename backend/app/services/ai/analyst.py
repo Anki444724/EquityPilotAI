@@ -60,6 +60,7 @@ class AnalystResult:
     latency_ms: float = 0.0
     cached: bool = False
     fell_back_from: str | None = None
+    providers_attempted: tuple[str, ...] = ()
     warnings: list[str] = field(default_factory=list)
 
     #: Language metadata, populated by the Language Adapter. `None` means the
@@ -476,6 +477,7 @@ class ResearchAnalyst:
             completion_tokens=response.usage.completion_tokens,
             cost_usd=response.cost_usd, latency_ms=elapsed_ms,
             cached=response.cached, fell_back_from=response.fell_back_from,
+            providers_attempted=response.providers_attempted,
             warnings=warnings,
             language=language_block,
         )

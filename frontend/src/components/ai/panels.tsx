@@ -287,6 +287,9 @@ export function RunMeta({ result }: { result: AIAnalysisResponse }) {
       {result.fell_back_from && (
         <Badge variant="warn">fell back from {result.fell_back_from}</Badge>
       )}
+      {result.providers_attempted && result.providers_attempted.length > 1 && (
+        <span>tried {result.providers_attempted.join(" → ")}</span>
+      )}
     </div>
   );
 }

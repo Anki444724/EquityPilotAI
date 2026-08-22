@@ -157,7 +157,7 @@ export default function AIPage({ params }: { params: Promise<{ id: string }> }) 
               <p className="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">
                 Output is composed strictly from the platform&apos;s own cited figures, so
                 grounding, citations and guardrails behave exactly as they will in
-                production. Set an OpenRouter, OpenAI, Claude or Gemini key and the router
+                production. Set an OpenRouter, OpenAI or Gemini key and the router
                 will prefer it automatically — no code changes.
               </p>
             </div>

@@ -26,31 +26,21 @@ from app.domain.ai.types import (
     CompletionRequest, CompletionResponse, NoProviderConfigured, ProviderError,
     RateLimitError, TokenUsage,
 )
-from app.services.ai.providers import claude, gemini, mock, openai, openrouter
+from app.services.ai.providers import gemini, mock, openai, openrouter
 from app.services.ai.providers.base import LLMProvider, ProviderConfig
 from app.services.ai.providers.shapes import SHAPE_ADAPTERS
 
-#: Vendor modules supplying default registry rows.
-PROVIDER_MODULES = (openrouter, openai, claude, gemini)
+#: Live vendors in the *active* fallback chain. Claude/Anthropic is
+#: deliberately omitted — it remains importable for tests and the registry
+#: listing but is never selected.
+PROVIDER_MODULES = (openrouter, openai, gemini)
 
-#: Declared fallback order, most preferred first.
-#:
-#: An ordering that matters commercially should not be a side effect of an
-#: import tuple, which is what it was before this constant existed.
-#:
-#: **Phase 1 reversal — OpenRouter now leads, Gemini follows.** The earlier
-#: order put Gemini first, and in practice that meant the platform served
-#: template prose: the Gemini free tier's daily generation quota is spent
-#: within a handful of reports, every subsequent call returns 429 with a
-#: QuotaFailure detail, and the chain fell through to the offline provider.
-#: A provider that answers reliably belongs ahead of one that answers for the
-#: first few requests of the day. Gemini is retained immediately behind it, so
-#: an OpenRouter outage still reaches a live model before the template.
-#:
-#: A provider absent from this list still works — it sorts after everything
-#: named here — so adding a vendor module does not require editing the order
-#: unless it needs a specific position.
-FALLBACK_ORDER: tuple[str, ...] = ("OpenRouter", "OpenAI", "Gemini", "Claude")
+#: Strict production order. Offline is appended separately and is never
+#: placed ahead of a configured live provider.
+FALLBACK_ORDER: tuple[str, ...] = ("OpenRouter", "OpenAI", "Gemini")
+
+#: Never selected, even if ANTHROPIC_API_KEY is set.
+EXCLUDED_FROM_CHAIN: frozenset[str] = frozenset({"Claude"})
 
 MAX_ATTEMPTS = 3
 BASE_BACKOFF_SECONDS = 0.5
@@ -205,18 +195,23 @@ class ProviderRouter:
         """Registry rows from the vendor modules, keys injected from settings."""
         from app.core.config import settings
 
+        def _present(value: object) -> str | None:
+            text = (value or "").strip() if isinstance(value, str) else None
+            return text or None
+
         keys = {
-            "OpenRouter": getattr(settings, "OPENROUTER_API_KEY", None),
-            "OpenAI": getattr(settings, "OPENAI_API_KEY", None),
-            "Claude": getattr(settings, "ANTHROPIC_API_KEY", None),
-            "Gemini": getattr(settings, "GEMINI_API_KEY", None),
+            "OpenRouter": _present(getattr(settings, "OPENROUTER_API_KEY", None)),
+            "OpenAI": _present(getattr(settings, "OPENAI_API_KEY", None)),
+            "Gemini": _present(getattr(settings, "GEMINI_API_KEY", None)),
         }
+        log = __import__("structlog").get_logger(__name__)
+        log.info(
+            "ai provider keys loaded",
+            openrouter=bool(keys["OpenRouter"]),
+            openai=bool(keys["OpenAI"]),
+            gemini=bool(keys["Gemini"]),
+        )
         out: list[ProviderConfig] = []
-        # The offline provider is appended last so any live provider outranks
-        # it; it exists so the layer degrades to grounded output rather than
-        # to an error when no key is present.
-        if settings.AI_MOCK_MODE:
-            out.append(mock.DEFAULTS)
         for module in PROVIDER_MODULES:
             base = module.DEFAULTS
             # A vendor module may declare deployment-supplied fields (model,
@@ -229,6 +224,10 @@ class ProviderRouter:
             out.append(replace(
                 base, api_key=keys.get(base.name), **overrides,
             ))
+        # Offline is always last-resort, even when AI_MOCK_MODE is off, so a
+        # total live-provider failure still returns grounded template prose
+        # instead of a 502. It is never selected while a live key remains.
+        out.append(mock.DEFAULTS)
         return out
 
     def build(self, config: ProviderConfig) -> LLMProvider:
@@ -243,19 +242,23 @@ class ProviderRouter:
         return adapter(config)
 
     def chain(self, preferred: str | None = None) -> list[ProviderConfig]:
-        """Configured providers in fallback order, preferred first.
+        """Configured live providers in FALLBACK_ORDER, Offline last.
 
-        Three sorts, applied least significant first, because Python's sort is
-        stable and this reads far better than one compound key:
-
-        1. `FALLBACK_ORDER` — the declared preference, Gemini then OpenRouter.
-        2. offline last — a live provider always outranks the mock, so the
-           platform never silently serves template output when a real model
-           was available.
-        3. explicit preference — a caller naming a provider gets it first.
+        Claude/Anthropic is never selected, even when a key is present.
+        OpenRouter stays first whenever it is configured — neither
+        ``preferred`` nor ``AI_PREFERRED_PROVIDER`` can skip a working
+        OpenRouter key. Preference only reorders the remaining live
+        providers when OpenRouter is absent.
         """
-        wanted = (preferred or self.preferred or "").lower()
-        usable = [c for c in self.configs if c.configured]
+        wanted = (preferred or self.preferred or "").strip().lower()
+        usable = [
+            c for c in self.configs
+            if c.configured
+            and c.name not in EXCLUDED_FROM_CHAIN
+            and c.payload_shape != "anthropic"
+        ]
+        live = [c for c in usable if c.payload_shape != "offline"]
+        offline = [c for c in usable if c.payload_shape == "offline"]
 
         def rank(config: ProviderConfig) -> int:
             try:
@@ -263,15 +266,20 @@ class ProviderRouter:
             except ValueError:
                 return len(FALLBACK_ORDER)
 
-        usable.sort(key=rank)
-        usable.sort(key=lambda c: 1 if c.payload_shape == "offline" else 0)
-        if wanted:
-            usable.sort(key=lambda c: 0 if c.name.lower() == wanted else 1)
-        return usable
+        live.sort(key=rank)
+        openrouter_ready = any(c.name == "OpenRouter" for c in live)
+        if wanted and not openrouter_ready:
+            live.sort(key=lambda c: 0 if c.name.lower() == wanted else 1)
+        return live + offline
 
     @property
     def available(self) -> list[str]:
-        return [c.name for c in self.configs if c.configured]
+        return [
+            c.name for c in self.configs
+            if c.configured
+            and c.name not in EXCLUDED_FROM_CHAIN
+            and c.payload_shape != "anthropic"
+        ]
 
     # -------------------------------------------------------------- calling
     async def complete(
@@ -285,13 +293,15 @@ class ProviderRouter:
         if not chain:
             raise NoProviderConfigured(
                 "No AI provider is configured. Set an API key for OpenRouter, "
-                "OpenAI, Claude or Gemini to enable the AI layer."
+                "OpenAI or Gemini to enable the AI layer."
             )
 
         first_choice = chain[0].name
         last_error: ProviderError | None = None
+        attempted: list[str] = []
 
         for config in chain:
+            attempted.append(config.name)
             cache_key = self.cache.key(request, config.name)
             if use_cache:
                 hit = self.cache.get(cache_key)
@@ -300,6 +310,8 @@ class ProviderRouter:
                         content=hit.content, provider=hit.provider, model=hit.model,
                         usage=hit.usage, latency_ms=0.0, cost_usd=0.0,
                         finish_reason=hit.finish_reason, cached=True,
+                        fell_back_from=hit.fell_back_from,
+                        providers_attempted=tuple(attempted),
                     )
                     self.ledger.record(cached)
                     return cached
@@ -312,9 +324,6 @@ class ProviderRouter:
                 except RateLimitError as exc:
                     last_error = exc
                     self.ledger.failures += 1
-                    # An exhausted quota will not clear within a request, so
-                    # fall through to the next provider now rather than
-                    # sleeping twice to learn the same thing.
                     ceiling = (
                         QUOTA_EXHAUSTED_ATTEMPTS
                         if getattr(exc, "quota_exhausted", False)
@@ -329,12 +338,18 @@ class ProviderRouter:
                     self.ledger.failures += 1
                     if not exc.retryable or attempt == MAX_ATTEMPTS:
                         break
-                    # exponential backoff with jitter, so parallel callers
-                    # do not retry in lockstep
                     delay = BASE_BACKOFF_SECONDS * (2 ** (attempt - 1))
                     await asyncio.sleep(delay + random.uniform(0, 0.25))
                     continue
+                except Exception as exc:  # noqa: BLE001 — still try the next live provider
+                    last_error = ProviderError(
+                        f"{config.name} unexpected error: {type(exc).__name__}: {exc}",
+                        provider=config.name, retryable=False,
+                    )
+                    self.ledger.failures += 1
+                    break
 
+                trail = tuple(attempted)
                 if config.name != first_choice:
                     response = CompletionResponse(
                         content=response.content, provider=response.provider,
@@ -342,6 +357,15 @@ class ProviderRouter:
                         latency_ms=response.latency_ms, cost_usd=response.cost_usd,
                         finish_reason=response.finish_reason,
                         fell_back_from=first_choice,
+                        providers_attempted=trail,
+                    )
+                else:
+                    response = CompletionResponse(
+                        content=response.content, provider=response.provider,
+                        model=response.model, usage=response.usage,
+                        latency_ms=response.latency_ms, cost_usd=response.cost_usd,
+                        finish_reason=response.finish_reason,
+                        providers_attempted=trail,
                     )
                 if use_cache:
                     self.cache.put(cache_key, response)

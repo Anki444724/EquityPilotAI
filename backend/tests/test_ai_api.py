@@ -28,14 +28,15 @@ class TestCatalogue:
         for cap in client.get("/api/v1/ai/capabilities").json()["capabilities"]:
             assert cap["evidence_kinds"], f"{cap['key']} declares no evidence"
 
-    def test_all_four_vendors_in_the_registry(self):
+    def test_live_vendors_in_the_registry(self):
         names = {p["name"] for p in client.get("/api/v1/ai/providers").json()["providers"]}
-        assert {"OpenRouter", "OpenAI", "Claude", "Gemini"} <= names
+        assert {"OpenRouter", "OpenAI", "Gemini", "Offline"} <= names
+        assert "Claude" not in names
 
-    def test_three_payload_shapes_represented(self):
+    def test_live_payload_shapes_represented(self):
         shapes = {p["payload_shape"]
                   for p in client.get("/api/v1/ai/providers").json()["providers"]}
-        assert {"openai", "anthropic", "gemini"} <= shapes
+        assert {"openai", "gemini", "offline"} <= shapes
 
     def test_configuration_status_is_reported_honestly(self):
         """Each provider reports whether it holds a key.

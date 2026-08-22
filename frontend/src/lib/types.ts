@@ -636,7 +636,8 @@ export interface AIAnalysisResponse {
   guardrails: GuardrailOut | null;
   prompt_tokens: number; completion_tokens: number; total_tokens: number;
   cost_usd: number; latency_ms: number; cached: boolean;
-  fell_back_from: string | null; warnings: string[];
+  fell_back_from: string | null; providers_attempted?: string[];
+  warnings: string[];
   /** Present only when the response went through the Language Adapter,
    *  i.e. when a non-English language was requested or detected. Absent on
    *  the English path, which keeps existing payloads unchanged. */

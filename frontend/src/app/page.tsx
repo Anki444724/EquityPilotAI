@@ -6,7 +6,7 @@ const FEATURES = [
   { icon: BarChart3, title: "Historical Statements", body: "Income statement, balance sheet and cash flow with 45+ ratios, working capital, debt and capex analysis." },
   { icon: Calculator, title: "DCF & Relative Valuation", body: "FCFF, FCFE, WACC, sensitivity grids and bull/base/bear scenarios with a full EV-to-equity bridge." },
   { icon: ShieldCheck, title: "Institutional Scoring", body: "Eleven weighted pillars and a AAA–C rating, driving an automatic buy/hold/sell recommendation." },
-  { icon: Brain, title: "AI Research Layer", body: "Provider-agnostic analysis across OpenRouter, OpenAI, Claude and Gemini — 21 research sections." },
+  { icon: Brain, title: "AI Research Layer", body: "Provider-agnostic analysis across OpenRouter, OpenAI and Gemini — 21 research sections." },
   { icon: FileText, title: "Report Generation", body: "Investment-committee memos exported to PDF, Excel and Word." },
 ];
 

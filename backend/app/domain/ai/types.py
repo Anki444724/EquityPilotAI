@@ -160,6 +160,10 @@ class CompletionResponse:
     #: Set when a fallback provider served the request.
     fell_back_from: str | None = None
     cached: bool = False
+    #: Providers actually invoked for this request, in order. Unconfigured
+    #: providers (missing key) never enter the chain. Offline appears only
+    #: when it served — after every configured live provider failed.
+    providers_attempted: tuple[str, ...] = ()
 
 
 class ProviderError(RuntimeError):

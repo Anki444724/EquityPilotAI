@@ -200,6 +200,7 @@ def _result_out(analysis: AnalysisService, result: AnalystResult) -> AnalysisRes
         total_tokens=result.total_tokens, cost_usd=result.cost_usd,
         latency_ms=result.latency_ms, cached=result.cached,
         fell_back_from=result.fell_back_from,
+        providers_attempted=list(result.providers_attempted),
         warnings=(result.warnings + [warning]) if warning else result.warnings,
         data_quality=quality,
         language=_language_out(result),
