@@ -62,6 +62,9 @@ services:
       ENCRYPTION_KEY: local-development-envelope-key-not-for-production
       NATIVE_AUTH: "true"
       LOG_FORMAT: json
+      # India-only market data. The NSE live tier needs no key; disable it
+      # here only if this deployment cannot reach www.nseindia.com.
+      NSE_MARKET_ENABLED: "true"
       CORS_ORIGINS: '["https://equitypilot.in","https://www.equitypilot.in"]'
       EMAIL_LINK_BASE: https://equitypilot.in
       OAUTH_REDIRECT_BASE: https://equitypilot.in

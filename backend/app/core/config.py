@@ -156,6 +156,16 @@ class Settings(BaseSettings):
     #: to the next tier rather than blocking them.
     FINNHUB_API_KEY: str | None = None
     FMP_API_KEY: str | None = None
+    #: NSE India (Live) is the primary market-data tier for Indian listings.
+    #: It reads the exchange's own public endpoint and needs no API key, but
+    #: it does reach out to www.nseindia.com. Set to false to disable it in a
+    #: network-restricted deployment; the router then falls through to
+    #: Finnhub/FMP/Yahoo and the internal database as before.
+    NSE_MARKET_ENABLED: bool = True
+    #: 'real' | 'mock'. 'real' keeps the production chain (NSE/Finnhub/FMP/
+    #: Yahoo) and is the default, so an unset variable cannot silently turn
+    #: production data synthetic.
+    DATA_PROVIDER: str = "real"
     #: Seconds a market snapshot is cached in-process. Protects FMP's
     #: 250-call daily free budget from a page rendering several tickers.
     MARKET_CACHE_TTL_SECONDS: int = 300

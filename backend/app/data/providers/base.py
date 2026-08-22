@@ -59,6 +59,17 @@ class SymbolNotFound(ProviderError):
     """
 
 
+class SymbolNotSupported(ProviderError):
+    """The symbol is not part of this platform's universe.
+
+    EquityPilotAI is India-only (NSE/BSE). A US or other foreign listing is
+    not a coverage gap that another provider could fill — it is explicitly
+    out of scope, so it is rejected loudly rather than being chased through
+    the provider chain and reported as "no provider served" (which a reader
+    could mistake for an outage).
+    """
+
+
 # ===========================================================================
 # Policy
 # ===========================================================================
@@ -91,6 +102,13 @@ class Quote:
     day_low: float | None = None
     previous_close: float | None = None
     volume: float | None = None
+    # ---- Phase 1 ---------------------------------------------------------
+    #: 52-week range and market state at fetch time. Optional because the
+    #: pre-existing providers do not report them; a None here means "not
+    #: offered by the tier that answered", never zero.
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+    market_status: str | None = None  # open | closed | weekend | unknown
 
 
 @dataclass(slots=True)
@@ -210,15 +228,34 @@ class BaseMarketProvider(ABC):
         self.policy = policy or RetryPolicy()
         self._last_call = 0.0
         self._consecutive_rate_limits = 0
+        #: Monotonic deadline while the provider is treated as unavailable
+        #: (Akamai/WAF 403, operator trip, …). Independent of the 429 counter
+        #: so a blocked endpoint is skipped immediately rather than only after
+        #: `circuit_threshold` slow failures.
+        self._cooldown_until = 0.0
 
     # -- health ----------------------------------------------------------
     @property
     def available(self) -> bool:
-        """False once the circuit has opened."""
+        """False once the circuit has opened or a cooldown is in force."""
+        if self._cooldown_until and time.monotonic() < self._cooldown_until:
+            return False
         return self._consecutive_rate_limits < self.policy.circuit_threshold
+
+    def mark_unavailable(self, seconds: float) -> None:
+        """Open a time-boxed circuit so the router skips this provider.
+
+        Used when the provider is blocked (HTTP 403 from NSE/Akamai) rather
+        than merely rate-limited: retrying the same origin just burns 15–20s
+        per request until the WAF cools off.
+        """
+        if seconds <= 0:
+            return
+        self._cooldown_until = time.monotonic() + seconds
 
     def reset_circuit(self) -> None:
         self._consecutive_rate_limits = 0
+        self._cooldown_until = 0.0
 
     # -- health telemetry -------------------------------------------------
     def record(self, *, ok: bool, ms: float) -> None:
@@ -257,6 +294,19 @@ class BaseMarketProvider(ABC):
     @abstractmethod
     def fetch(self, ticker: str, **kwargs) -> tuple[MarketSnapshot, dict[str, Any]]:
         """Return the normalised snapshot and the raw payloads behind it."""
+
+    # -- Phase 1: narrow fetches for the sync jobs -------------------------
+    # A quote refresh or a daily-bar backfill wants ONE slice, not the full
+    # snapshot (news, statements, earnings). Providers that support the narrow
+    # call override these; the defaults report "not offered" so the sync jobs
+    # can fall back to `fetch()` and record what happened.
+    def fetch_quote(self, ticker: str) -> Quote | None:
+        """Current quote only, or None when this provider does not serve it."""
+        return None
+
+    def fetch_history(self, ticker: str, days: int = 365) -> list[dict[str, Any]] | None:
+        """Daily bars as [{date, open, high, low, close, volume}], or None."""
+        return None
 
     # -- shared HTTP ------------------------------------------------------
     def _throttle(self) -> None:

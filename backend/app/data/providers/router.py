@@ -29,10 +29,11 @@ from app.data.providers.symbols import ResolvedSymbol, resolve
 from app.data.providers.base import (
     BaseMarketProvider, MarketSnapshot, ProviderAuthError, ProviderError,
     ProviderMetadata, ProviderNotConfigured, ProviderRateLimited,
-    SymbolNotFound,
+    SymbolNotFound, SymbolNotSupported,
 )
 from app.data.providers.finnhub import FinnhubProvider
 from app.data.providers.fmp import FMPProvider
+from app.data.providers.nse import NSEIndiaProvider
 from app.data.providers.yahoo import YahooProvider
 
 log = structlog.get_logger(__name__)
@@ -40,6 +41,53 @@ log = structlog.get_logger(__name__)
 SOURCE_INTERNAL = "Internal Financial Database"
 SOURCE_DOCUMENTS = "Uploaded Documents (RAG)"
 SOURCE_NONE = "Unavailable"
+
+
+def _primary_provider_name(resolved: ResolvedSymbol | None) -> str:
+    """The tier the platform treats as the primary for a listing's market.
+
+    Indian listings are served primarily by the exchange's own NSE endpoint
+    (the platform is India-only); every other market was served primarily by
+    Finnhub. Used for provenance fields like ``fell_back`` and confidence
+    scoring.
+    """
+    if resolved is not None and resolved.is_indian:
+        return NSEIndiaProvider.name
+    return FinnhubProvider.name
+
+
+# ===========================================================================
+# Provider selection — DATA_PROVIDER (Phase 1)
+# ===========================================================================
+def default_providers() -> list[BaseMarketProvider]:
+    """The external tier for the configured DATA_PROVIDER.
+
+    'mock' selects the deterministic MockMarketProvider *exclusively* — the
+    real providers are not even constructed, so mock mode can never consult,
+    let alone write, a real figure, and 'real' never constructs the mock.
+    The two chains are mutually exclusive by construction, which is the
+    guarantee behind "never mix mock data into production real-data records".
+    """
+    from app.core.config import settings
+
+    if settings.DATA_PROVIDER.lower() == "mock":
+        from app.data.providers.mock import MockMarketProvider
+        return [MockMarketProvider()]
+    return [NSEIndiaProvider(), FinnhubProvider(), FMPProvider(), YahooProvider()]
+
+
+def active_provider_name() -> str:
+    """Provenance label for rows written by the selected chain."""
+    from app.core.config import settings
+
+    if settings.DATA_PROVIDER.lower() == "mock":
+        return "mock"
+    return "real"
+
+
+def primary_market_provider() -> BaseMarketProvider:
+    """The head of the active chain — the live-quote refresher's fetcher."""
+    return default_providers()[0]
 
 
 # ===========================================================================
@@ -175,7 +223,7 @@ class MarketDataResult:
 
     @property
     def fell_back(self) -> bool:
-        return self.source != FinnhubProvider.name
+        return self.source != _primary_provider_name(self.resolved)
 
     def as_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
         from app.data.providers.currency import format_money
@@ -215,8 +263,7 @@ class MarketDataRouter:
         ttl_cache: TTLCache | None = None,
     ) -> None:
         self.providers = sorted(
-            providers if providers is not None
-            else [FinnhubProvider(), FMPProvider(), YahooProvider()],
+            providers if providers is not None else default_providers(),
             key=lambda p: p.priority,
         )
         self.cache = ttl_cache or _CACHE
@@ -245,6 +292,15 @@ class MarketDataRouter:
         include_earnings: bool = True,
     ) -> MarketDataResult:
         resolved = resolve(ticker)
+        if not resolved.is_indian:
+            # EquityPilotAI is India-only. A US (or other foreign) listing is
+            # not a coverage gap another provider could fill — it is out of
+            # scope, so it is rejected loudly rather than sent down the whole
+            # provider chain only to be reported as "no provider served".
+            raise SymbolNotSupported(
+                f"{resolved.display} is not supported: EquityPilotAI serves "
+                f"only NSE/BSE (Indian) symbols."
+            )
         key = (f"{resolved.canonical}|{include_news}|{include_history}"
                f"|{include_earnings}")
         if use_cache:
@@ -307,11 +363,17 @@ class MarketDataRouter:
                     attempted=[a["provider"] for a in attempted])
         empty = MarketSnapshot(ticker=resolved.canonical, source=SOURCE_NONE)
         self._stamp(empty, resolved, SOURCE_NONE)
-        return MarketDataResult(
+        result = MarketDataResult(
             snapshot=empty, source=SOURCE_NONE, attempted=attempted,
             latency_ms=(time.perf_counter() - started) * 1000,
             resolved=resolved,
         )
+        # Cache the honest miss so a blocked NSE + unconfigured fallbacks
+        # does not re-burn 20s on every refresh. This is not a fake price:
+        # source stays Unavailable and quote.price stays None.
+        if use_cache:
+            self.cache.put(key, result)
+        return result
 
     def _try(self, provider, resolved, attempted: list, **kwargs):
         """One external provider. Returns None when the router should move on."""
@@ -327,8 +389,13 @@ class MarketDataRouter:
         call_started = time.perf_counter()
         try:
             snapshot, raw = provider.fetch(resolved.canonical, **kwargs)
-            if not snapshot.has_quote and snapshot.filled_sections == 0:
-                raise ProviderError("returned nothing usable")
+            if not snapshot.has_quote:
+                # A market snapshot without a usable price is not a result. A
+                # provider that returns a name or a news item but no price must
+                # not be reported as the source of a price=None "success".
+                raise ProviderError(
+                    "returned no usable price"
+                )
             provider.record(ok=True, ms=(time.perf_counter() - call_started) * 1000)
             attempted.append({"provider": provider.name, "outcome": "served"})
             return snapshot, raw
@@ -360,11 +427,10 @@ class MarketDataRouter:
         # answering from a fallback rather than the primary. Reported rather
         # than hidden so a thin answer is visibly thin.
         completeness = min(snapshot.filled_sections / 6.0, 1.0)
+        primary = _primary_provider_name(resolved)
         tier_weight = {
             SOURCE_INTERNAL: 0.75, SOURCE_DOCUMENTS: 0.5, SOURCE_NONE: 0.0,
-        }.get(source, 1.0 if source == (
-            "Finnhub" if resolved.is_us else "Financial Modeling Prep"
-        ) else 0.85)
+        }.get(source, 1.0 if source == primary else 0.85)
 
         snapshot.meta = ProviderMetadata(
             provider=source,
@@ -414,7 +480,9 @@ class MarketDataRouter:
             snapshot.unavailable.append(
                 "figures are as of the last ingestion, not live"
             )
-            return snapshot if snapshot.has_quote or company.name else None
+            # A stored row with no price is not market data: serving it would
+            # turn a missing quote into a misleading price=None "success".
+            return snapshot if snapshot.has_quote else None
         except Exception as exc:  # noqa: BLE001
             log.warning("internal database tier failed", error=str(exc)[:160])
             return None
@@ -448,7 +516,9 @@ class MarketDataRouter:
             snapshot.unavailable.append(
                 "extracted from uploaded documents; no live quote available"
             )
-            return snapshot
+            # Same rule as the internal tier: without a usable price this is
+            # not a market-data answer, so it must not be served as one.
+            return snapshot if snapshot.has_quote else None
         except Exception as exc:  # noqa: BLE001
             log.warning("document tier failed", error=str(exc)[:160])
             return None
