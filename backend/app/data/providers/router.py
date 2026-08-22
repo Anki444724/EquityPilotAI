@@ -268,6 +268,44 @@ class MarketDataRouter:
         )
         self.cache = ttl_cache or _CACHE
 
+    def _indian_live_providers(self) -> list[BaseMarketProvider]:
+        """Reliable Indian live-quote sources (NSE). Empty in stub-only tests."""
+        return [p for p in self.providers if getattr(p, "live_quote", False)]
+
+    def _indian_live_available(self) -> bool:
+        return any(p.configured() and p.available for p in self._indian_live_providers())
+
+    @staticmethod
+    def _is_yahoo(provider: BaseMarketProvider) -> bool:
+        return (
+            isinstance(provider, YahooProvider)
+            or provider.name == YahooProvider.name
+        )
+
+    def _skip_slow_live_fallback(
+        self, provider: BaseMarketProvider, **kwargs,
+    ) -> str | None:
+        """Reason to skip a provider that would block a live quote, or None.
+
+        Yahoo (and other non-NSE live sources) must not be called for a live
+        price when NSE is in cooldown: ``yahoo_source._fetch_quote`` waits
+        20–30s and is what made RELIANCE take ~22s after a 403. Historical
+        fetches still go through ``YahooProvider.fetch_history``.
+        """
+        if getattr(provider, "live_quote", False):
+            return None
+        if not self._indian_live_providers():
+            # Stub-only routers used by unit tests keep the generic fallback
+            # chain; there is no NSE cooldown to honour.
+            return None
+        live_quote_request = not kwargs.get("include_history", True)
+        nse_down = not self._indian_live_available()
+        if nse_down:
+            return "NSE unavailable; not used for live quotes"
+        if live_quote_request and self._is_yahoo(provider):
+            return "not used for live quotes"
+        return None
+
     def _chain_for(self, resolved) -> list[str]:
         """Provider order for an explicit market-data request.
 
@@ -384,6 +422,11 @@ class MarketDataRouter:
         if not provider.available:
             attempted.append({"provider": provider.name, "outcome": "skipped",
                               "reason": "circuit open"})
+            return None
+        skip = self._skip_slow_live_fallback(provider, **kwargs)
+        if skip is not None:
+            attempted.append({"provider": provider.name, "outcome": "skipped",
+                              "reason": skip})
             return None
 
         call_started = time.perf_counter()

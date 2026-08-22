@@ -695,9 +695,9 @@ class TestNSEHttp403Circuit:
         assert result.attempted[0]["provider"] == "NSE India (Live)"
         assert result.attempted[0]["outcome"] == "failed"
 
-    def test_router_skips_nse_after_403_so_later_requests_are_fast(self):
+    def test_router_skips_nse_and_yahoo_after_403(self):
         nse_calls = {"n": 0}
-        fallback_calls = {"n": 0}
+        yahoo_calls = {"n": 0}
 
         class CountingNSE(NSEIndiaProvider):
             def fetch(self, ticker, **kwargs):
@@ -706,35 +706,97 @@ class TestNSEHttp403Circuit:
                 self.mark_unavailable(self.blocked_cooldown_seconds)
                 raise ProviderError(f"{self.name}: HTTP 403 (provider unavailable)")
 
-        class SlowFallback(BaseMarketProvider):
-            name, priority = "Yahoo Finance (Fallback)", 20
-            def configured(self): return True
+        class CountingYahoo(YahooProvider):
             def fetch(self, ticker, **kwargs):
-                fallback_calls["n"] += 1
+                yahoo_calls["n"] += 1
                 raise ProviderError("no usable quote")
 
+            def fetch_quote(self, ticker):
+                yahoo_calls["n"] += 1
+                return None
+
         nse = CountingNSE()
+        yahoo = CountingYahoo()
         router = MarketDataRouter(
-            providers=[nse, SlowFallback()], ttl_cache=TTLCache(),
+            providers=[nse, yahoo], ttl_cache=TTLCache(),
         )
-        first = router.fetch("RELIANCE", use_cache=False)
+        first = router.fetch(
+            "RELIANCE", use_cache=False, include_news=False,
+            include_history=False, include_earnings=False,
+        )
         assert first.source == SOURCE_NONE
         assert first.snapshot.quote.price is None
         assert nse_calls["n"] == 1
-        assert fallback_calls["n"] == 1
+        # Same request: NSE just opened the cooldown, so Yahoo is not called.
+        assert yahoo_calls["n"] == 0
+        assert any(
+            a["provider"] == "Yahoo Finance (Fallback)"
+            and a["outcome"] == "skipped"
+            and "live quotes" in a["reason"]
+            for a in first.attempted
+        )
 
         started = __import__("time").perf_counter()
-        second = router.fetch("RELIANCE", use_cache=False)
+        second = router.fetch(
+            "RELIANCE", use_cache=False, include_news=False,
+            include_history=False, include_earnings=False,
+        )
         elapsed_ms = (__import__("time").perf_counter() - started) * 1000
 
         assert nse_calls["n"] == 1                      # circuit held
+        assert yahoo_calls["n"] == 0                    # no live Yahoo I/O
         assert second.attempted[0]["outcome"] == "skipped"
         assert second.attempted[0]["reason"] == "circuit open"
         assert second.source == SOURCE_NONE
         assert second.snapshot.quote.price is None
-        assert elapsed_ms < 250
-        # Existing configured fallbacks may still run; they are not NSE.
-        assert fallback_calls["n"] == 2
+        assert elapsed_ms < 250                         # well under 1s
+
+    def test_yahoo_live_quote_network_is_not_used_while_nse_is_down(self, monkeypatch):
+        """The yahoo_source HTTP client must not run during NSE cooldown."""
+        network = {"n": 0}
+
+        def _banned(*_a, **_k):
+            network["n"] += 1
+            raise AssertionError("Yahoo live-quote HTTP must not run")
+
+        monkeypatch.setattr(
+            "app.data.yahoo_source._fetch_quote", _banned,
+        )
+        monkeypatch.setattr(
+            "app.data.yahoo_source.fetch_price_history", _banned,
+        )
+        monkeypatch.setattr(
+            "app.data.yahoo_source._http_json", _banned,
+        )
+
+        nse = NSEIndiaProvider()
+        nse.mark_unavailable(300)
+        router = MarketDataRouter(
+            providers=[nse, YahooProvider()], ttl_cache=TTLCache(),
+        )
+        started = __import__("time").perf_counter()
+        result = router.fetch(
+            "RELIANCE", use_cache=False, include_news=False,
+            include_history=False, include_earnings=False,
+        )
+        elapsed_ms = (__import__("time").perf_counter() - started) * 1000
+
+        assert network["n"] == 0
+        assert result.source == SOURCE_NONE
+        assert result.snapshot.quote.price is None
+        assert elapsed_ms < 1000
+        yahoo_attempt = next(
+            a for a in result.attempted
+            if a["provider"] == "Yahoo Finance (Fallback)"
+        )
+        assert yahoo_attempt["outcome"] == "skipped"
+        assert "live quotes" in yahoo_attempt["reason"]
+
+    def test_yahoo_history_entry_point_is_still_available(self):
+        """Yahoo is kept for historical/company data, just not live quotes."""
+        assert YahooProvider.fetch_quote is not BaseMarketProvider.fetch_quote
+        assert YahooProvider().fetch_quote("RELIANCE") is None
+        assert callable(YahooProvider.fetch_history)
 
     def test_cooldown_expires_and_nse_is_tried_again(self):
         provider = NSEIndiaProvider()

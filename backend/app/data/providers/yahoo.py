@@ -27,6 +27,10 @@ log = structlog.get_logger(__name__)
 class YahooProvider(BaseMarketProvider):
     name = "Yahoo Finance (Fallback)"
     priority = 20
+    #: Not a live Indian quote source. The router must not call ``fetch()``
+    #: for a live price: ``yahoo_source._fetch_quote`` waits up to 20–30s
+    #: and is what made RELIANCE take ~22s after NSE returned 403.
+    live_quote = False
 
     def __init__(self, policy: RetryPolicy | None = None) -> None:
         # Yahoo rate-limits a single IP aggressively; the underlying client
@@ -42,6 +46,34 @@ class YahooProvider(BaseMarketProvider):
     @staticmethod
     def to_symbol(ticker: str) -> str:
         return normalise_symbol(ticker)
+
+    def fetch_quote(self, ticker: str) -> Quote | None:
+        """Yahoo is not used for live Indian quotes. History still works."""
+        return None
+
+    def fetch_history(self, ticker: str, days: int = 365) -> list[dict[str, Any]] | None:
+        """Daily bars via the existing yahoo_source client — not a live quote."""
+        from app.data import yahoo_source
+
+        symbol = self.to_symbol(ticker)
+        try:
+            history = yahoo_source.fetch_price_history(
+                symbol.split(".")[0], days=days,
+            )
+        except Exception:  # noqa: BLE001 - history is best-effort
+            return None
+        rows = []
+        for row in list(history or []):
+            close = to_float(
+                getattr(row, "close", None)
+                if not isinstance(row, dict) else row.get("close")
+            )
+            rows.append({
+                "date": getattr(row, "date", None)
+                if not isinstance(row, dict) else row.get("date"),
+                "close": close,
+            })
+        return rows or None
 
     def fetch(self, ticker: str, **kwargs) -> tuple[MarketSnapshot, dict[str, Any]]:
         from app.data import yahoo_source

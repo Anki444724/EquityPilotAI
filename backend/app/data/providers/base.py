@@ -223,6 +223,10 @@ class BaseMarketProvider(ABC):
     name: str = "abstract"
     #: Lower runs first.
     priority: int = 100
+    #: True only for a reliable Indian live-quote source (NSE). Yahoo, Finnhub
+    #: and FMP are not: using them as a live-price fallback after NSE is
+    #: blocked burns 15–20s on timeout and is not a real Indian live feed.
+    live_quote: bool = False
 
     def __init__(self, policy: RetryPolicy | None = None) -> None:
         self.policy = policy or RetryPolicy()

@@ -63,6 +63,7 @@ class NSEIndiaProvider(BaseMarketProvider):
 
     name = "NSE India (Live)"
     priority = 5
+    live_quote = True
 
     #: The quote endpoint carries the profile and quote; the platform's own
     #: stored financials cover the rest, so this provider does not try to

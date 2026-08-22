@@ -3,7 +3,7 @@
 Company, dashboard, search, watchlist and portfolio requests never call an
 external market provider. They read a short-lived shared quote cache and fall
 back to the company's stored price immediately. Cache misses are queued for a
-single bounded daemon worker, which refreshes Yahoo quotes sequentially.
+single bounded daemon worker, which refreshes NSE live quotes sequentially.
 
 The cache is the platform cache (Redis when configured, otherwise process
 memory), so list, detail and dashboard pages use the same snapshot and TTL.
