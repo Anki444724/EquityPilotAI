@@ -19,9 +19,8 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session
 
-from app.data.providers.router import SOURCE_INTERNAL
+from app.data.providers.router import SOURCE_INTERNAL, get_router
 from app.data.providers.symbols import resolve
-from app.data.providers.yahoo import YahooProvider
 from app.models.company import Company
 from app.schemas.company import LiveMarket
 from app.services.platform.cache import Namespace, cache
@@ -80,21 +79,27 @@ class _QuoteRefresher:
                 self._thread.start()
 
     def _run(self) -> None:
-        provider = YahooProvider()
+        # Live Indian quotes are routed through the same provider chain as the
+        # market API: NSE India (Live) first, then Finnhub/FMP/Yahoo, then the
+        # platform's own stored price. That keeps one source of truth for which
+        # provider answers an Indian symbol and makes the "reliable live-price
+        # source" choice live in one place rather than a second hardcoded one.
+        router = get_router()
         while True:
             symbol = self._queue.get()
             try:
-                snapshot, _ = provider.fetch(
-                    symbol, include_news=False, include_history=False,
-                    include_earnings=False,
+                result = router.fetch(
+                    symbol, use_cache=True, include_news=False,
+                    include_history=False, include_earnings=False,
                 )
+                snapshot = result.snapshot
                 quote = snapshot.quote
                 if quote is None or quote.price is None or quote.price <= 0:
-                    raise ValueError("Yahoo returned no usable price")
+                    raise ValueError("no usable price from any provider")
                 market = LiveMarket(
                     live_price=quote.price,
                     current_price=None,
-                    price_source=provider.name,
+                    price_source=result.source,
                     last_updated=datetime.now(timezone.utc).isoformat(),
                     market_status=market_status(),
                     change=quote.change,
@@ -146,9 +151,10 @@ class LiveMarketService:
     def bulk_quotes(self, companies: list[Company]) -> dict[str, LiveMarket]:
         """Return immediately from cache/stored data and queue stale misses.
 
-        There is intentionally no call to ``MarketDataRouter.fetch`` here: for
-        Indian listings that router may return the internal tier first, and an
+        There is intentionally no *request-thread* call to the router here: an
         external provider call on a cache miss would block the HTTP request.
+        Misses are queued for the bounded daemon worker, which runs the same
+        provider chain (NSE India first) off the request path.
         """
         out: dict[str, LiveMarket] = {}
         for company in companies:

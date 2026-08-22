@@ -14,6 +14,7 @@ from app.data.providers.base import (
 )
 from app.data.providers.finnhub import FinnhubProvider
 from app.data.providers.fmp import FMPProvider
+from app.data.providers.nse import NSEIndiaProvider
 from app.data.providers.router import (
     SOURCE_INTERNAL, SOURCE_NONE, MarketDataRouter, TTLCache,
 )
@@ -34,19 +35,26 @@ FMP_PROFILE = [{"symbol": "RELIANCE.NS", "companyName": "Reliance Industries Lim
 
 class TestProviderInterface:
     def test_every_provider_implements_the_contract(self):
-        for provider in (FinnhubProvider(), FMPProvider(), YahooProvider()):
+        for provider in (NSEIndiaProvider(), FinnhubProvider(), FMPProvider(),
+                         YahooProvider()):
             assert isinstance(provider, BaseMarketProvider)
             assert provider.name
             assert hasattr(provider, "fetch")
             assert isinstance(provider.configured(), bool)
 
-    def test_priority_order_is_finnhub_then_fmp_then_yahoo(self):
+    def test_priority_order_is_nse_then_finnhub_then_fmp_then_yahoo(self):
+        # The platform is India-only, so the exchange's own NSE live endpoint
+        # is the primary tier; the existing chain is preserved behind it.
         names = [p.name for p in MarketDataRouter().providers]
-        assert names == ["Finnhub", "Financial Modeling Prep",
+        assert names == ["NSE India (Live)", "Finnhub", "Financial Modeling Prep",
                          "Yahoo Finance (Fallback)"]
 
     def test_yahoo_needs_no_credentials(self):
         assert YahooProvider().configured() is True
+
+    def test_nse_live_needs_no_credentials(self):
+        # The exchange's own endpoint needs no API key.
+        assert NSEIndiaProvider().configured() is True
 
 
 class TestAbsentVersusZero:
@@ -175,7 +183,7 @@ class TestFallbackChain:
             self._stub("A", 1, snapshot=good),
             self._stub("B", 2, error=ProviderError("never reached")),
         ], ttl_cache=TTLCache())
-        assert router.fetch("X", use_cache=False).source == "A"
+        assert router.fetch("RELIANCE", use_cache=False).source == "A"
 
     def test_auth_failure_falls_through_to_the_next_provider(self):
         good = MarketSnapshot(ticker="X", source="B")
@@ -184,7 +192,7 @@ class TestFallbackChain:
             self._stub("A", 1, error=ProviderAuthError("rejected")),
             self._stub("B", 2, snapshot=good),
         ], ttl_cache=TTLCache())
-        result = router.fetch("X", use_cache=False)
+        result = router.fetch("RELIANCE", use_cache=False)
         assert result.source == "B"
         assert result.attempted[0]["outcome"] == "auth_failed"
 
@@ -195,7 +203,7 @@ class TestFallbackChain:
             self._stub("A", 1, error=ProviderRateLimited("429")),
             self._stub("B", 2, snapshot=good),
         ], ttl_cache=TTLCache())
-        result = router.fetch("X", use_cache=False)
+        result = router.fetch("RELIANCE", use_cache=False)
         assert result.attempted[0]["outcome"] == "rate_limited"
 
     def test_a_provider_returning_nothing_usable_is_skipped(self):
@@ -206,13 +214,13 @@ class TestFallbackChain:
             self._stub("A", 1, snapshot=empty),
             self._stub("B", 2, snapshot=good),
         ], ttl_cache=TTLCache())
-        assert router.fetch("X", use_cache=False).source == "B"
+        assert router.fetch("RELIANCE", use_cache=False).source == "B"
 
     def test_total_failure_is_reported_not_faked(self):
         router = MarketDataRouter(providers=[
             self._stub("A", 1, error=ProviderError("down")),
         ], ttl_cache=TTLCache())
-        result = router.fetch("X", use_cache=False)
+        result = router.fetch("RELIANCE", use_cache=False)
         assert result.source == SOURCE_NONE
         assert result.snapshot.quote.price is None
 
@@ -223,20 +231,22 @@ class TestFallbackChain:
             def fetch(self, ticker, **kwargs): raise ZeroDivisionError("bug")
 
         router = MarketDataRouter(providers=[Exploding()], ttl_cache=TTLCache())
-        result = router.fetch("X", use_cache=False)
+        result = router.fetch("RELIANCE", use_cache=False)
         assert result.attempted[0]["outcome"] == "error"
 
 
 class TestSourceReporting:
     def test_the_source_is_named_on_every_response(self):
-        snapshot = MarketSnapshot(ticker="X", source="Finnhub")
+        # For an Indian listing the primary tier is the NSE live endpoint, so
+        # a response served by it is not a fallback.
+        snapshot = MarketSnapshot(ticker="X", source="NSE India (Live)")
         snapshot.quote.price = 100.0
         router = MarketDataRouter(providers=[
-            TestFallbackChain._stub("Finnhub", 1, snapshot=snapshot),
+            TestFallbackChain._stub("NSE India (Live)", 1, snapshot=snapshot),
         ], ttl_cache=TTLCache())
-        payload = router.fetch("X", use_cache=False).as_dict()
-        assert payload["source"] == "Finnhub"
-        assert payload["source_label"] == "✓ Finnhub"
+        payload = router.fetch("RELIANCE", use_cache=False).as_dict()
+        assert payload["source"] == "NSE India (Live)"
+        assert payload["source_label"] == "✓ NSE India (Live)"
         assert payload["fell_back"] is False
         assert payload["providers_attempted"]
 
@@ -246,7 +256,7 @@ class TestSourceReporting:
         router = MarketDataRouter(providers=[
             TestFallbackChain._stub("A", 1, snapshot=snapshot),
         ], ttl_cache=TTLCache())
-        result = router.fetch("X", use_cache=False)
+        result = router.fetch("RELIANCE", use_cache=False)
         assert "raw" not in result.as_dict()
         assert "raw" in result.as_dict(include_raw=True)
 
@@ -258,8 +268,8 @@ class TestCaching:
         router = MarketDataRouter(providers=[
             TestFallbackChain._stub("A", 1, snapshot=snapshot),
         ], ttl_cache=TTLCache(ttl_seconds=60))
-        assert router.fetch("X").cached is False
-        assert router.fetch("X").cached is True
+        assert router.fetch("RELIANCE").cached is False
+        assert router.fetch("RELIANCE").cached is True
 
     def test_expiry_is_honoured(self):
         cache = TTLCache(ttl_seconds=-1)          # already expired
@@ -278,7 +288,9 @@ class TestCaching:
 
 
 class TestCredentialHygiene:
-    @pytest.mark.parametrize("module", ["finnhub", "fmp", "yahoo", "base", "router"])
+    @pytest.mark.parametrize(
+        "module", ["nse", "finnhub", "fmp", "yahoo", "base", "router"]
+    )
     def test_no_key_shaped_literal_in_any_provider(self, module):
         import importlib
         import pathlib
@@ -527,6 +539,146 @@ class TestMarketAwareRouting:
         assert chain[0] == "external"
 
 
+#: A realistic NSE `/api/quote-equity` payload.
+NSE_PAYLOAD = {
+    "symbol": "RELIANCE", "companyName": "Reliance Industries Limited",
+    "marketCap": 17_697_782_146_242, "industry": "Refining & Petrochemicals",
+    "priceInfo": {"lastPrice": 1307.8, "change": 14.9, "pctChange": 1.152,
+                  "open": 1288.0, "dayHigh": 1315.0, "dayLow": 1280.0,
+                  "previousClose": 1292.9, "totalTradedVolume": 8_622_452},
+}
+
+
+class TestNSEProvider:
+    """The India-only live tier: parsing and India-only coverage rules."""
+
+    def test_nse_suffix_is_stripped_for_the_exchange_api(self):
+        assert NSEIndiaProvider.to_symbol("RELIANCE.NS") == "RELIANCE"
+        assert NSEIndiaProvider.to_symbol("RELIANCE.BO") == "RELIANCE"
+        assert NSEIndiaProvider.to_symbol("RELIANCE") == "RELIANCE"
+
+    def test_parse_extracts_quote_and_profile_in_inr(self):
+        snapshot = NSEIndiaProvider.parse("RELIANCE", NSE_PAYLOAD)
+        assert snapshot.quote.price == pytest.approx(1307.8)
+        assert snapshot.has_quote
+        assert snapshot.profile.name == "Reliance Industries Limited"
+        assert snapshot.profile.currency == "INR"
+        assert snapshot.profile.market_cap == pytest.approx(17_697_782_146_242)
+        assert snapshot.profile.market_cap_crore == pytest.approx(1_769_778.21,
+                                                                  rel=1e-6)
+        assert snapshot.quote.volume == pytest.approx(8_622_452)
+        assert snapshot.quote.percent_change == pytest.approx(1.152)
+
+    def test_a_zero_price_is_not_a_quote(self):
+        raw = {"symbol": "X", "priceInfo": {"lastPrice": 0}}
+        snapshot = NSEIndiaProvider.parse("X", raw)
+        assert snapshot.quote.price is None
+        assert not snapshot.has_quote
+
+    def test_an_error_payload_is_an_unknown_symbol(self):
+        from app.data.providers.base import SymbolNotFound
+
+        provider = NSEIndiaProvider()
+        with pytest.raises(SymbolNotFound):
+            provider._raise_if_error({"error": "No data for symbol"}, "X")
+
+    def test_missing_quote_raises_so_the_router_falls_through(self):
+        from app.data.providers.base import ProviderError
+
+        provider = NSEIndiaProvider()
+        raw = {"symbol": "X", "companyName": "Some Company"}
+        snapshot = provider.parse("X", raw)
+        assert not snapshot.has_quote
+        # A provider that cannot price the symbol must not be reported as the
+        # source of a price=None "success".
+        with pytest.raises(ProviderError):
+            if not snapshot.has_quote:
+                raise ProviderError("no usable price")
+
+
+class TestIndiaOnlyRejection:
+    """MKT-IND-01: the platform is India-only; foreign listings are rejected."""
+
+    @staticmethod
+    def _ok_provider(name="NSE India (Live)"):
+        snap = MarketSnapshot(ticker="X", source=name)
+        snap.quote.price = 100.0
+        return TestFallbackChain._stub(name, 1, snapshot=snap)
+
+    @pytest.mark.parametrize("ticker", ["AAPL", "MSFT", "TSLA", "NVDA",
+                                        "GOOGL", "NASDAQ:AAPL", "BARC.L"])
+    def test_us_and_other_foreign_tickers_are_rejected(self, ticker):
+        from app.data.providers.base import SymbolNotSupported
+
+        router = MarketDataRouter(providers=[self._ok_provider()],
+                                  ttl_cache=TTLCache())
+        with pytest.raises(SymbolNotSupported) as caught:
+            router.fetch(ticker, use_cache=False)
+        assert "not supported" in str(caught.value)
+        assert "NSE/BSE" in str(caught.value)
+
+    def test_no_provider_call_is_made_for_a_rejected_symbol(self):
+        from app.data.providers.base import SymbolNotSupported
+
+        calls = {"n": 0}
+
+        class Counting(BaseMarketProvider):
+            name, priority = "NSE India (Live)", 1
+            def configured(self): return True
+            def fetch(self, ticker, **kwargs):
+                calls["n"] += 1
+                snap = MarketSnapshot(ticker=ticker, source=self.name)
+                snap.quote.price = 100.0
+                return snap, {}
+
+        router = MarketDataRouter(providers=[Counting()], ttl_cache=TTLCache())
+        with pytest.raises(SymbolNotSupported):
+            router.fetch("AAPL", use_cache=False)
+        assert calls["n"] == 0
+
+    def test_indian_tickers_resolve_to_nse(self):
+        from app.data.providers.symbols import resolve
+
+        for ticker in ("RELIANCE", "TCS", "INFY"):
+            resolved = resolve(ticker)
+            assert resolved.is_indian
+            assert resolved.canonical.endswith(".NS")
+
+
+class TestNoMisleadingNullPrice:
+    """MKT-IND-02: a provider outage must not masquerade as price=None success."""
+
+    def test_a_profile_without_a_price_is_not_served(self):
+        # Provider A returns a name but no price; B returns a real price.
+        profile_only = MarketSnapshot(ticker="X", source="A")
+        profile_only.profile.name = "Some Company"
+        good = MarketSnapshot(ticker="X", source="B")
+        good.quote.price = 100.0
+        router = MarketDataRouter(providers=[
+            self.__class__._stub_ok("A", 1, snapshot=profile_only),
+            self.__class__._stub_ok("B", 2, snapshot=good),
+        ], ttl_cache=TTLCache())
+        result = router.fetch("RELIANCE", use_cache=False)
+        assert result.source == "B"
+        assert result.attempted[0]["outcome"] == "failed"
+
+    @staticmethod
+    def _stub_ok(name, priority, *, snapshot=None, error=None):
+        return TestFallbackChain._stub(name, priority, snapshot=snapshot,
+                                       error=error)
+
+    def test_total_outage_yields_an_empty_non_success_result(self):
+        good = MarketSnapshot(ticker="X", source="A")
+        good.quote.price = None          # provider answered, but no price
+        router = MarketDataRouter(providers=[
+            self._stub_ok("A", 1, snapshot=good),
+        ], ttl_cache=TTLCache())
+        result = router.fetch("RELIANCE", use_cache=False)
+        assert result.source == SOURCE_NONE
+        assert result.snapshot.quote.price is None
+        assert result.snapshot.has_quote is False
+
+
 class TestProviderHealth:
     def test_telemetry_is_recorded(self):
         provider = FinnhubProvider()
@@ -539,7 +691,8 @@ class TestProviderHealth:
         assert health["last_successful_request"]
 
     def test_health_never_leaks_a_credential(self):
-        for provider in (FinnhubProvider(), FMPProvider(), YahooProvider()):
+        for provider in (NSEIndiaProvider(), FinnhubProvider(), FMPProvider(),
+                         YahooProvider()):
             rendered = str(provider.health())
             assert "apikey" not in rendered.lower()
             assert "token" not in rendered.lower()

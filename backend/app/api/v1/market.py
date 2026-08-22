@@ -19,9 +19,34 @@ from sqlalchemy.orm import Session
 
 from app.core.security import CurrentUser, get_current_user
 from app.db.base import get_db
+from app.data.providers.base import SymbolNotSupported
 from app.data.providers.router import (
     SOURCE_DOCUMENTS, SOURCE_INTERNAL, SOURCE_NONE, cache, get_router,
 )
+
+
+def _fetch_market(
+    ticker: str,
+    *,
+    db: Session,
+    use_cache: bool,
+    include_news: bool = True,
+    include_history: bool = True,
+    include_earnings: bool = True,
+):
+    """Fetch a market snapshot, turning an unsupported (non-Indian) symbol into
+    a clear 422 rather than an opaque provider-chain failure."""
+    try:
+        return get_router().fetch(
+            ticker, db=db, use_cache=use_cache, include_news=include_news,
+            include_history=include_history, include_earnings=include_earnings,
+        )
+    except SymbolNotSupported as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"message": str(exc), "ticker": ticker,
+             "supported": "NSE/BSE (India) only"},
+        ) from exc
 
 router = APIRouter(tags=["market"])
 
@@ -70,6 +95,9 @@ def providers_health(
 
     engine = get_router()
     report: list[dict[str, Any]] = []
+    # The platform is India-only, so a live probe hits an Indian listing
+    # (RELIANCE.NS) rather than a US one that would be out of scope.
+    probe_symbol = "RELIANCE.NS"
     for provider in engine.providers:
         entry = provider.health()
         entry["reachable"] = None
@@ -77,7 +105,7 @@ def providers_health(
         if probe and provider.configured():
             started = time.perf_counter()
             try:
-                provider.fetch("AAPL", include_news=False,
+                provider.fetch(probe_symbol, include_news=False,
                                include_history=False, include_earnings=False)
                 entry.update(reachable=True, authenticated=True)
             except ProviderAuthError:
@@ -217,7 +245,7 @@ def market_snapshot(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    result = get_router().fetch(
+    result = _fetch_market(
         ticker, db=db, use_cache=not refresh, include_news=news,
         include_history=history, include_earnings=earnings,
     )
@@ -241,7 +269,7 @@ def market_snapshot_raw(
     user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Both views, so a parsed figure can be audited against what arrived."""
-    result = get_router().fetch(ticker, db=db, use_cache=False)
+    result = _fetch_market(ticker, db=db, use_cache=False)
     if result.source == SOURCE_NONE:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
