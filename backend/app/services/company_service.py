@@ -38,6 +38,16 @@ from app.services.platform.cache import Namespace, cache
 #: Valid canonical keys, used to skip unknown rows defensively.
 _VALID_ITEMS = {item.value for item in LineItem}
 
+#: The platform is India-only (NSE/BSE). Any US-listed company that reaches
+#: the database (e.g. via the legacy US provisioning path) must never surface
+#: in search, lists or the sector universe.
+_US_EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
+
+
+def _is_indian(company) -> bool:
+    """True when a company is an NSE/BSE (Indian) listing."""
+    return (company.exchange or "").upper() not in _US_EXCHANGES
+
 
 @dataclass(frozen=True, slots=True)
 class CompanyContext:
@@ -93,6 +103,7 @@ class CompanyService:
         stmt = (
             select(Company)
             .where(
+                Company.exchange.notin_(_US_EXCHANGES),
                 or_(
                     func.lower(Company.name).like(pattern),
                     func.lower(Company.ticker).like(pattern),
@@ -104,7 +115,7 @@ class CompanyService:
             )
             .limit(limit * 3)
         )
-        rows = self.db.execute(stmt).scalars().all()
+        rows = [c for c in self.db.execute(stmt).scalars().all() if _is_indian(c)]
         ql = q.lower()
 
         def rank(c: Company) -> tuple[int, float]:
@@ -138,7 +149,7 @@ class CompanyService:
         page_size: int = 25,
         sector: str | None = None,
     ) -> tuple[int, list[CompanySummary]]:
-        base = select(Company)
+        base = select(Company).where(Company.exchange.notin_(_US_EXCHANGES))
         if sector:
             base = base.where(Company.sector == sector)
         total = self.db.execute(
@@ -153,6 +164,7 @@ class CompanyService:
             .scalars()
             .all()
         )
+        rows = [c for c in rows if _is_indian(c)]
         market = LiveMarketService(self.db).bulk_quotes(rows)
         return total, [
             CompanySummary.model_validate(c).model_copy(
@@ -164,7 +176,10 @@ class CompanyService:
     def sectors(self) -> list[str]:
         stmt = (
             select(Company.sector)
-            .where(Company.sector.is_not(None))
+            .where(
+                Company.sector.is_not(None),
+                Company.exchange.notin_(_US_EXCHANGES),
+            )
             .distinct()
             .order_by(Company.sector)
         )

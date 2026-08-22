@@ -59,6 +59,17 @@ class SymbolNotFound(ProviderError):
     """
 
 
+class SymbolNotSupported(ProviderError):
+    """The symbol is not part of this platform's universe.
+
+    EquityPilotAI is India-only (NSE/BSE). A US or other foreign listing is
+    not a coverage gap that another provider could fill — it is explicitly
+    out of scope, so it is rejected loudly rather than being chased through
+    the provider chain and reported as "no provider served" (which a reader
+    could mistake for an outage).
+    """
+
+
 # ===========================================================================
 # Policy
 # ===========================================================================
