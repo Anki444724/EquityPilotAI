@@ -50,7 +50,7 @@ PROVIDER_MODULES = (openrouter, openai, claude, gemini)
 #: A provider absent from this list still works — it sorts after everything
 #: named here — so adding a vendor module does not require editing the order
 #: unless it needs a specific position.
-FALLBACK_ORDER: tuple[str, ...] = ("OpenRouter", "Gemini", "OpenAI", "Claude")
+FALLBACK_ORDER: tuple[str, ...] = ("OpenRouter", "OpenAI", "Gemini", "Claude")
 
 MAX_ATTEMPTS = 3
 BASE_BACKOFF_SECONDS = 0.5
@@ -189,6 +189,12 @@ class ProviderRouter:
         ledger: UsageLedger | None = None,
     ) -> None:
         self.configs = configs if configs is not None else self.default_configs()
+        if preferred is None:
+            try:
+                from app.core.config import settings as _settings
+                preferred = _settings.AI_PREFERRED_PROVIDER
+            except Exception:  # noqa: BLE001 — settings must not break tests
+                preferred = None
         self.preferred = preferred
         self.cache = cache if cache is not None else ResponseCache()
         self.ledger = ledger or UsageLedger()

@@ -68,12 +68,26 @@ services:
       CORS_ORIGINS: '["https://equitypilot.in","https://www.equitypilot.in"]'
       EMAIL_LINK_BASE: https://equitypilot.in
       OAUTH_REDIRECT_BASE: https://equitypilot.in
-      # The API serves requests; the worker container runs the jobs.
+      # The API serves requests; the worker container runs the jobs
+      # (platform queue + document ingestion).
       WORKER_ENABLED: "false"
       SCHEDULER_ENABLED: "false"
       BACKUP_DIR: /app/backups
+      DOCUMENT_STORAGE_BACKEND: local
+      DOCUMENT_STORAGE_PATH: /data/documents
+      # AI keys are injected from the host environment / `.env` — never
+      # committed. Offline remains the last-resort fallback when none are set.
+      AI_MOCK_MODE: "true"
+      AI_PREFERRED_PROVIDER: ${AI_PREFERRED_PROVIDER:-OpenRouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      OPENROUTER_SITE_URL: https://equitypilot.in
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - backups:/app/backups
+      - documents:/data/documents
     ports:
       - "8000:8000"
     depends_on:
@@ -106,8 +120,19 @@ services:
       SCHEDULER_ENABLED: "true"
       WORKER_ENABLED: "true"
       WORKER_CONCURRENCY: "2"
+      DOCUMENT_STORAGE_BACKEND: local
+      DOCUMENT_STORAGE_PATH: /data/documents
+      AI_MOCK_MODE: "true"
+      AI_PREFERRED_PROVIDER: ${AI_PREFERRED_PROVIDER:-OpenRouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      OPENROUTER_SITE_URL: https://equitypilot.in
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - backups:/app/backups
+      - documents:/data/documents
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,7 +144,13 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        # Empty = same-origin. The browser calls /api on equitypilot.in;
+        # Next rewrites those to the internal API service. Never bake
+        # localhost:8000 into a production image.
+        NEXT_PUBLIC_API_URL: ""
+        API_INTERNAL_URL: http://api:8000
+    environment:
+      API_INTERNAL_URL: http://api:8000
     ports:
       - "3000:3000"
     depends_on:
@@ -130,3 +161,4 @@ volumes:
   postgres_data:
   redis_data:
   backups:
+  documents:

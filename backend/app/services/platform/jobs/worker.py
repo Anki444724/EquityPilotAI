@@ -330,21 +330,29 @@ def main() -> None:
     """Entry point for `python -m app.worker`."""
     from app.db.base import SessionLocal
 
+    from app.services.documents.worker import DocumentWorker
     from app.services.platform.observability import configure_logging
 
     configure_logging()
 
     worker = Worker(SessionLocal)
     scheduler = Scheduler(SessionLocal)
+    # Document ingestion has its own claim table and can run for minutes.
+    # It is NOT handled by the platform JobQueue — without this loop,
+    # uploaded PDFs stay at pages=0 / chunks=0 forever.
+    document_worker = DocumentWorker(SessionLocal)
 
     def _shutdown(signum, _frame):
         log.info("shutdown signal received", signal=signum)
         worker.stop()
         scheduler.stop()
+        document_worker.stop()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    thread = threading.Thread(target=scheduler.run_forever, daemon=True)
-    thread.start()
+    threading.Thread(target=scheduler.run_forever, daemon=True).start()
+    threading.Thread(
+        target=document_worker.run_forever, name="document-worker", daemon=True,
+    ).start()
     worker.run_forever()

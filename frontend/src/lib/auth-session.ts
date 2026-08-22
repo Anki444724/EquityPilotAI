@@ -15,8 +15,44 @@
 
 import type { TokenResponse } from "./types";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+
+function isLoopbackUrl(url: string): boolean {
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Browser-facing API origin.
+ *
+ * Production (equitypilot.in) must never call localhost — that is the
+ * *user's* machine, not the EC2 host. An empty NEXT_PUBLIC_API_URL means
+ * same-origin (`/api/...`), which Next rewrites (or nginx) proxies to the
+ * backend. A baked-in localhost URL is also rewritten to same-origin when
+ * the page is served from a real hostname, so a stale image cannot keep
+ * sending production traffic to 127.0.0.1:8000.
+ *
+ * Local `next dev` keeps http://localhost:8000 as the fallback.
+ */
+function resolveApiBase(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured === "") return "";
+  const fallback = (configured ?? "http://localhost:8000").replace(/\/$/, "");
+  if (typeof window !== "undefined") {
+    const host = window.location?.hostname ?? "";
+    if (host && !isLoopbackHost(host) && isLoopbackUrl(fallback)) {
+      return "";
+    }
+  }
+  return fallback;
+}
+
+export const API_BASE = resolveApiBase();
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {

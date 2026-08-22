@@ -24,11 +24,15 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# NEXT_PUBLIC_* values are inlined at build time, so the API URL must be known
-# here rather than at run time. A deployment pointing at a different backend
-# needs a rebuild — the cost of static generation.
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+# NEXT_PUBLIC_* values are inlined at build time. An *empty* value means
+# same-origin (`/api/...`), which is what production on equitypilot.in
+# needs — the browser must never be baked with localhost:8000.
+# API_INTERNAL_URL is the server-side rewrite target (the Docker service
+# name `http://api:8000` in compose).
+ARG NEXT_PUBLIC_API_URL=
+ARG API_INTERNAL_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build

@@ -218,7 +218,7 @@ class Settings(BaseSettings):
     DEFAULT_RESPONSE_LANGUAGE: str = "english"
     #: Sent as HTTP-Referer / X-Title. OpenRouter attributes usage with these
     #: and rate-limits anonymous traffic more aggressively.
-    OPENROUTER_SITE_URL: str = "https://frontend-production-1a313.up.railway.app"
+    OPENROUTER_SITE_URL: str = "https://equitypilot.in"
     OPENROUTER_APP_NAME: str = "EquityPilotAI"
     OPENAI_API_KEY: str | None = None
     ANTHROPIC_API_KEY: str | None = None

@@ -82,6 +82,18 @@ afterEach(() => {
   resetAuthSessionForTests();
 });
 
+describe("API_BASE", () => {
+  it("never leaves a production hostname pointing at localhost", async () => {
+    vi.resetModules();
+    vi.stubGlobal("window", {
+      location: { hostname: "equitypilot.in", href: "https://equitypilot.in/" },
+    });
+    const { API_BASE } = await import("./auth-session");
+    expect(API_BASE === "" || !API_BASE.includes("localhost")).toBe(true);
+    expect(API_BASE.includes("127.0.0.1")).toBe(false);
+  });
+});
+
 describe("shouldAttemptRefresh", () => {
   it("refuses to refresh login, refresh, and other session-establishing routes", () => {
     expect(shouldAttemptRefresh("/api/v1/auth/login")).toBe(false);
