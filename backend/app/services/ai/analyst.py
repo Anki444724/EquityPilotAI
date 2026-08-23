@@ -220,11 +220,28 @@ class ResearchAnalyst:
         # translating afterwards — native sentence structure rather than a
         # calque. Translation still runs as the guarantee, because a model
         # told to write Hindi will sometimes write English anyway.
+        #
+        # The instruction is decoration on the prompt, never a dependency:
+        # a failure building it must degrade to the bare instruction — or to
+        # no instruction at all — rather than 500 the request. This exact
+        # class of failure shipped once before (a Phase 2 method the analyst
+        # called but the adapter never defined), and it turned every
+        # non-English chat into an unhandled AttributeError.
         task_extra = extra
         if language is not None and language is not CANONICAL_LANGUAGE:
             from app.services.language.adapter import LanguageAdapter
-            # Phase 2: use improved multilingual templates when capability known
-            task_extra = f"{extra}{LanguageAdapter.response_instruction_phase2(language, capability) if 'capability' in locals() else LanguageAdapter.response_instruction(language)}"
+            try:
+                # Phase 2: capability-aware multilingual instruction.
+                instruction = LanguageAdapter.response_instruction_phase2(
+                    language, capability,
+                ) or LanguageAdapter.response_instruction(language)
+            except Exception:  # noqa: BLE001 — see the comment above
+                log.exception(
+                    "language response instruction failed; continuing without it",
+                    language=language.value, capability=capability,
+                )
+                instruction = LanguageAdapter.response_instruction(language)
+            task_extra = f"{extra}{instruction}"
 
         built = self.prompts.build(
             prompt_template, context, question=question, memory=memory, style=style,

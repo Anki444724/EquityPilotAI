@@ -381,3 +381,31 @@ class LanguageAdapter:
             "exactly as it appears in the evidence — those are identifiers, "
             "not words to translate."
         )
+
+    @staticmethod
+    def response_instruction_phase2(
+        language: Language, capability: str | None = None,
+    ) -> str:
+        """Phase 2: the capability-aware response instruction.
+
+        The analyst appends this to the writing prompt for every non-English
+        request. It composes the Phase 1 language instruction — which carries
+        the identifier-preservation rule that keeps citations, figures,
+        tickers and company names intact — with per-capability guidance, so a
+        `chat` turn reads as a chat reply in the target language rather than
+        a research memo, and a `risk_analysis` keeps its section structure.
+
+        English and planned (not yet enabled) languages return an empty
+        string, exactly like Phase 1: the canonical path stays free, and a
+        language the platform cannot render must not be asked for in prose it
+        will not deliver.
+        """
+        if language is CANONICAL_LANGUAGE:
+            return ""
+        spec = spec_for(language)
+        if not spec.is_supported:
+            return ""
+        base = LanguageAdapter.response_instruction(language)
+        return get_multilingual_prompt(
+            language, capability=capability or "", instruction=base,
+        )
