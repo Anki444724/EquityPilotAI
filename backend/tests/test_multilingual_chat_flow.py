@@ -13,7 +13,8 @@ These tests exist because production hit four related failures at once:
   provider was down.
 
 The service-level tests use fakes (no database, no network); the API tests
-run the real endpoints against the shared seeded app with a deterministic
+run the real endpoints against an isolated, authenticated in-memory database
+(NATIVE_AUTH login, per the test_admin_ai.py pattern) with a deterministic
 fake translator installed, so "the response is in Hinglish" is asserted on
 the actual HTTP payload.
 """
@@ -28,18 +29,34 @@ import urllib.error
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.core.config import settings
+from app.db.base import Base, get_db
 from app.domain.ai.types import (
     Citation, CompletionResponse, EvidenceKind, TokenUsage,
 )
 from app.domain.language.types import CANONICAL_LANGUAGE, Language, spec_for
+from app.domain.platform.identity import Role
+from app.domain.platform.plans import PlanTier
+from app.main import app
 from app.services.ai.analyst import ResearchAnalyst
 from app.services.ai.context_builder import GroundedContext
 from app.services.ai.guardrails import DISCLOSURE
 from app.services.language.adapter import LanguageAdapter
 from app.services.language.prompt_templates import get_multilingual_prompt
 from app.services.language.translators import TranslationResult
+from app.services.platform.entitlements import EntitlementService
+from app.services.platform.identity_service import IdentityService
+from app.services.platform.tenancy import TenantService
 from app.services.retrieval.engine import HybridRetrievalEngine
+
+# Aliased on purpose: a bare `import app.models` would rebind the name `app`
+# to the package and shadow the FastAPI instance imported above (the same
+# trick test_admin_ai.py relies on).
+import app.models as _models  # noqa: F401  (create_all must see every table)
 
 REF = "BHARATCP"
 
@@ -497,15 +514,125 @@ class TestLexicalFallback:
 class TestMultilingualChatAPI:
     """The real endpoint. The fake translator stands in for the live LLM."""
 
+    #: Satisfies the platform password policy (min length + character
+    #: classes); it is test data, not a credential.
+    PASSWORD = "a-strong-test-password-1"
+    EMAIL = "lang@test.com"
+
     @pytest.fixture()
     def client(self, monkeypatch):
+        """An authenticated client against an isolated in-memory database.
+
+        With NATIVE_AUTH enabled — as in the production deployment — the
+        chat/analyse endpoints require a bearer session token, so a bare
+        ``TestClient(app)`` gets 401 on every call. This fixture follows the
+        project pattern from ``test_admin_ai.py`` / ``test_platform_api.py``:
+        isolated SQLite, entitlements synced, a tenant and a verified admin,
+        the ``get_db`` dependency overridden, NATIVE_AUTH forced on, a real
+        login through ``/api/v1/auth/login``, and the returned token in the
+        client's Authorization header. Production authentication code is not
+        touched — this is pure test setup, and both the dependency override
+        and the NATIVE_AUTH value are restored on teardown.
+        """
+        # The deterministic fake translator stands in for the live LLM
+        # (function-scoped; monkeypatch restores it after each test).
         monkeypatch.setattr(
             "app.services.language.adapter.build_translator",
             lambda *args, **kwargs: _FakeTranslator(),
         )
-        from app.main import app
 
-        return TestClient(app)
+        # 1. isolated in-memory database; 2. the full schema.
+        engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        session = sessionmaker(bind=engine, autoflush=False,
+                               expire_on_commit=False)
+
+        # 3. sync entitlements; 4. test tenant; 5. verified test user.
+        with session() as db:
+            EntitlementService(db).sync_catalogue()
+            tenant = TenantService(db).create(
+                "Multilingual Test Capital", tier=PlanTier.ENTERPRISE)
+            IdentityService(db).register(
+                email=self.EMAIL, password=self.PASSWORD, name="Lang Test",
+                tenant_id=tenant.id, role=Role.ADMIN, auto_verify=True,
+            )
+
+        # 6. override get_db with the test session; 7. NATIVE_AUTH on.
+        #    Both saved so teardown can restore the previous state exactly.
+        def _override():
+            db = session()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        prev_override = app.dependency_overrides.get(get_db)
+        prev_native = settings.NATIVE_AUTH
+        app.dependency_overrides[get_db] = _override
+        settings.NATIVE_AUTH = True
+
+        try:
+            # 8. the client; 9. a real login; 10. bearer header for every
+            #    request from here on.
+            c = TestClient(app)
+            login = c.post(
+                "/api/v1/auth/login",
+                json={"email": self.EMAIL, "password": self.PASSWORD},
+            )
+            assert login.status_code == 200, login.text
+            c.headers.update({
+                "Authorization": f"Bearer {login.json()['access_token']}",
+            })
+
+            # The chat tests address BHARATCP, and /ai/* refuses companies
+            # without data — so provision it here with financial facts,
+            # exactly like test_admin_ai.py does for AICO.
+            created = c.post("/api/v1/admin/companies", json={
+                "name": "Bharat Consumer Products Ltd", "ticker": REF,
+                "isin": "INE818181819",
+            })
+            assert created.status_code == 201, created.text
+            company_id = created.json()["id"]
+            seeded = c.put(
+                f"/api/v1/admin/financials/{company_id}/facts",
+                json=[
+                    {"fiscal_year": 2024, "line_item": "revenue",
+                     "value": 12000.0},
+                    {"fiscal_year": 2024, "line_item": "net_block_ppe",
+                     "value": 3000.0},
+                    {"fiscal_year": 2024, "line_item": "cash_and_bank",
+                     "value": 1000.0},
+                    {"fiscal_year": 2024, "line_item":
+                     "equity_share_capital", "value": 500.0},
+                    {"fiscal_year": 2024, "line_item":
+                     "long_term_borrowings", "value": 2500.0},
+                    {"fiscal_year": 2024, "line_item": "trade_receivables",
+                     "value": 600.0},
+                    {"fiscal_year": 2024, "line_item": "inventories",
+                     "value": 400.0},
+                    {"fiscal_year": 2024, "line_item": "trade_payables",
+                     "value": 500.0},
+                    {"fiscal_year": 2024, "line_item": "raw_materials",
+                     "value": 4000.0},
+                    {"fiscal_year": 2024, "line_item": "employee_benefit",
+                     "value": 800.0},
+                ],
+            )
+            assert seeded.status_code == 200, seeded.text
+
+            # 11. the authenticated client.
+            yield c
+        finally:
+            # 12. restore the previous override and NATIVE_AUTH; 13. dispose.
+            settings.NATIVE_AUTH = prev_native
+            if prev_override is not None:
+                app.dependency_overrides[get_db] = prev_override
+            else:
+                app.dependency_overrides.pop(get_db, None)
+            engine.dispose()
 
     def _chat(self, client, question, **extra):
         response = client.post(
