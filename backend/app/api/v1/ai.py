@@ -473,6 +473,27 @@ async def research_report(
     return report.as_dict()
 
 
+def _chat_target(
+    db: Session, question: str, scoped: AnalysisService,
+) -> AnalysisService:
+    """The company the chat question is actually asking about.
+
+    The URL scopes the conversation to one company, but the question may name
+    a different one. The company being asked about decides whose record
+    answers: exactly one other known company named (by ticker or full name)
+    resolves it; an ambiguity (two or more) or an unknown name keeps the
+    scoped company rather than guessing. `provision=False` — a question must
+    never create a company, only address one that exists.
+    """
+    from app.services.company_service import CompanyService
+
+    named = CompanyService(db).named_in(question, exclude_id=scoped.company.id)
+    if len(named) != 1:
+        return scoped
+    target = AnalysisService.for_ticker(db, named[0].ticker, provision=False)
+    return target if target is not None else scoped
+
+
 @router.post("/company/{ticker}/ai/chat", response_model=ChatResponse,
              summary="Grounded conversation with memory")
 async def chat(
@@ -483,6 +504,20 @@ async def chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     _require_data(analysis)
+    # A question that names a different company than the chat URL is scoped
+    # to must be answered from THAT company's record — the failure mode was
+    # RELIANCE's data-quality warning and RELIANCE's debt returned for a
+    # question about BHARATCP. Company name, ticker, facts, citations and
+    # the pinned session company all follow the resolved target below.
+    scoped = analysis
+    analysis = _chat_target(db, body.question, scoped)
+    company_note = (
+        None if analysis is scoped else
+        f"The question named {analysis.company.ticker}, so this answer uses "
+        f"{analysis.company.ticker}'s record; the chat URL is scoped to "
+        f"{scoped.company.ticker}."
+    )
+
     memory = service.memory(f"{user.id}:{body.session_id}")
     memory.set_company(analysis.company.id, analysis.company.ticker,
                        analysis.company.name)
@@ -511,6 +546,12 @@ async def chat(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except ProviderError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    if company_note is not None:
+        # Stated in the response, not silently: a reader who asked about
+        # BHARATCP in a RELIANCE-scoped chat must be able to see that the
+        # answer followed the question, and why.
+        result.warnings.append(company_note)
 
     base = _result_out(analysis, result)
     return ChatResponse(

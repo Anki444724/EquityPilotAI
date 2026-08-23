@@ -10,6 +10,7 @@ calculations" rule, enforced structurally.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from sqlalchemy import func, or_, select
@@ -76,6 +77,61 @@ class CompanyService:
     def get_by_ticker(self, ticker: str) -> Company | None:
         stmt = select(Company).where(func.upper(Company.ticker) == ticker.upper())
         return self.db.execute(stmt).scalar_one_or_none()
+
+    def named_in(self, text: str, *, exclude_id: str | None = None) -> list[Company]:
+        """Companies explicitly named in free text, most unambiguous first.
+
+        A chat is scoped to one company by its URL, but users address other
+        companies in the question — 'BHARATCP ka debt kitna hai?' typed into
+        a RELIANCE conversation. Resolving the scoped company for that
+        question returns the wrong balance sheet with the wrong company's
+        data-quality warning attached, which reads as the AI answering about
+        a company nobody asked about.
+
+        Two signals, unioned:
+
+        * **Ticker** — a case-insensitive whole-token match against a stored
+          ticker. Tickers are how this product's UI labels companies, and a
+          ticker in a question is unambiguous intent.
+        * **Full name** — the company's complete stored name appears in the
+          text. Partial names ('Reliance' without 'Industries') are
+          deliberately not matched: a common word must not silently retarget
+          an answer to another company's record.
+
+        The caller decides what to do with the result — exactly one company
+        is a resolvable target; several is an ambiguity the caller should
+        keep on its original scope rather than guess about.
+        """
+        raw = (text or "").strip()
+        if not raw:
+            return []
+
+        found: dict[str, Company] = {}
+
+        # Ticker tokens: words of 2+ characters, matched whole and
+        # case-insensitively against the stored tickers.
+        import re
+
+        tokens = {
+            token.upper()
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9.&\-]*", raw)
+            if len(token) > 1
+        }
+        if tokens:
+            rows = self.db.execute(
+                select(Company).where(func.upper(Company.ticker).in_(tokens))
+            ).scalars().all()
+            for company in rows:
+                found[company.id] = company
+
+        # Full stored name, case-insensitive substring.
+        lowered = raw.lower()
+        for company in self.db.execute(select(Company)).scalars():
+            name = (company.name or "").strip()
+            if name and name.lower() in lowered:
+                found[company.id] = company
+
+        return [c for c in found.values() if c.id != exclude_id]
 
     def search(self, query: str, limit: int = 20) -> list[CompanySummary]:
         """Name/ticker/sector search, ranked so exact ticker hits come first."""
