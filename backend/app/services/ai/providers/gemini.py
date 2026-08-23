@@ -27,7 +27,7 @@ DEFAULTS = ProviderConfig(
     # because research prompts here are long-context and high-volume, and the
     # quality gap on summarisation does not justify roughly ten times the
     # price per million tokens.
-    default_model="gemini-2.0-flash",
+    default_model="gemini-3.6-flash",
     input_cost_per_m=0.10,
     output_cost_per_m=0.40,
 )
