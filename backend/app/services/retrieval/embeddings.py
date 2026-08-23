@@ -89,6 +89,10 @@ class _HTTPEmbeddingProvider(SemanticEmbeddingProvider):
     endpoint: ClassVar[str] = ""
     model: ClassVar[str] = ""
     dimension: ClassVar[int] = 1024
+    #: Name of the settings attribute this provider's key is read from. Used
+    #: only in failure diagnostics so an operator can fix the deployment
+    #: without reading code; the key itself is never logged.
+    key_setting: ClassVar[str] = ""
     #: Requests are batched; too large a batch risks a provider-side limit and
     #: costs the whole batch on a retry.
     batch_size: ClassVar[int] = 16
@@ -170,9 +174,12 @@ class _HTTPEmbeddingProvider(SemanticEmbeddingProvider):
                     # degrade to lexical immediately instead of each paying
                     # the full ladder.
                     self._tripped_until = time.monotonic() + self.CIRCUIT_SECONDS
-                    log.warning("embedding provider unavailable",
-                                provider=self.name, code=exc.code,
-                                cooldown_s=self.CIRCUIT_SECONDS)
+                    log.warning(
+                        "embedding provider unavailable",
+                        provider=self.name, code=exc.code,
+                        cooldown_s=self.CIRCUIT_SECONDS,
+                        diagnosis=self._terminal_diagnosis(exc.code),
+                    )
                     break
                 if attempt >= self.attempts:
                     break
@@ -191,6 +198,36 @@ class _HTTPEmbeddingProvider(SemanticEmbeddingProvider):
         raise RuntimeError(
             f"{self.name} embeddings failed after {self.attempts} attempts: "
             f"{str(last)[:200]}"
+        )
+
+    def _terminal_diagnosis(self, code: int) -> str:
+        """What a hard auth/billing rejection means, in operator terms.
+
+        A bare ``401`` in a log line tells you the provider said no; it does
+        not tell you what to change. These messages name the configuration
+        knob and the fix, without ever including the key itself. The endpoint
+        path, the ``Authorization: Bearer`` header and the
+        ``{"model", "input"}`` body are all the provider's documented shape,
+        so a rejection here is an account problem, not a wire problem.
+        """
+        if code == 401:
+            return (
+                f"authentication rejected by {self.endpoint} — the configured "
+                f"{self.key_setting} is invalid, expired, or its account has "
+                f"no entitlement for model {self.model}. Update "
+                f"{self.key_setting}, or point EMBEDDING_PROVIDER at another "
+                f"configured provider. Retrieval now degrades to lexical search."
+            )
+        if code == 402:
+            return (
+                f"credit exhausted on the account for {self.key_setting}; "
+                f"top up, or point EMBEDDING_PROVIDER at another configured "
+                f"provider."
+            )
+        return (
+            f"forbidden — the {self.key_setting} account lacks permission "
+            f"for model {self.model}; update the key or its account "
+            f"entitlements."
         )
 
     def _batches(self, texts: Sequence[str]) -> list[list[str]]:
@@ -232,6 +269,7 @@ class BGEM3Provider(_HTTPEmbeddingProvider):
     endpoint: ClassVar[str] = "https://openrouter.ai/api/v1/embeddings"
     model: ClassVar[str] = "baai/bge-m3"
     dimension: ClassVar[int] = 1024
+    key_setting: ClassVar[str] = "OPENROUTER_API_KEY"
 
 
 class JinaV3Provider(_HTTPEmbeddingProvider):
@@ -241,6 +279,7 @@ class JinaV3Provider(_HTTPEmbeddingProvider):
     endpoint: ClassVar[str] = "https://api.jina.ai/v1/embeddings"
     model: ClassVar[str] = "jina-embeddings-v3"
     dimension: ClassVar[int] = 1024
+    key_setting: ClassVar[str] = "JINA_API_KEY"
 
 
 class OpenAISmallProvider(_HTTPEmbeddingProvider):
@@ -250,6 +289,7 @@ class OpenAISmallProvider(_HTTPEmbeddingProvider):
     endpoint: ClassVar[str] = "https://api.openai.com/v1/embeddings"
     model: ClassVar[str] = "text-embedding-3-small"
     dimension: ClassVar[int] = 1536
+    key_setting: ClassVar[str] = "OPENAI_API_KEY"
 
 
 #: Preference order exactly as the brief specifies.
