@@ -44,6 +44,14 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "backend"))
 
+# The script is run from different places: the repo checkout on a host
+# (backend/ one level up from deploy/), or copied into the API container
+# (where the application lives at /app and this file may sit in /tmp).
+# Add the first candidate that actually contains the `app` package.
+for _candidate in (os.getcwd(), "/app"):
+    if os.path.isfile(os.path.join(_candidate, "app", "__init__.py")):
+        sys.path.insert(0, _candidate)
+
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
