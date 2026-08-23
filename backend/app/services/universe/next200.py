@@ -1,25 +1,33 @@
 """Derive the "next 200" coverage candidates (proposed ranks 501-700).
 
-The covered universe today is the Nifty 500 import. To expand it by the next
-200 most valuable listed Indian companies, the candidates are:
+The covered universe today is the Nifty 500 import. To expand coverage by
+the next 200 most valuable listed Indian companies, the candidates are the
+database's **non-NIFTY500 companies** — the production database already
+holds the full BSE active master (every BSE ISIN is present in
+``companies``), so "BSE master minus database" yields zero new companies
+and the database itself is the candidate pool.
 
-1. **Universe** — BSE's active-scrip master (segment=Equity, status=Active),
-   the same authoritative exchange source the Nifty 500 importer already
-   joins for BSE codes. It covers dual-listed and BSE-only listings alike.
-2. **Exclusion** — the current universe, taken from the database (every
-   existing company record), matched on **ISIN first, then uppercase ticker**.
-   ISIN is the security's legal identifier; ticker collisions between
-   exchanges are a documented hazard the Nifty 500 import report already
-   called out, so a ticker match alone never counts as proof of identity.
-3. **Ranking** — total market capitalisation, from the platform's own market
-   data provider (FMP — its profile/quote payloads carry ``marketCap`` and
-   the production router already parses it, see ``app/data/providers/fmp.py``).
+Pipeline:
+
+1. **Candidates** — ``companies`` rows that are not NIFTY500 (by the
+   ``index_membership`` tag, cross-checked against the live NSE Nifty 500
+   list so a stale tag cannot leak a constituent in), active, and Indian
+   (INE ISIN, or no ISIN with an INR currency).
+2. **Market cap, read-only** — tier 0 is the BSE master's own ``Mktcap``,
+   matched to candidates **by ISIN** and unit-calibrated (see
+   :func:`calibrate_bse_mktcap`); secondary sources (FMP screener,
+   screener.in, FMP profile) fill only the ISINs BSE does not cover.
+3. **Ranking** — market cap descending, top 200, proposed ranks 501-700;
+   ties break by name; candidates without a figure are counted in the
+   coverage report, never ranked at zero.
 
 This module is pure: every network touch and database read is injected, so
 the derivation logic is unit-testable without a key, a connection or the
 exchange. The CLI that wires in the real sources lives in
 ``deploy/derive_next_200.py`` and is strictly read-only against the
-database — this is a report generator, not an importer.
+database — this is a report generator, not an importer. The final backfill
+that would make the top 200 covered companies is a separate, explicit
+step that runs only after the dry-run coverage report is reviewed.
 """
 from __future__ import annotations
 
@@ -91,12 +99,16 @@ class CandidateRow:
     exchange: str
     #: Total market capitalisation in INR crore (display units).
     market_cap_inr_crore: float | None
-    #: Where the figure came from ("fmp_screener", "fmp_profile", ...).
+    #: Where the figure came from ("bse_master", "fmp_screener", "screener.in",
+    #: "fmp_profile", ...).
     mcap_source: str | None
     #: What the exclusion check concluded for this company.
     current_universe_status: str
     bse_scrip_code: str
     sector: str | None = None
+    #: Database primary key of the company, so the reviewed report maps
+    #: straight onto the rows a later backfill would ingest.
+    company_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +118,79 @@ class UniverseEntry:
     ticker: str
     isin: str | None
     listing_status: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyCandidate:
+    """A ``companies`` row, as read by the dry run.
+
+    The candidate pool is the database itself (every BSE ISIN is already in
+    ``companies``), so the derivation reads company rows and ranks them —
+    it never re-derives the universe from the exchange.
+    """
+
+    company_id: str
+    ticker: str
+    name: str
+    isin: str | None
+    exchange: str | None = None
+    listing_status: str | None = None
+    index_membership: str | None = None
+    currency: str | None = None
+    sector: str | None = None
+    bse_code: str | None = None
+
+
+#: The tag the Nifty 500 importer writes onto covered constituents.
+NIFTY500_TAG = "NIFTY500"
+
+
+def classify_company(
+    company: CompanyCandidate,
+    live_nifty500_isins: frozenset[str] | None = None,
+    live_nifty500_tickers: frozenset[str] | None = None,
+) -> str:
+    """What the exclusion check concluded for one database company.
+
+    Exclusions, in order (the first hit wins and is counted under its own
+    key in the coverage report):
+
+    1. **NIFTY500 tag** — ``index_membership`` says the company is in the
+       covered index. This is the primary partition.
+    2. **Live Nifty 500 list** — the tag is a snapshot; NSE rebalances. A
+       company whose ISIN or ticker is in today's list is excluded even if
+       its tag was never updated, so a stale tag cannot leak a live
+       constituent into the "next 200".
+    3. **Not active** — delisted/suspended rows are retained in the database
+       for their history, but they are not coverage candidates.
+    4. **Non-Indian** — an ISIN that is not INE-prefixed (the US listings
+       the platform holds from Phase 3), or no ISIN with a non-INR currency.
+    """
+    if (company.index_membership or "").strip().upper() == NIFTY500_TAG:
+        return "excluded_nifty500_tag"
+
+    isin = (company.isin or "").strip().upper()
+    if isin:
+        if live_nifty500_isins and isin in live_nifty500_isins:
+            return "excluded_nifty500_live_list"
+    elif (company.currency or "INR").strip().upper() != "INR":
+        return "excluded_non_indian"
+
+    if (
+        live_nifty500_tickers
+        and (company.ticker or "").strip().upper() in live_nifty500_tickers
+    ):
+        # A live constituent that slipped past the tag (and carries no INE
+        # ISIN): still a Nifty 500 company, still excluded.
+        return "excluded_nifty500_live_list"
+
+    if (company.listing_status or "active").strip().lower() != "active":
+        return "excluded_not_active"
+
+    if isin and not isin.startswith(INR_PREFIX):
+        return "excluded_non_indian"
+
+    return "candidate"
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +286,29 @@ def calibrate_bse_mktcap(
     return None, 0.0
 
 
+def build_bse_mktcap_map(
+    scrips: Sequence[BseScrip],
+) -> tuple[dict[str, tuple[float, str]], str | None]:
+    """ISIN -> (market cap in INR crore, BSE scrip code), unit-calibrated.
+
+    The exchange's own figure for its own companies — matched to database
+    candidates by ISIN, the security's legal identifier. Returns
+    ``({}, None)`` when the ``Mktcap`` unit cannot be calibrated: the caller
+    then uses the secondary sources for everything rather than ranking on a
+    guessed unit.
+    """
+    unit, factor = calibrate_bse_mktcap(scrips)
+    if unit is None:
+        return {}, None
+    out: dict[str, tuple[float, str]] = {}
+    for scrip in scrips:
+        if not scrip.isin or not scrip.mktcap or scrip.mktcap <= 0:
+            continue
+        out[scrip.isin.upper()] = (round(scrip.mktcap * factor, 1),
+                                   scrip.scrip_code)
+    return out, unit
+
+
 # ---------------------------------------------------------------------------
 # Universe exclusion
 # ---------------------------------------------------------------------------
@@ -259,42 +367,40 @@ def normalise_name(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", (name or "").upper())
 
 
-def rank_candidates(
-    scrips: Sequence[BseScrip],
-    universe_isins: set[str],
-    universe_tickers: set[str],
+def rank_companies(
+    candidates: Sequence[Any],
     market_cap_inr_crore: Mapping[str, tuple[float | None, str]],
     *,
+    bse_scrip_codes: Mapping[str, str] | None = None,
     limit: int = 200,
     first_rank: int = FIRST_CANDIDATE_RANK,
+    universe_label: str = "not_in_nifty500",
 ) -> tuple[list[CandidateRow], dict[str, int]]:
-    """Rank eligible scrips by market cap.
+    """Rank pre-classified candidates by market cap.
 
+    Accepts anything candidate-shaped (``CompanyCandidate`` from the
+    database, ``BseScrip`` from the master) — fields are read defensively.
     ``market_cap_inr_crore`` maps an identifier — ISIN (preferred),
     uppercase exchange ticker, or normalised name — to
-    ``(figure_inr_crore, source)``. A candidate whose figure is missing or
-    non-positive cannot be ranked and is counted in the summary instead of
-    being silently ranked at zero.
+    ``(figure_inr_crore, source)``. ``bse_scrip_codes`` maps ISIN -> BSE
+    scrip code, used to enrich database rows that carry no code of their
+    own. A candidate whose figure is missing or non-positive cannot be
+    ranked and is counted in the summary instead of being silently ranked
+    at zero.
 
-    Returns ``(rows, counts)`` where counts breaks down every non-candidate
-    and every unrankable candidate.
+    Returns ``(rows, counts)`` — rows carry proposed ranks starting at
+    ``first_rank`` (501 by default), counts carry ``ranked`` and
+    ``no_market_cap_available``.
     """
-    counts: dict[str, int] = {
-        "candidate": 0, "no_market_cap_available": 0,
-    }
-    candidates: list[tuple[BseScrip, float, str]] = []
+    counts: dict[str, int] = {"ranked": 0, "no_market_cap_available": 0}
+    ranked: list[tuple[Any, float, str]] = []
 
-    for scrip in scrips:
-        status = classify(scrip, universe_isins, universe_tickers)
-        if status != "candidate":
-            counts[status] = counts.get(status, 0) + 1
-            continue
-        counts["candidate"] += 1
-
+    for cand in candidates:
+        isin = (getattr(cand, "isin", None) or "").strip().upper()
         keys = [k for k in (
-            (scrip.isin or "").upper(),
-            scrip.ticker,
-            normalise_name(scrip.name),
+            isin,
+            (getattr(cand, "ticker", None) or "").strip().upper(),
+            normalise_name(getattr(cand, "name", None) or ""),
         ) if k]
         figure = None
         for key in keys:
@@ -304,24 +410,69 @@ def rank_candidates(
         if figure is None or figure[0] is None or figure[0] <= 0:
             counts["no_market_cap_available"] += 1
             continue
-        candidates.append((scrip, figure[0], figure[1]))
+        ranked.append((cand, figure[0], figure[1]))
 
-    candidates.sort(key=lambda item: (-item[1], item[0].name))
-    rows = [
-        CandidateRow(
+    ranked.sort(key=lambda item: (-item[1], (getattr(item[0], "name", "") or "")))
+    rows: list[CandidateRow] = []
+    for index, (cand, amount, source) in enumerate(ranked[:limit]):
+        isin = (getattr(cand, "isin", None) or "").strip().upper() or None
+        exchange = getattr(cand, "exchange", None)
+        if not exchange:
+            exchange = ("BSE/NSE" if isin and isin in (bse_scrip_codes or {})
+                        else "BSE")
+        bse_code = (
+            getattr(cand, "bse_code", None)
+            or (bse_scrip_codes or {}).get(isin or "", "")
+            or getattr(cand, "scrip_code", "")
+        )
+        rows.append(CandidateRow(
             proposed_rank=first_rank + index,
-            ticker=scrip.ticker or _ticker_from_name(scrip.name),
-            name=scrip.name,
-            isin=scrip.isin,
-            exchange="BSE" if scrip.ticker and scrip.ticker.endswith(".BO") else "BSE/NSE",
+            ticker=(getattr(cand, "ticker", None) or "").strip().upper()
+            or _ticker_from_name(getattr(cand, "name", "") or ""),
+            name=getattr(cand, "name", "") or "",
+            isin=isin,
+            exchange=exchange,
             market_cap_inr_crore=round(amount, 1),
             mcap_source=source,
-            current_universe_status="not_in_current_universe",
-            bse_scrip_code=scrip.scrip_code,
-            sector=scrip.sector,
-        )
-        for index, (scrip, amount, source) in enumerate(candidates[:limit])
-    ]
+            current_universe_status=universe_label,
+            bse_scrip_code=bse_code,
+            sector=getattr(cand, "sector", None),
+            company_id=getattr(cand, "company_id", None),
+        ))
+    counts["ranked"] = len(rows)
+    return rows, counts
+
+
+def rank_candidates(
+    scrips: Sequence[BseScrip],
+    universe_isins: set[str],
+    universe_tickers: set[str],
+    market_cap_inr_crore: Mapping[str, tuple[float | None, str]],
+    *,
+    limit: int = 200,
+    first_rank: int = FIRST_CANDIDATE_RANK,
+) -> tuple[list[CandidateRow], dict[str, int]]:
+    """Classify then rank a list of BSE scrips against a known universe.
+
+    Kept for the BSE-driven flow (and its tests); the database-driven flow
+    classifies with :func:`classify_company` and ranks via
+    :func:`rank_companies` directly.
+    """
+    counts: dict[str, int] = {}
+    eligible: list[BseScrip] = []
+    for scrip in scrips:
+        status = classify(scrip, universe_isins, universe_tickers)
+        if status != "candidate":
+            counts[status] = counts.get(status, 0) + 1
+            continue
+        eligible.append(scrip)
+    rows, rank_counts = rank_companies(
+        eligible, market_cap_inr_crore, limit=limit, first_rank=first_rank,
+        universe_label="not_in_current_universe",
+    )
+    counts["candidate"] = len(eligible)
+    counts.update(rank_counts)
+    return rows, counts
     return rows, counts
 
 
@@ -338,6 +489,7 @@ def rows_to_dicts(rows: Sequence[CandidateRow]) -> list[dict[str, Any]]:
     return [
         {
             "proposed_rank": row.proposed_rank,
+            "company_id": row.company_id,
             "ticker": row.ticker,
             "company_name": row.name,
             "isin": row.isin,
@@ -356,13 +508,14 @@ def to_csv(rows: Sequence[CandidateRow]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        "proposed_rank", "ticker", "company_name", "isin", "exchange",
-        "market_cap_inr_crore", "mcap_source", "current_universe_status",
-        "bse_scrip_code", "sector",
+        "proposed_rank", "company_id", "ticker", "company_name", "isin",
+        "exchange", "market_cap_inr_crore", "mcap_source",
+        "current_universe_status", "bse_scrip_code", "sector",
     ])
     for row in rows:
         writer.writerow([
-            row.proposed_rank, row.ticker, row.name, row.isin or "",
+            row.proposed_rank, row.company_id or "", row.ticker, row.name,
+            row.isin or "",
             row.exchange,
             "" if row.market_cap_inr_crore is None else row.market_cap_inr_crore,
             row.mcap_source or "", row.current_universe_status,

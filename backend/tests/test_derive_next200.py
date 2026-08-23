@@ -10,9 +10,10 @@ from __future__ import annotations
 import pytest
 
 from app.services.universe.next200 import (
-    BseScrip, UniverseEntry, calibrate_bse_mktcap, classify, normalise_name,
-    parse_bse_master, rank_candidates, rows_to_dicts, to_csv, to_json,
-    universe_sets,
+    BseScrip, CompanyCandidate, UniverseEntry, build_bse_mktcap_map,
+    calibrate_bse_mktcap, classify, classify_company, normalise_name,
+    parse_bse_master, rank_candidates, rank_companies, rows_to_dicts,
+    to_csv, to_json, universe_sets,
 )
 
 
@@ -164,47 +165,144 @@ class TestCalibrateBseMktcap:
         assert calibrate_bse_mktcap(scrips) == (None, 0.0)
 
 
-class TestCliBseMcapTier:
-    """The CLI tier that turns the master's own Mktcap into the mcap map."""
+def _company(company_id="c1", ticker="NEWCO", name="New Co Ltd",
+             isin="INE555D01555", exchange="NSE", listing_status="active",
+             index_membership=None, currency="INR", sector=None,
+             bse_code=None) -> CompanyCandidate:
+    return CompanyCandidate(
+        company_id=company_id, ticker=ticker, name=name, isin=isin,
+        exchange=exchange, listing_status=listing_status,
+        index_membership=index_membership, currency=currency,
+        sector=sector, bse_code=bse_code,
+    )
 
-    @staticmethod
-    def _cli():
-        import importlib.util
-        import os
 
-        path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "deploy",
-            "derive_next_200.py",
-        )
-        spec = importlib.util.spec_from_file_location("derive_next_200", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+class TestClassifyCompany:
+    """The database-driven candidate filter (NIFTY500 stays excluded)."""
 
-    def test_keyed_by_isin_ticker_and_name(self):
-        cli = self._cli()
+    def test_nifty500_tag_excludes(self):
+        c = _company(index_membership="NIFTY500")
+        assert classify_company(c) == "excluded_nifty500_tag"
+
+    def test_nifty500_tag_is_case_insensitive(self):
+        c = _company(index_membership="  nifty500 ")
+        assert classify_company(c) == "excluded_nifty500_tag"
+
+    def test_live_list_catches_a_stale_tag(self):
+        """A constituent added after the last import, tag never updated."""
+        c = _company(index_membership=None)
+        assert classify_company(
+            c, live_nifty500_isins=frozenset({"INE555D01555"}),
+        ) == "excluded_nifty500_live_list"
+
+    def test_live_list_ticker_catches_no_isin_constituent(self):
+        c = _company(isin=None)
+        assert classify_company(
+            c, live_nifty500_tickers=frozenset({"NEWCO"}),
+        ) == "excluded_nifty500_live_list"
+
+    def test_not_active_excluded(self):
+        c = _company(listing_status="delisted")
+        assert classify_company(c) == "excluded_not_active"
+
+    def test_us_isin_excluded(self):
+        c = _company(ticker="AAPL", isin="US0378331005", currency="USD")
+        assert classify_company(c) == "excluded_non_indian"
+
+    def test_no_isin_foreign_currency_excluded(self):
+        c = _company(isin=None, currency="USD")
+        assert classify_company(c) == "excluded_non_indian"
+
+    def test_ine_isin_active_untagged_is_candidate(self):
+        assert classify_company(_company()) == "candidate"
+
+    def test_no_isin_inr_is_candidate(self):
+        assert classify_company(_company(isin=None)) == "candidate"
+
+    def test_unrelated_index_tag_is_not_nifty500(self):
+        """Tagged for some other index: still a candidate pool member."""
+        c = _company(index_membership="BSE500")
+        assert classify_company(c) == "candidate"
+
+
+class TestBuildBseMktcapMap:
+    def test_rupee_values_converted_to_crore_with_codes(self):
         scrips = [
-            _scrip(ticker="NEWCO", name="New Co Ltd",
-                   isin="INE555D01555", mktcap=8.8e14),
-            _scrip(ticker="RELIANCE", name="Reliance Industries Ltd",
-                   isin="INE002A01018", mktcap=1.78e14),
+            _scrip(isin="INE002A01018", mktcap=1.78e14),  # RELIANCE
+            _scrip(ticker="NEWCO", isin="INE555D01555",
+                   scrip_code="543210", mktcap=8.8e12),
+            _scrip(ticker="NOCAP", isin="INE777A01777", mktcap=None),
         ]
-        mcap_map, unit = cli.bse_master_market_caps(scrips)
+        mcap_map, unit = build_bse_mktcap_map(scrips)
         assert unit == "rupee"
-        assert mcap_map["INE555D01555"] == (88_000_000.0, "bse_master")
-        assert mcap_map["NEWCO"] == (88_000_000.0, "bse_master")
-        assert mcap_map[normalise_name("New Co Ltd")] == (
-            88_000_000.0, "bse_master")
-        # RELIANCE's figure is there too (the CLI applies the universe
-        # exclusion itself; the tier is universe-agnostic by design).
-        assert mcap_map["INE002A01018"][1] == "bse_master"
+        assert mcap_map["INE555D01555"] == (880_000.0, "543210")
+        assert mcap_map["INE002A01018"] == (17_800_000.0, "500325")
+        assert "INE777A01777" not in mcap_map  # no figure, no entry
 
     def test_unresolvable_unit_yields_empty_map(self):
-        cli = self._cli()
-        scrips = [_scrip(ticker="MIDCO", isin="INE111A01111", mktcap=5e11)]
-        mcap_map, unit = cli.bse_master_market_caps(scrips)
-        assert unit is None
-        assert mcap_map == {}
+        scrips = [_scrip(isin="INE002A01018", mktcap=5e11)]  # ambiguous
+        assert build_bse_mktcap_map(scrips) == ({}, None)
+
+    def test_crore_values_pass_through(self):
+        scrips = [
+            _scrip(isin="INE002A01018", mktcap=1.78e7),  # crore scale
+            _scrip(ticker="NEWCO", isin="INE555D01555", mktcap=880_000.0),
+        ]
+        mcap_map, unit = build_bse_mktcap_map(scrips)
+        assert unit == "crore"
+        assert mcap_map["INE555D01555"][0] == 880_000.0
+
+
+class TestRankCompanies:
+    """The database-driven ranking path (CompanyCandidate rows)."""
+
+    def _companies(self):
+        return [
+            _company("c1", "NEWCO", "New Co Ltd", "INE555D01555",
+                     exchange="NSE", bse_code="543210"),
+            _company("c2", "OTHERCO", "Other Co Ltd", "INE666E01666",
+                     exchange="BSE", bse_code=None),
+            _company("c3", "NOISIN", "No Isin Co Ltd", None, exchange="NSE"),
+        ]
+
+    def test_ranks_descending_from_501_with_db_fields(self):
+        mcap = {
+            "INE555D01555": (880_000.0, "bse_master"),
+            "INE666E01666": (420_000.0, "bse_master"),
+            "NOISIN": (90_000.0, "screener.in"),
+        }
+        rows, counts = rank_companies(self._companies(), mcap)
+        assert [r.ticker for r in rows] == ["NEWCO", "OTHERCO", "NOISIN"]
+        assert [r.proposed_rank for r in rows] == [501, 502, 503]
+        assert rows[0].exchange == "NSE"            # DB value, not guessed
+        assert rows[0].bse_scrip_code == "543210"   # DB bse_code wins
+        assert rows[0].company_id == "c1"
+        assert rows[0].current_universe_status == "not_in_nifty500"
+        assert counts == {"ranked": 3, "no_market_cap_available": 0}
+
+    def test_master_scrip_code_enriches_rows_without_one(self):
+        mcap = {"INE666E01666": (420_000.0, "bse_master")}
+        rows, _ = rank_companies(
+            self._companies(), mcap,
+            bse_scrip_codes={"INE666E01666": "777888"},
+        )
+        assert [r.ticker for r in rows] == ["OTHERCO"]
+        assert rows[0].bse_scrip_code == "777888"
+
+    def test_missing_figure_is_counted_not_ranked(self):
+        mcap = {"INE555D01555": (880_000.0, "bse_master")}
+        rows, counts = rank_companies(self._companies(), mcap)
+        assert len(rows) == 1
+        assert counts["no_market_cap_available"] == 2
+
+    def test_limit_truncates_at_rank(self):
+        mcap = {
+            "INE555D01555": (880_000.0, "bse_master"),
+            "INE666E01666": (420_000.0, "bse_master"),
+        }
+        rows, counts = rank_companies(self._companies(), mcap, limit=1)
+        assert rows[0].proposed_rank == 501
+        assert counts == {"ranked": 1, "no_market_cap_available": 1}
 
 
 class TestExclusion:
@@ -325,10 +423,11 @@ class TestReportShape:
         d = rows_to_dicts(rows)[0]
         assert d == {
             "proposed_rank": 501,
+            "company_id": None,
             "ticker": "NEWCO",
             "company_name": "New Co Ltd",
             "isin": "INE555D01555",
-            "exchange": "BSE/NSE",
+            "exchange": "BSE",
             "market_cap_inr_crore": 12_345.6,
             "mcap_source": "screener.in",
             "current_universe_status": "not_in_current_universe",
@@ -344,7 +443,7 @@ class TestReportShape:
         )[0]
         text = to_csv(rows)
         lines = text.strip().splitlines()
-        assert lines[0].startswith("proposed_rank,ticker,company_name,isin")
+        assert lines[0].startswith("proposed_rank,company_id,ticker,company_name,isin")
         assert len(lines) == 2
         assert "501" in lines[1] and "NEWCO" in lines[1] and "INE555D01555" in lines[1]
 
