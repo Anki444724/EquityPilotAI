@@ -49,6 +49,35 @@ class BseScrip:
     isin: str | None
     sector: str | None = None
     industry: str | None = None
+    #: BSE's own market-cap figure, in the unit BSE reports it (undocumented —
+    #: see :func:`calibrate_bse_mktcap`). Raw value, not yet in crore.
+    mktcap: float | None = None
+
+
+def _first(row: Mapping[str, Any], *keys: str) -> Any:
+    """First non-empty value among exact keys, or None.
+
+    BSE's ``ListofScripData`` payload has migrated field spellings over the
+    years (``COMP_NAME`` -> ``Scrip_Name``, mixed case like ``scrip_id`` and
+    ``Mktcap``). Every read therefore tries the current spelling first and
+    falls back to the older ones, so both generations of the master parse.
+    """
+    for key in keys:
+        value = row.get(key)
+        if value is None or value == "":
+            continue
+        return value
+    return None
+
+
+def _to_float(value: Any) -> float | None:
+    """BSE sends numbers and numeric strings (sometimes comma-grouped)."""
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,34 +115,90 @@ class UniverseEntry:
 def parse_bse_master(payload: Iterable[Mapping[str, Any]]) -> list[BseScrip]:
     """BSE ``ListofScripData`` rows -> active equity scrips.
 
-    BSE's field names have drifted across vintages, so every field is read
-    defensively and a row missing both a scrip code and a name is dropped
-    rather than producing a phantom candidate. The master's SYMBOL column
-    (when present) is the exchange ticker; older vintages omit it, and such
-    rows are kept with an empty ticker — they still carry ISIN and name,
-    which is what the downstream matching needs.
+    The current payload generation uses ``SCRIP_CD``, ``Scrip_Name``,
+    ``Status``, ``Segment``, ``ISIN_NUMBER``, ``INDUSTRY``, ``scrip_id`` and
+    ``Mktcap``; earlier generations used all-caps names (``COMP_NAME``,
+    ``SEGMENT``, ``SCRIP_STATUS`` ...). Every field is read current-first
+    with the older spellings as fallback, and a row missing both a scrip
+    code and a name is dropped rather than producing a phantom candidate.
+
+    The exchange ticker is ``SYMBOL`` when present, else ``scrip_id``; rows
+    carrying neither are kept with an empty ticker — they still have ISIN
+    and name, which is what the downstream matching needs.
     """
     out: list[BseScrip] = []
     for row in payload:
-        segment = str(row.get("SEGMENT") or "Equity").strip().lower()
-        status = str(row.get("SCRIP_STATUS") or row.get("STATUS") or "Active").strip().lower()
+        segment = str(_first(row, "Segment", "SEGMENT") or "Equity").strip().lower()
+        status = str(_first(row, "Status", "STATUS", "SCRIP_STATUS") or "Active").strip().lower()
         if segment != "equity" or status != "active":
             continue
-        code = str(row.get("SCRIP_CD") or row.get("SCRIP_CODE") or "").strip()
-        name = str(row.get("COMP_NAME") or row.get("COMPANY_NAME") or "").strip()
+        code = str(_first(row, "SCRIP_CD", "SCRIP_CODE") or "").strip()
+        name = str(_first(row, "Scrip_Name", "COMP_NAME", "COMPANY_NAME") or "").strip()
         if not code or not name:
             continue
-        ticker = str(row.get("SYMBOL") or "").strip().upper()
-        isin = str(row.get("ISIN_NUMBER") or row.get("ISIN") or "").strip().upper() or None
+        ticker = str(_first(row, "SYMBOL", "scrip_id") or "").strip().upper()
+        isin = str(_first(row, "ISIN_NUMBER", "ISIN") or "").strip().upper() or None
         out.append(BseScrip(
             scrip_code=code,
             ticker=ticker,
             name=name,
             isin=isin,
-            sector=str(row.get("BSE_SECTOR") or "").strip() or None,
-            industry=str(row.get("INDUSTRY_NAME") or "").strip() or None,
+            sector=str(_first(row, "BSE_SECTOR") or "").strip() or None,
+            industry=str(_first(row, "INDUSTRY", "INDUSTRY_NAME") or "").strip() or None,
+            mktcap=_to_float(_first(row, "Mktcap", "MKTCAP", "MKT_CAP")),
         ))
     return out
+
+
+#: RELIANCE's ISIN — the calibration reference. It is the largest
+#: Indian-listed company, whose total market cap sits between 5e13 and 5e15
+#: rupees (5e5..5e7 crore) for any plausible date, far from the boundary
+#: between the two candidate units.
+_RELIANCE_ISIN = "INE002A01018"
+#: The two candidate units are unambiguously separated: above 1e12 only
+#: absolute rupees are possible for the market leader, and at or below 1e9
+#: only crore is.
+_RUPEE_FLOOR = 1e12
+_CRORE_CEILING = 1e9
+
+
+def calibrate_bse_mktcap(
+    scrips: Sequence[BseScrip],
+) -> tuple[str | None, float]:
+    """Resolve the unit of BSE's undocumented ``Mktcap`` field.
+
+    Returns ``(unit, factor_to_crore)`` — ``("rupee", 1e-7)``,
+    ``("crore", 1.0)`` or ``(None, 0.0)`` when the unit cannot be told
+    apart. The check runs against RELIANCE when the master carries it,
+    else against the scrip with the largest figure (the market leader is
+    still far from the unit boundary).
+
+    Why calibrate instead of assuming: BSE has migrated this API's field
+    spellings before, and the unit is not documented anywhere; a wrong
+    assumption would silently rank the entire universe 1e7 off. The
+    reference magnitude is stable across market cycles, which is exactly
+    the property a unit check needs.
+    """
+    reference: float | None = None
+    for scrip in scrips:
+        if scrip.isin == _RELIANCE_ISIN and scrip.mktcap:
+            reference = scrip.mktcap
+            break
+    if reference is None:
+        leader = max(
+            (s.mktcap for s in scrips if s.mktcap), default=None,
+        )
+        if leader is not None and leader > 1e11:
+            # A market leader at 1e11+ cannot be crore (that would be the
+            # most valuable company on earth); it is rupees.
+            reference = leader
+    if reference is None:
+        return None, 0.0
+    if reference > _RUPEE_FLOOR:
+        return "rupee", 1e-7
+    if reference <= _CRORE_CEILING:
+        return "crore", 1.0
+    return None, 0.0
 
 
 # ---------------------------------------------------------------------------

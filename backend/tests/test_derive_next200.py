@@ -10,15 +10,17 @@ from __future__ import annotations
 import pytest
 
 from app.services.universe.next200 import (
-    BseScrip, UniverseEntry, classify, normalise_name, parse_bse_master,
-    rank_candidates, rows_to_dicts, to_csv, to_json, universe_sets,
+    BseScrip, UniverseEntry, calibrate_bse_mktcap, classify, normalise_name,
+    parse_bse_master, rank_candidates, rows_to_dicts, to_csv, to_json,
+    universe_sets,
 )
 
 
 def _scrip(scrip_code="500325", ticker="RELIANCE", name="Reliance Industries Ltd",
-           isin="INE002A01018", sector="Oil Gas & Consumable Fuels") -> BseScrip:
+           isin="INE002A01018", sector="Oil Gas & Consumable Fuels",
+           mktcap=None) -> BseScrip:
     return BseScrip(scrip_code=scrip_code, ticker=ticker, name=name,
-                    isin=isin, sector=sector)
+                    isin=isin, sector=sector, mktcap=mktcap)
 
 
 class TestParseBseMaster:
@@ -54,6 +56,155 @@ class TestParseBseMaster:
              "SCRIP_STATUS": "Active"},
             {"SCRIP_CD": "5", "SEGMENT": "Equity", "SCRIP_STATUS": "Active"},
         ]) == []
+
+
+class TestParseActualBsePayload:
+    """The field names the live BSE API actually returns.
+
+    Production run returned 0 scrips because the parser looked for
+    ``COMP_NAME``/``COMPANY_NAME`` while the current payload generation
+    sends ``Scrip_Name`` — every row failed the name check and was
+    discarded. These tests pin the real shape.
+    """
+
+    ACTUAL_ROW = {
+        "SCRIP_CD": "500325",
+        "Scrip_Name": "Reliance Industries Ltd",
+        "Status": "Active",
+        "Segment": "Equity",
+        "ISIN_NUMBER": "INE002A01018",
+        "INDUSTRY": "Petroleum Products",
+        "scrip_id": "RELIANCE",
+        "Mktcap": 177817559000000.0,
+    }
+
+    def test_actual_fields_parse(self):
+        [scrip] = parse_bse_master([self.ACTUAL_ROW])
+        assert scrip.scrip_code == "500325"
+        assert scrip.name == "Reliance Industries Ltd"
+        assert scrip.isin == "INE002A01018"
+        assert scrip.ticker == "RELIANCE"          # from scrip_id
+        assert scrip.industry == "Petroleum Products"
+        assert scrip.mktcap == 177817559000000.0
+
+    def test_mktcap_accepts_comma_grouped_strings(self):
+        row = dict(self.ACTUAL_ROW, Mktcap="1,77,817,559,000,000.00")
+        assert parse_bse_master([row])[0].mktcap == 177817559000000.0
+
+    def test_mktcap_missing_is_none(self):
+        row = {k: v for k, v in self.ACTUAL_ROW.items() if k != "Mktcap"}
+        assert parse_bse_master([row])[0].mktcap is None
+
+    def test_symbol_wins_over_scrip_id(self):
+        row = dict(self.ACTUAL_ROW, SYMBOL="REL")
+        assert parse_bse_master([row])[0].ticker == "REL"
+
+    def test_debt_segment_filtered_with_actual_names(self):
+        row = dict(self.ACTUAL_ROW, Segment="Debt", Status="Active")
+        assert parse_bse_master([row]) == []
+
+    def test_delisted_status_filtered_with_actual_names(self):
+        row = dict(self.ACTUAL_ROW, Status="Delisted")
+        assert parse_bse_master([row]) == []
+
+    def test_old_all_caps_payload_still_parses(self):
+        """Backward compatibility with the pre-migration field names."""
+        legacy = {
+            "SCRIP_CD": "1234",
+            "COMP_NAME": "Legacy Co Ltd",
+            "SYMBOL": "LEGACY",
+            "SEGMENT": "Equity",
+            "SCRIP_STATUS": "Active",
+            "ISIN_NUMBER": "INE123A01012",
+            "BSE_SECTOR": "Chemicals",
+            "INDUSTRY_NAME": "Speciality Chemicals",
+        }
+        [scrip] = parse_bse_master([legacy])
+        assert scrip.name == "Legacy Co Ltd"
+        assert scrip.ticker == "LEGACY"
+        assert scrip.sector == "Chemicals"
+        assert scrip.industry == "Speciality Chemicals"
+        assert scrip.mktcap is None
+
+
+class TestCalibrateBseMktcap:
+    """The Mktcap unit is undocumented — the calibration must be right."""
+
+    def test_rupee_scale_detected(self):
+        scrips = [
+            _scrip(isin="INE002A01018", mktcap=1.78e14),  # ~₹17.8 lakh cr
+        ]
+        assert calibrate_bse_mktcap(scrips) == ("rupee", 1e-7)
+
+    def test_crore_scale_detected(self):
+        scrips = [
+            _scrip(isin="INE002A01018", mktcap=1.78e7),  # 17.8 lakh crore
+        ]
+        assert calibrate_bse_mktcap(scrips) == ("crore", 1.0)
+
+    def test_missing_reference_falls_back_to_market_leader(self):
+        # No RELIANCE row, but the biggest scrip is far beyond the unit
+        # boundary, so rupees are still the only consistent unit.
+        scrips = [
+            _scrip(ticker="BIGCO", isin="INE999A01999", mktcap=2.5e14),
+            _scrip(ticker="SMALL", isin="INE000A01000", mktcap=3e11),
+        ]
+        assert calibrate_bse_mktcap(scrips) == ("rupee", 1e-7)
+
+    def test_no_figures_at_all(self):
+        scrips = [_scrip(), _scrip(ticker="B", isin=None)]
+        assert calibrate_bse_mktcap(scrips) == (None, 0.0)
+
+    def test_ambiguous_reference_is_refused_not_guessed(self):
+        # 1e9 < x <= 1e12: could be a small company in rupees or a big one
+        # in crore — the unit must not be assumed.
+        scrips = [
+            _scrip(isin="INE002A01018", mktcap=5e11),
+        ]
+        assert calibrate_bse_mktcap(scrips) == (None, 0.0)
+
+
+class TestCliBseMcapTier:
+    """The CLI tier that turns the master's own Mktcap into the mcap map."""
+
+    @staticmethod
+    def _cli():
+        import importlib.util
+        import os
+
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "deploy",
+            "derive_next_200.py",
+        )
+        spec = importlib.util.spec_from_file_location("derive_next_200", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_keyed_by_isin_ticker_and_name(self):
+        cli = self._cli()
+        scrips = [
+            _scrip(ticker="NEWCO", name="New Co Ltd",
+                   isin="INE555D01555", mktcap=8.8e14),
+            _scrip(ticker="RELIANCE", name="Reliance Industries Ltd",
+                   isin="INE002A01018", mktcap=1.78e14),
+        ]
+        mcap_map, unit = cli.bse_master_market_caps(scrips)
+        assert unit == "rupee"
+        assert mcap_map["INE555D01555"] == (88_000_000.0, "bse_master")
+        assert mcap_map["NEWCO"] == (88_000_000.0, "bse_master")
+        assert mcap_map[normalise_name("New Co Ltd")] == (
+            88_000_000.0, "bse_master")
+        # RELIANCE's figure is there too (the CLI applies the universe
+        # exclusion itself; the tier is universe-agnostic by design).
+        assert mcap_map["INE002A01018"][1] == "bse_master"
+
+    def test_unresolvable_unit_yields_empty_map(self):
+        cli = self._cli()
+        scrips = [_scrip(ticker="MIDCO", isin="INE111A01111", mktcap=5e11)]
+        mcap_map, unit = cli.bse_master_market_caps(scrips)
+        assert unit is None
+        assert mcap_map == {}
 
 
 class TestExclusion:

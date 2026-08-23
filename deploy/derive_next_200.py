@@ -52,9 +52,9 @@ for _module in importlib.__import__("pkgutil").iter_modules(_models.__path__):
     importlib.import_module(f"app.models.{_module.name}")
 
 from app.services.universe.next200 import (  # noqa: E402
-    BseScrip, CandidateRow, UniverseEntry, classify, normalise_name,
-    parse_bse_master, rank_candidates, rows_to_dicts, to_csv, to_json,
-    universe_sets,
+    BseScrip, CandidateRow, UniverseEntry, calibrate_bse_mktcap, classify,
+    normalise_name, parse_bse_master, rank_candidates, rows_to_dicts,
+    to_csv, to_json, universe_sets,
 )
 
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -95,6 +95,41 @@ def load_universe(url: str) -> list[UniverseEntry]:
     engine.dispose()
     return [UniverseEntry(ticker=r[0] or "", isin=r[1] or None,
                           listing_status=r[2]) for r in rows]
+
+
+def bse_master_market_caps(
+    scrips: list[BseScrip],
+) -> tuple[dict[str, tuple[float, str]], str | None]:
+    """Tier 0: the exchange's own ``Mktcap`` figure, already in hand.
+
+    Free (no extra call) and authoritative (the listing exchange reports
+    its own companies). The unit is undocumented, so it is calibrated
+    first (see ``calibrate_bse_mktcap``); when the unit cannot be resolved
+    the tier is skipped rather than used with a guessed unit, and the
+    fallback tiers run instead.
+
+    Returns ``(mcap_map, unit)`` where the map is keyed by ISIN, ticker and
+    normalised name to ``(inr_crore, "bse_master")``.
+    """
+    unit, factor = calibrate_bse_mktcap(scrips)
+    if unit is None:
+        print("    0. BSE master Mktcap: unit could not be calibrated "
+              "(no RELIANCE reference) — skipping this tier", file=sys.stderr)
+        return {}, None
+    out: dict[str, tuple[float, str]] = {}
+    for scrip in scrips:
+        if not scrip.mktcap or scrip.mktcap <= 0:
+            continue
+        entry = (round(scrip.mktcap * factor, 1), "bse_master")
+        keys = [k for k in (
+            (scrip.isin or "").upper(), scrip.ticker,
+            normalise_name(scrip.name),
+        ) if k]
+        for key in keys:
+            out.setdefault(key, entry)
+    print(f"    0. BSE master Mktcap: unit resolved as '{unit}', "
+          f"{len(out)} identifiers with a figure", file=sys.stderr)
+    return out, unit
 
 
 def fmp_screener_market_caps(key: str) -> dict[str, tuple[float, str]]:
@@ -254,14 +289,68 @@ def fmp_profile_market_caps(scrips: list[BseScrip], key: str,
     return out
 
 
+def resolve_out_dir(cli_out: str | None) -> str:
+    """Pick a writable output directory.
+
+    The container's application directory (``/app``) is read-only on AWS,
+    so the previous default — a path next to this script — failed at
+    write time, *after* the run had already fetched everything. Resolution
+    order: explicit ``--out`` (must be writable — a failed explicit path is
+    an error, not a fallback), ``$UNIVERSE_REPORT_DIR``, ``./universe_725_
+    investigation`` under the working directory, then
+    ``/tmp/universe_725_investigation`` as the last safe in-container
+    destination. For a report that must survive container rebuilds, pass a
+    host-mounted path explicitly (e.g. ``/app/backups/universe_725_
+    investigation`` on the AWS compose deployment, which mounts a volume).
+    """
+    def writable(path: str) -> bool:
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe = os.path.join(path, ".write_probe")
+            with open(probe, "w") as fh:
+                fh.write("ok")
+            os.remove(probe)
+            return True
+        except OSError:
+            return False
+
+    if cli_out:
+        if writable(cli_out):
+            return cli_out
+        raise SystemExit(
+            f"--out directory {cli_out!r} is not writable "
+            "(the container's /app is read-only; use a host-mounted path "
+            "such as /app/backups/universe_725_investigation, or /tmp)"
+        )
+
+    candidates = []
+    env_dir = os.environ.get("UNIVERSE_REPORT_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+    candidates.append(os.path.join(os.getcwd(), "universe_725_investigation"))
+    candidates.append("/tmp/universe_725_investigation")
+
+    for candidate in candidates:
+        if writable(candidate):
+            if candidate != candidates[-1]:
+                print(f"    output directory: {candidate}", file=sys.stderr)
+            return candidate
+    raise SystemExit("no writable output directory found (tried: "
+                     + ", ".join(candidates) + ")")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--limit", type=int, default=200,
                         help="how many ranked candidates to report (default 200)")
-    parser.add_argument("--out", default=os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..", "universe_725_investigation"),
-        help="output directory (default: repo universe_725_investigation/)")
+    parser.add_argument("--out", default=None,
+                        help="output directory. Default: $UNIVERSE_REPORT_DIR, "
+                             "else ./universe_725_investigation under the "
+                             "current working directory, falling back to "
+                             "/tmp/universe_725_investigation if neither is "
+                             "writable (the container's /app is read-only; "
+                             "on AWS prefer a host-mounted path such as "
+                             "/app/backups/universe_725_investigation)")
     parser.add_argument("--report-only", action="store_true",
                         help="exclusion classification only — no market cap fetch")
     parser.add_argument("--max-screener", type=int, default=20000,
@@ -274,6 +363,10 @@ def main() -> int:
     if not url:
         print("DATABASE_URL is not set", file=sys.stderr)
         return 2
+
+    # Fail fast on an unwritable output path — before the BSE fetch and the
+    # hour-long market-cap sweep, not after them.
+    out_dir = resolve_out_dir(args.out)
 
     print("1/4 fetching BSE active-scrip master ...")
     scrips = fetch_bse_master()
@@ -301,13 +394,17 @@ def main() -> int:
     else:
         print("3/4 fetching market caps ...")
         mcap_map: dict[str, tuple[float, str]] = {}
+        # Tier 0: the exchange's own figure, already in hand — no extra
+        # calls. Lower tiers only fill the gaps it leaves.
+        mcap_map, _bse_unit = bse_master_market_caps(scrips)
         key = os.environ.get("FMP_API_KEY", "").strip()
         if key and key != "FMP_API_KEY":
-            print("    a. FMP screener (bulk) ...")
-            mcap_map = fmp_screener_market_caps(key)
+            print("    a. FMP screener (bulk, fills BSE gaps) ...")
+            for _k, _v in fmp_screener_market_caps(key).items():
+                mcap_map.setdefault(_k, _v)
             print(f"       {len(mcap_map)} identifiers with market cap")
         print(f"    b. screener.in per candidate "
-              f"({len(candidates)} candidates) ...")
+              f"({len(candidates)} candidates, gaps only) ...")
         mcap_map = screener_market_caps(candidates, mcap_map, args.max_screener)
         if key and args.max_fmp_profile:
             print(f"    c. FMP profile (up to {args.max_fmp_profile}) ...")
@@ -318,8 +415,6 @@ def main() -> int:
         scrips, isins, tickers, mcap_map, limit=args.limit,
     )
 
-    out_dir = os.path.abspath(args.out)
-    os.makedirs(out_dir, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     csv_path = os.path.join(out_dir, f"next200_candidates_{stamp}.csv")
     json_path = os.path.join(out_dir, f"next200_candidates_{stamp}.json")
