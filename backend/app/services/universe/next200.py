@@ -309,6 +309,76 @@ def build_bse_mktcap_map(
     return out, unit
 
 
+def build_bse_identity_maps(
+    scrips: Sequence[BseScrip],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Authoritative BSE-master identity maps: (symbol->ISIN, code->ISIN).
+
+    Production holds a dual-listed security as two ``companies`` rows where
+    the NSE row carries a **NULL** ISIN and only the BSE row carries the real
+    one — so ISIN alone cannot join the two rows. The BSE master, already
+    fetched for market cap, carries the authoritative join: each scrip's
+    ``SYMBOL``/``scrip_id`` (the exchange ticker) and ``SCRIP_CD`` (the BSE
+    scrip code) both map to its ``ISIN_NUMBER``. These exact-key maps resolve
+    a NULL-ISIN NSE row to the same security as its BSE listing without any
+    fuzzy name matching.
+
+    Returns ``(symbol_to_isin, scrip_code_to_isin)``; only scrips that carry
+    an ISIN contribute, and the first mapping wins on a (non-existent)
+    symbol/code collision.
+    """
+    symbol_to_isin: dict[str, str] = {}
+    scrip_code_to_isin: dict[str, str] = {}
+    for scrip in scrips:
+        isin = (scrip.isin or "").strip().upper()
+        if not isin:
+            continue
+        symbol = (scrip.ticker or "").strip().upper()
+        if symbol:
+            symbol_to_isin.setdefault(symbol, isin)
+        code = (scrip.scrip_code or "").strip()
+        if code:
+            scrip_code_to_isin.setdefault(code, isin)
+    return symbol_to_isin, scrip_code_to_isin
+
+
+def resolve_identity(
+    cand: Any,
+    symbol_to_isin: Mapping[str, str] | None = None,
+    scrip_code_to_isin: Mapping[str, str] | None = None,
+) -> str | None:
+    """The authoritative ISIN for a candidate, resolved via the BSE master.
+
+    Resolution order:
+
+    1. The row's own ISIN (the primary identity, when present).
+    2. The row's BSE scrip code looked up in the master's code->ISIN map —
+       this catches a row that stores the BSE code but not the ISIN.
+    3. The row's ticker looked up in the master's symbol->ISIN map — this
+       catches the production case of a **NULL-ISIN NSE row** whose ticker is
+       the BSE master's symbol for a security whose ISIN lives on the BSE
+       row.
+
+    The resolved ISIN is used for **deduplication and market-cap matching
+    only — it is never written back to the database**. Returns ``None`` when
+    the row cannot be tied to an ISIN (caller falls back to ticker/name).
+    Exact-key lookups only; there is no fuzzy or name-similarity matching, so
+    genuinely different securities are never merged on a near-name.
+    """
+    isin = (getattr(cand, "isin", None) or "").strip().upper()
+    if isin:
+        return isin
+    if scrip_code_to_isin:
+        code = (getattr(cand, "bse_code", None) or "").strip()
+        if code and code in scrip_code_to_isin:
+            return scrip_code_to_isin[code]
+    if symbol_to_isin:
+        ticker = (getattr(cand, "ticker", None) or "").strip().upper()
+        if ticker and ticker in symbol_to_isin:
+            return symbol_to_isin[ticker]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Universe exclusion
 # ---------------------------------------------------------------------------
@@ -367,18 +437,110 @@ def normalise_name(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", (name or "").upper())
 
 
-def _identity_key(cand: Any) -> str:
+#: Legal-form tokens the two exchanges record differently for the same
+#: security ("... Limited" on NSE vs "... Ltd" on BSE). Stripped from the
+#: END of the name before exact same-security matching.
+_LEGAL_SUFFIXES = frozenset({"LIMITED", "LTD", "LLP", "PLC", "PVT", "COMPANY"})
+#: Leading articles that one exchange records and the other drops
+#: ("The South Indian Bank Limited" vs "South Indian Bank Ltd").
+_LEADING_ARTICLES = frozenset({"THE", "AN", "A"})
+
+
+def normalize_legal_name(name: str) -> str:
+    """Canonical company-name key for EXACT same-security matching.
+
+    Uppercases, keeps alphanumerics, and normalises the legal-form and
+    leading-article variation the two exchanges record differently for the
+    same security: "The South Indian Bank Limited" (NSE) and "South Indian
+    Bank Ltd" (BSE) both reduce to "SOUTHINDIANBANK"; "Cupid Limited" and
+    "Cupid Ltd" both reduce to "CUPID"; "INDO-MIM Limited" and "INDO-MIM
+    Ltd" both reduce to "INDOMIM".
+
+    This is an exact canonical key, **not** a similarity score: two
+    genuinely different companies with different names ("Vedanta" vs
+    "Vedanta Aluminium Metal") reduce to different keys and are never
+    merged on it.
+    """
+    words = re.findall(r"[A-Z0-9]+", (name or "").upper())
+    while words and words[0] in _LEADING_ARTICLES:
+        words = words[1:]
+    while words and words[-1] in _LEGAL_SUFFIXES:
+        words = words[:-1]
+    return "".join(words)
+
+
+def _build_name_isin_index(
+    candidates: Sequence[Any],
+    symbol_to_isin: Mapping[str, str] | None,
+    scrip_code_to_isin: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """normalized-name -> ISIN, for names mapping to exactly one ISIN.
+
+    Only candidates that already resolve to an ISIN (own ISIN, or the BSE
+    master's code/symbol maps) seed this index. A name that maps to two or
+    more distinct ISINs is a data collision and is excluded, so a NULL-ISIN
+    row is never merged on an ambiguous name. This index is what lets an
+    NSE NULL-ISIN row be reconciled to its ISIN-bearing BSE row by exact
+    (legal-suffix-normalised) company name.
+    """
+    from collections import defaultdict
+
+    name_to_isins: dict[str, set[str]] = defaultdict(set)
+    for cand in candidates:
+        isin = resolve_identity(cand, symbol_to_isin, scrip_code_to_isin)
+        if not isin:
+            continue
+        name = normalize_legal_name(getattr(cand, "name", None) or "")
+        if name:
+            name_to_isins[name].add(isin)
+    return {name: isins.pop() for name, isins in name_to_isins.items()
+            if len(isins) == 1}
+
+
+def _full_isin(
+    cand: Any,
+    symbol_to_isin: Mapping[str, str] | None,
+    scrip_code_to_isin: Mapping[str, str] | None,
+    name_to_isin: Mapping[str, str] | None,
+) -> str | None:
+    """A candidate's security-level ISIN, two stages.
+
+    Stage 1 (explicit identity): the row's own ISIN, else the BSE master's
+    scrip-code / symbol maps. Stage 2 (name reconciliation): for a row that
+    still has no ISIN, an EXACT legal-suffix-normalised company-name match to
+    a single ISIN-bearing security. Stage 2 is what joins the production NSE
+    NULL-ISIN row to its ISIN-bearing BSE row when the master's symbol/code
+    maps do not connect them. The result is for dedupe and market-cap
+    matching only — never a database write.
+    """
+    isin = resolve_identity(cand, symbol_to_isin, scrip_code_to_isin)
+    if isin:
+        return isin
+    if name_to_isin:
+        name = normalize_legal_name(getattr(cand, "name", None) or "")
+        if name:
+            return name_to_isin.get(name)
+    return None
+
+
+def _identity_key(
+    cand: Any,
+    symbol_to_isin: Mapping[str, str] | None = None,
+    scrip_code_to_isin: Mapping[str, str] | None = None,
+    name_to_isin: Mapping[str, str] | None = None,
+) -> str:
     """Identity of a candidate security: ISIN first, then ticker, then name.
 
-    ISIN is the security's legal identifier and the **primary** identity —
-    a dual-listed company keeps one ISIN across NSE and BSE, so the two
-    listing rows of one security must collapse to a single candidate.
-    Without an ISIN we fall back to the uppercase ticker, then the
-    normalised name; those are weaker (two distinct ISIN-less companies
-    could share a ticker) but are the best available signal, and only
-    ISIN-less rows ever reach them.
+    ISIN is the security's legal identifier and the **primary** identity.
+    When the row's own ISIN is NULL, :func:`_full_isin` recovers the
+    security's ISIN from the BSE master (scrip code, then exchange symbol)
+    and, failing that, from an exact legal-suffix-normalised company-name
+    match to a single ISIN-bearing security — so a NULL-ISIN NSE row and its
+    ISIN-bearing BSE row collapse to the same key. Only when no ISIN can be
+    established do we fall back to the uppercase ticker, then the normalised
+    name.
     """
-    isin = (getattr(cand, "isin", None) or "").strip().upper()
+    isin = _full_isin(cand, symbol_to_isin, scrip_code_to_isin, name_to_isin)
     if isin:
         return f"ISIN:{isin}"
     ticker = (getattr(cand, "ticker", None) or "").strip().upper()
@@ -388,15 +550,23 @@ def _identity_key(cand: Any) -> str:
     return f"NAME:{name}" if name else "NO-IDENTITY"
 
 
-def _representative_company(members: list[CompanyCandidate]) -> CompanyCandidate:
+def _representative_company(
+    members: list[CompanyCandidate],
+    resolved_isin: str | None = None,
+) -> CompanyCandidate:
     """Merge the NSE/BSE rows of one security into a complete representative.
 
     The anchor is the most complete member, whose ``company_id`` is the one
     a later backfill maps onto. Fields are taken from the first member that
     carries them, and the exchange is unified: an NSE row plus a BSE row for
-    the same ISIN becomes ``NSE/BSE``. This is what keeps the representative
-    carrying the correct ticker, exchange and BSE scrip code even when those
-    live on different rows.
+    the same security becomes ``NSE/BSE``. This is what keeps the
+    representative carrying the correct ticker, exchange and BSE scrip code
+    even when those live on different rows.
+
+    ``resolved_isin`` is the BSE-master-resolved ISIN, used only when no
+    member physically carries one (e.g. both rows NULL-ISIN but tied to the
+    same security via the master). It is in-memory for the report only —
+    never written to the database.
     """
     def completeness(m: CompanyCandidate) -> int:
         return sum(1 for v in (
@@ -419,14 +589,26 @@ def _representative_company(members: list[CompanyCandidate]) -> CompanyCandidate
     else:
         exchange = "/".join(parts) if parts else None
 
+    # The dual-listed pair stores the NSE row's ticker as the exchange symbol
+    # ("VAML") and the BSE row's ticker as the numeric scrip code ("544780").
+    # Prefer a real symbol (non-numeric) for the representative ticker, and
+    # recover the BSE scrip code from an explicit bse_code else a numeric
+    # ticker, so the report carries both identifiers correctly.
+    tickers = [m.ticker.strip() for m in members if (m.ticker or "").strip()]
+    symbol = next((t for t in tickers if not t.isdigit()), None)
+    ticker = symbol or (tickers[0] if tickers else anchor.ticker)
+    bse_code = next((m.bse_code.strip() for m in members
+                     if (m.bse_code or "").strip()), None)
+    if not bse_code:
+        bse_code = next((t for t in tickers if t.isdigit()), None)
+
     return CompanyCandidate(
         company_id=anchor.company_id,
-        ticker=next((m.ticker for m in members if (m.ticker or "").strip()),
-                    anchor.ticker),
+        ticker=ticker,
         name=next((m.name for m in members if (m.name or "").strip()),
                   anchor.name),
         isin=next((m.isin for m in members if (m.isin or "").strip()),
-                  anchor.isin),
+                  anchor.isin or resolved_isin),
         exchange=exchange,
         listing_status=next((m.listing_status for m in members
                              if (m.listing_status or "").strip()), "active"),
@@ -436,42 +618,63 @@ def _representative_company(members: list[CompanyCandidate]) -> CompanyCandidate
                        if (m.currency or "").strip()), None),
         sector=next((m.sector for m in members if (m.sector or "").strip()),
                     None),
-        bse_code=next((m.bse_code for m in members if (m.bse_code or "").strip()),
-                      None),
+        bse_code=bse_code,
     )
 
 
-def _merge_same_security(members: list[Any]) -> Any:
+def _merge_same_security(
+    members: list[Any],
+    symbol_to_isin: Mapping[str, str] | None = None,
+    scrip_code_to_isin: Mapping[str, str] | None = None,
+    name_to_isin: Mapping[str, str] | None = None,
+) -> Any:
     """One representative for several rows of the same security.
 
     ``CompanyCandidate`` rows (the database shape) are field-merged so the
     representative keeps the best ticker, exchange and BSE scrip code even
-    when those live on different rows. Other shapes keep their most
-    informative member — the BSE master is one row per scrip, so this is a
-    guard, not an expected path.
+    when those live on different rows, and carries the security-level ISIN
+    (own, BSE-master-resolved, or name-reconciled) when no member physically
+    has one. Other shapes keep their most informative member — the BSE master
+    is one row per scrip, so this is a guard, not an expected path.
     """
     if all(isinstance(m, CompanyCandidate) for m in members):
-        return _representative_company(members)
+        resolved = _full_isin(members[0], symbol_to_isin,
+                              scrip_code_to_isin, name_to_isin)
+        return _representative_company(members, resolved_isin=resolved)
     return next((m for m in members if (getattr(m, "ticker", "") or "").strip()),
                 members[0])
 
 
-def dedupe_candidates(candidates: Sequence[Any]) -> list[Any]:
+def dedupe_candidates(
+    candidates: Sequence[Any],
+    symbol_to_isin: Mapping[str, str] | None = None,
+    scrip_code_to_isin: Mapping[str, str] | None = None,
+) -> list[Any]:
     """Collapse same-security rows into one representative, order-preserving.
 
     The ``companies`` table can hold a dual-listed security twice — an NSE
-    row and a BSE row for the same ISIN (or two rows sharing a ticker when
-    the ISIN is missing). Ranking both would let one company occupy two of
-    the 200 slots. This groups by :func:`_identity_key` (ISIN primary) and
-    keeps a single representative per security.
+    row and a BSE row for the same ISIN, and in production the NSE row often
+    carries a **NULL** ISIN while the BSE row carries the real one (and the
+    BSE row's ticker is the numeric scrip code, not a symbol, so ISIN alone
+    cannot join them). Ranking both would let one company occupy two of the
+    200 slots.
+
+    This groups by :func:`_identity_key`, where the security-level ISIN is
+    recovered for a NULL-ISIN row from (1) the BSE master's scrip-code /
+    symbol maps and, failing that, (2) an exact legal-suffix-normalised
+    company-name match to a single ISIN-bearing security. A single
+    representative is kept per security.
 
     Pure and order-preserving: the first group encountered keeps its
     position, so ranking order is otherwise unaffected.
     """
+    name_to_isin = _build_name_isin_index(
+        candidates, symbol_to_isin, scrip_code_to_isin)
     groups: dict[str, list[Any]] = {}
     order: list[str] = []
     for cand in candidates:
-        key = _identity_key(cand)
+        key = _identity_key(cand, symbol_to_isin, scrip_code_to_isin,
+                            name_to_isin)
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -481,7 +684,8 @@ def dedupe_candidates(candidates: Sequence[Any]) -> list[Any]:
     for key in order:
         members = groups[key]
         out.append(members[0] if len(members) == 1
-                   else _merge_same_security(members))
+                   else _merge_same_security(members, symbol_to_isin,
+                                             scrip_code_to_isin, name_to_isin))
     return out
 
 
@@ -490,6 +694,8 @@ def rank_companies(
     market_cap_inr_crore: Mapping[str, tuple[float | None, str]],
     *,
     bse_scrip_codes: Mapping[str, str] | None = None,
+    symbol_to_isin: Mapping[str, str] | None = None,
+    scrip_code_to_isin: Mapping[str, str] | None = None,
     limit: int = 200,
     first_rank: int = FIRST_CANDIDATE_RANK,
     universe_label: str = "not_in_nifty500",
@@ -506,17 +712,24 @@ def rank_companies(
     ranked and is counted in the summary instead of being silently ranked
     at zero.
 
+    ``symbol_to_isin`` / ``scrip_code_to_isin`` are the BSE-master identity
+    maps: they let a **NULL-ISIN NSE row** be tied to the same security as
+    its ISIN-bearing BSE row (dedupe) and to the BSE market-cap figure
+    (matching), without any database write. When omitted, identity falls
+    back to the row's own ISIN, then ticker, then name.
+
     Candidates are first collapsed by :func:`dedupe_candidates` so that a
-    dual-listed security (an NSE row and a BSE row for the same ISIN) counts
-    as one company — otherwise one security would occupy two of the 200
-    slots and the proposed ranks 501-700 would carry the same ISIN twice.
+    dual-listed security (an NSE row and a BSE row for the same security)
+    counts as one company — otherwise one security would occupy two of the
+    200 slots and the proposed ranks 501-700 would carry it twice.
 
     Returns ``(rows, counts)`` — rows carry proposed ranks starting at
     ``first_rank`` (501 by default), counts carry ``ranked``,
     ``no_market_cap_available`` (both over unique companies) and
     ``duplicates_collapsed`` (how many extra listing rows were folded away).
     """
-    deduped = dedupe_candidates(candidates)
+    deduped = dedupe_candidates(candidates, symbol_to_isin,
+                                scrip_code_to_isin)
     counts: dict[str, int] = {
         "ranked": 0,
         "no_market_cap_available": 0,
@@ -525,8 +738,14 @@ def rank_companies(
     ranked: list[tuple[Any, float, str]] = []
 
     for cand in deduped:
+        # Market-cap matching stays ISIN-first; the BSE-master-resolved ISIN
+        # is tried before the row's own so a NULL-ISIN NSE row still finds
+        # its BSE figure. Ticker/name remain the secondary-source fallback.
+        resolved = resolve_identity(cand, symbol_to_isin,
+                                    scrip_code_to_isin)
         isin = (getattr(cand, "isin", None) or "").strip().upper()
         keys = [k for k in (
+            resolved,
             isin,
             (getattr(cand, "ticker", None) or "").strip().upper(),
             normalise_name(getattr(cand, "name", None) or ""),
@@ -601,7 +820,6 @@ def rank_candidates(
     )
     counts["candidate"] = len(eligible)
     counts.update(rank_counts)
-    return rows, counts
     return rows, counts
 
 

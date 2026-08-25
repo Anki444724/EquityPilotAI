@@ -67,9 +67,10 @@ for _module in importlib.__import__("pkgutil").iter_modules(_models.__path__):
     importlib.import_module(f"app.models.{_module.name}")
 
 from app.services.universe.next200 import (  # noqa: E402
-    BseScrip, CandidateRow, CompanyCandidate, classify_company,
-    dedupe_candidates, normalise_name, parse_bse_master, rank_companies,
-    to_csv, to_json, build_bse_mktcap_map,
+    BseScrip, CandidateRow, CompanyCandidate, build_bse_identity_maps,
+    build_bse_mktcap_map, classify_company, dedupe_candidates,
+    normalise_name, parse_bse_master, rank_companies, resolve_identity,
+    to_csv, to_json,
 )
 
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -373,8 +374,11 @@ def main() -> int:
                              "on AWS prefer a host-mounted path such as "
                              "/app/backups/universe_725_investigation)")
     parser.add_argument("--report-only", action="store_true",
-                        help="classification/coverage only — no BSE master, "
-                             "no market-cap fetch of any kind")
+                        help="classification + same-security dedupe only — "
+                             "the BSE master is still fetched (read-only) "
+                             "because it is the authoritative identity "
+                             "source, but no market-cap enrichment or "
+                             "ranking is done")
     parser.add_argument("--no-nifty500-check", action="store_true",
                         help="skip the live NSE Nifty 500 cross-check "
                              "(tag-based NIFTY500 exclusion still applies)")
@@ -413,18 +417,37 @@ def main() -> int:
             candidates.append(company)
     print(f"    classification: {status_counts}")
 
-    # A dual-listed security arrives as two rows (an NSE row and a BSE row
-    # for the same ISIN). Collapse them to one company before enrichment and
-    # ranking, or one security would count twice and occupy two of the 200
-    # slots. ISIN is the primary identity; ticker/name are the fallback.
+    # The BSE master is the authoritative identity source and is fetched once
+    # (read-only). A dual-listed security arrives as two rows where the NSE
+    # row often carries a NULL ISIN and only the BSE row carries the real
+    # one, so the master's symbol->ISIN and scrip-code->ISIN maps resolve the
+    # NULL-ISIN NSE row to the same security as its BSE listing — for DEDUPE
+    # and MARKET-CAP MATCHING ONLY, never written back to the database.
+    print("    fetching BSE master (authoritative identity + market cap) ...")
+    bse_scrips = fetch_bse_master()
+    symbol_to_isin, scrip_code_to_isin = build_bse_identity_maps(bse_scrips)
+    bse_map, bse_unit = build_bse_mktcap_map(bse_scrips)
+    bse_scrip_codes = {isin: code for isin, (_amt, code) in bse_map.items()}
+    if bse_unit is None:
+        print("    BSE master Mktcap unit could not be calibrated "
+              "(no RELIANCE reference) — market cap falls to secondary "
+              "sources; identity resolution still uses the master",
+              file=sys.stderr)
+
+    # Collapse same-security rows before enrichment and ranking, or one
+    # security would count twice and occupy two of the 200 slots. ISIN is
+    # the primary identity; the BSE master resolves NULL-ISIN NSE rows to
+    # their BSE listing's ISIN; ticker/name remain the last-resort fallback.
     total_candidates = len(candidates)
-    candidates = dedupe_candidates(candidates)
+    candidates = dedupe_candidates(
+        candidates, symbol_to_isin=symbol_to_isin,
+        scrip_code_to_isin=scrip_code_to_isin,
+    )
     duplicates_collapsed = total_candidates - len(candidates)
     print(f"    deduplicated: {total_candidates} candidate rows -> "
           f"{len(candidates)} unique companies "
           f"({duplicates_collapsed} same-security rows collapsed)")
 
-    bse_unit: str | None = None
     bse_matched = 0
     secondary_matched = 0
     missing_mcap = 0
@@ -432,20 +455,16 @@ def main() -> int:
     rows: list[CandidateRow] = []
 
     if args.report_only:
-        print("    --report-only: no BSE master, no market-cap fetch")
+        print("    --report-only: identity resolved, but no market-cap "
+              "enrichment or ranking")
     else:
         print("4/5 enriching market cap (read-only) ...")
-        # Tier 0: the exchange's own Mktcap, matched by ISIN — no extra
-        # calls beyond the master fetch itself.
-        bse_map, bse_unit = build_bse_mktcap_map(fetch_bse_master())
-        if bse_unit is None:
-            print("    0. BSE master Mktcap: unit could not be calibrated "
-                  "(no RELIANCE reference) — using secondary sources only",
-                  file=sys.stderr)
+        # Tier 0: the exchange's own Mktcap, matched by (resolved) ISIN.
         for cand in candidates:
-            if cand.isin and cand.isin in bse_map:
-                amount, _code = bse_map[cand.isin]
-                mcap_map[cand.isin] = (amount, "bse_master")
+            isin = resolve_identity(cand, symbol_to_isin, scrip_code_to_isin)
+            if isin and isin in bse_map:
+                amount, _code = bse_map[isin]
+                mcap_map[isin] = (amount, "bse_master")
                 bse_matched += 1
         print(f"    0. BSE master Mktcap by ISIN: unit '{bse_unit}', "
               f"{bse_matched}/{len(candidates)} matched")
@@ -470,6 +489,8 @@ def main() -> int:
             if any(
                 k in mcap_map and mcap_map[k][1] != "bse_master"
                 for k in (
+                    resolve_identity(cand, symbol_to_isin,
+                                     scrip_code_to_isin) or "",
                     (cand.isin or "").upper(),
                     (cand.ticker or "").strip().upper(),
                     normalise_name(cand.name),
@@ -481,13 +502,19 @@ def main() -> int:
     print("5/5 ranking (proposed ranks 501-700) and writing report ...")
     if args.report_only:
         rows = []
-        rank_counts = {"ranked": 0, "no_market_cap_available": 0}
+        rank_counts = {"ranked": 0, "no_market_cap_available": 0,
+                       "duplicates_collapsed": duplicates_collapsed}
     else:
         rows, rank_counts = rank_companies(
             candidates, mcap_map, limit=args.limit,
             # Enrich database rows with the master's scrip codes where the
             # DB row carries none of its own.
-            bse_scrip_codes={isin: code for isin, (_amt, code) in bse_map.items()},
+            bse_scrip_codes=bse_scrip_codes,
+            # Resolve NULL-ISIN NSE rows to their BSE security for both
+            # dedupe (already applied above, re-applied here as a guard) and
+            # market-cap matching.
+            symbol_to_isin=symbol_to_isin,
+            scrip_code_to_isin=scrip_code_to_isin,
         )
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")

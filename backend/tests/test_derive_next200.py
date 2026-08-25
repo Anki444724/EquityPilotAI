@@ -10,10 +10,11 @@ from __future__ import annotations
 import pytest
 
 from app.services.universe.next200 import (
-    BseScrip, CompanyCandidate, UniverseEntry, build_bse_mktcap_map,
-    calibrate_bse_mktcap, classify, classify_company, normalise_name,
-    parse_bse_master, rank_candidates, rank_companies, rows_to_dicts,
-    to_csv, to_json, universe_sets,
+    BseScrip, CompanyCandidate, UniverseEntry, build_bse_identity_maps,
+    build_bse_mktcap_map, calibrate_bse_mktcap, classify, classify_company,
+    dedupe_candidates, normalise_name, parse_bse_master, rank_candidates,
+    rank_companies, resolve_identity, rows_to_dicts, to_csv, to_json,
+    universe_sets,
 )
 
 
@@ -403,6 +404,242 @@ class TestDeduplicateSameSecurity:
         # Market cap is still strictly descending.
         caps = [r.market_cap_inr_crore for r in rows]
         assert caps == sorted(caps, reverse=True)
+
+
+class TestBseIdentityResolution:
+    """The production root cause: the NSE row has a NULL ISIN and only the
+    BSE row carries the real one. In production the BSE row's *ticker column*
+    holds the numeric scrip code (544780), not a symbol, and the NSE row's
+    ticker holds the symbol (VAML) — so ISIN->ticker->name dedupe left the
+    pair separate (duplicates_collapsed=0). The fix reconciles the pair via
+    (1) the BSE master's explicit code/symbol -> ISIN maps and/or (2) an exact
+    legal-suffix-normalised company-name match."""
+
+    # (nse_ticker, bse_code, isin, nse_name, bse_name) — confirmed AWS
+    # dual-listed examples. The NSE name and BSE name differ by legal suffix
+    # ("... Limited" vs "... Ltd") and sometimes a leading "The", exactly as
+    # the two exchanges record them.
+    PRODUCTION = [
+        ("VAML", "544780", "INE1CDF01017",
+         "Vedanta Aluminium Metal Limited", "Vedanta Aluminium Metal Ltd"),
+        ("SBIFUNDS", "544829", "INE640G01020",
+         "SBI Funds Management Limited", "SBI Funds Management Ltd"),
+        ("MANIPALHOS", "544847", "INE459N01021",
+         "Manipal Health Enterprises Limited", "Manipal Health Enterprises Ltd"),
+        ("INDOMIM", "544837", "INE084101034",
+         "INDO-MIM Limited", "INDO-MIM Ltd"),
+        ("CUPID", "530843", "INE509F01029",
+         "Cupid Limited", "Cupid Ltd"),
+        ("VIYASH", "512529", "INE807F01027",
+         "Viyash Scientific Limited", "Viyash Scientific Ltd"),
+        ("EDELWEISS", "532922", "INE532F01054",
+         "Edelweiss Financial Services Limited", "Edelweiss Financial Services Ltd"),
+        ("SOUTHBANK", "532218", "INE683A01023",
+         "The South Indian Bank Limited", "South Indian Bank Ltd"),
+        ("METROPOLIS", "542650", "INE112L01020",
+         "Metropolis Healthcare Limited", "Metropolis Healthcare Ltd"),
+    ]
+
+    def _master(self, symbol_is_nse_symbol: bool):
+        """BSE master rows. ``symbol_is_nse_symbol`` controls what the master's
+        SYMBOL/scrip_id field holds: the NSE symbol (VAML) or the BSE code
+        (544780). The production master did NOT connect the NSE row via this
+        field (0 collapsed), so the main dedupe test uses the code form to
+        prove name reconciliation is the deciding mechanism."""
+        scrips = [BseScrip("500325", "RELIANCE", "Reliance Industries Ltd",
+                           "INE002A01018", None, None, 1.78e14)]
+        for i, (nse_ticker, code, isin, _nse_name, bse_name) in \
+                enumerate(self.PRODUCTION):
+            symbol = nse_ticker if symbol_is_nse_symbol else code
+            scrips.append(BseScrip(code, symbol, bse_name, isin, None, None,
+                                   float(1e12 + 1e9 * i)))
+        return scrips
+
+    def _db_rows(self):
+        """The two ``companies`` rows per security, exactly the AWS shape: the
+        NSE row has ticker=symbol and a NULL ISIN; the BSE row has
+        ticker=scrip-code and the real ISIN."""
+        rows = []
+        for nse_ticker, code, isin, nse_name, bse_name in self.PRODUCTION:
+            rows.append(CompanyCandidate(
+                company_id=f"nse-{nse_ticker}", ticker=nse_ticker,
+                name=nse_name, isin=None, exchange="NSE",
+                listing_status="active", currency="INR", bse_code=None))
+            rows.append(CompanyCandidate(
+                company_id=f"bse-{code}", ticker=code, name=bse_name,
+                isin=isin, exchange="BSE", listing_status="active",
+                currency="INR", bse_code=code))
+        return rows
+
+    # -- explicit trusted mapping (BSE master code/symbol -> ISIN) ---------
+
+    def test_identity_maps_built_from_master(self):
+        sym2isin, code2isin = build_bse_identity_maps(self._master(True))
+        assert sym2isin["VAML"] == "INE1CDF01017"
+        assert sym2isin["METROPOLIS"] == "INE112L01020"
+        assert code2isin["544780"] == "INE1CDF01017"
+        assert code2isin["542650"] == "INE112L01020"
+
+    def test_null_isin_nse_row_resolves_via_symbol_map(self):
+        """When the master's symbol field IS the NSE symbol, the NULL-ISIN NSE
+        row resolves through the explicit symbol -> ISIN map (Stage 1)."""
+        sym2isin, code2isin = build_bse_identity_maps(self._master(True))
+        nse = self._db_rows()[0]  # VAML NSE row, isin=None
+        assert nse.isin is None
+        assert resolve_identity(nse, sym2isin, code2isin) == "INE1CDF01017"
+
+    def test_row_with_scrip_code_resolves_via_code_map(self):
+        sym2isin, code2isin = build_bse_identity_maps(self._master(False))
+        row = CompanyCandidate(company_id="x", ticker="544780",
+                               name="Vedanta Aluminium Metal Ltd", isin=None,
+                               exchange="BSE", currency="INR", bse_code="544780")
+        assert resolve_identity(row, sym2isin, code2isin) == "INE1CDF01017"
+
+    def test_physical_isin_wins_over_master(self):
+        sym2isin, code2isin = build_bse_identity_maps(self._master(False))
+        bse = self._db_rows()[1]  # VAML BSE row, isin=INE1CDF01017
+        assert resolve_identity(bse, sym2isin, code2isin) == "INE1CDF01017"
+
+    # -- name reconciliation (the production deciding mechanism) -----------
+
+    def test_master_symbol_code_does_not_connect_nse_row(self):
+        """With the master's symbol field holding the BSE code, the NSE row
+        (ticker=VAML, no bse_code) does NOT resolve via Stage-1 maps — this is
+        the production case where name reconciliation must decide."""
+        sym2isin, code2isin = build_bse_identity_maps(self._master(False))
+        nse = self._db_rows()[0]  # ticker=VAML, isin=None, bse_code=None
+        assert resolve_identity(nse, sym2isin, code2isin) is None
+
+    def test_name_reconciliation_collapses_nse_null_isin_plus_bse_isin(self):
+        """VAML: NSE (NULL ISIN, name '... Limited') + BSE (ISIN, name
+        '... Ltd') collapse to ONE candidate via exact legal-normalised name,
+        even though the master's symbol field does not connect them."""
+        sym2isin, code2isin = build_bse_identity_maps(self._master(False))
+        nse = self._db_rows()[0]
+        bse = self._db_rows()[1]
+        [rep] = dedupe_candidates([nse, bse], sym2isin, code2isin)
+        assert rep.isin == "INE1CDF01017"
+        assert rep.ticker == "VAML"          # the NSE symbol, not the code
+        assert rep.exchange == "NSE/BSE"
+        assert rep.bse_code == "544780"      # recovered from the BSE row
+
+    def test_every_production_example_occupies_exactly_one_rank(self):
+        """VAML/544780, SBIFUNDS/544829, MANIPALHOS/544847, INDOMIM/544837,
+        CUPID/530843, VIYASH/512529, EDELWEISS/532922, SOUTHBANK/532218 and
+        METROPOLIS/542650 each appear EXACTLY ONCE — no NSE/BSE pair appears
+        twice (the AWS verification requirement). Uses the production master
+        (symbol field = code) so name reconciliation is the deciding path."""
+        sym2isin, code2isin = build_bse_identity_maps(self._master(False))
+        bse_map, _unit = build_bse_mktcap_map(self._master(False))
+        mcap = {isin: (amt, "bse_master") for isin, (amt, _c) in bse_map.items()}
+        bse_codes = {isin: code for isin, (_amt, code) in bse_map.items()}
+
+        rows, counts = rank_companies(
+            self._db_rows(), mcap, limit=200,
+            bse_scrip_codes=bse_codes, symbol_to_isin=sym2isin,
+            scrip_code_to_isin=code2isin)
+
+        # 18 rows (9 NSE + 9 BSE) collapse to 9 unique securities.
+        assert len(rows) == 9
+        assert counts["duplicates_collapsed"] == 9
+        assert counts["ranked"] == 9
+
+        # Each production security occupies exactly one rank, by ISIN and by
+        # the NSE ticker (the pair's two rows must not both appear).
+        for nse_ticker, _code, isin, _n, _b in self.PRODUCTION:
+            assert len([r for r in rows if r.isin == isin]) == 1, isin
+            assert [r.ticker for r in rows].count(nse_ticker) == 1, nse_ticker
+
+        # Ranks contiguous from 501; market cap descending.
+        assert [r.proposed_rank for r in rows] == list(range(501, 501 + 9))
+        caps = [r.market_cap_inr_crore for r in rows]
+        assert caps == sorted(caps, reverse=True)
+        # Every representative carries the unified exchange, the NSE symbol as
+        # ticker, the BSE scrip code, and the security-level ISIN.
+        for r in rows:
+            assert r.exchange == "NSE/BSE"
+            assert r.bse_scrip_code
+            assert r.isin and r.isin.startswith("INE")
+            assert not r.ticker.isdigit()  # ticker is a symbol, not a code
+
+    def test_name_reconciliation_handles_the_article_and_suffix_variants(self):
+        """'The South Indian Bank Limited' (NSE) == 'South Indian Bank Ltd'
+        (BSE): leading 'The' + 'Limited'/'Ltd' all normalise away."""
+        from app.services.universe.next200 import normalize_legal_name
+        nse = self._db_rows()[14]   # SOUTHBANK NSE row: "The South Indian Bank Limited"
+        bse = self._db_rows()[15]   # SOUTHBANK BSE row: "South Indian Bank Ltd"
+        assert nse.name == "The South Indian Bank Limited"
+        assert bse.name == "South Indian Bank Ltd"
+        assert normalize_legal_name(nse.name) == normalize_legal_name(bse.name)
+        assert normalize_legal_name(nse.name) == "SOUTHINDIANBANK"
+
+    # -- safety: no false merges ------------------------------------------
+
+    def test_different_securities_not_merged_on_similar_names(self):
+        """Requirement: similar (but not legal-suffix-identical) names with
+        distinct ISINs must NOT merge. 'Vedanta' != 'Vedanta Aluminium
+        Metal' after normalisation, so they stay separate."""
+        a = CompanyCandidate(company_id="a", ticker="VEDAL",
+                             name="Vedanta Limited", isin="INEAAA01001",
+                             exchange="NSE", currency="INR")
+        b = CompanyCandidate(company_id="b", ticker="VEDAN",
+                             name="Vedanta Aluminium Metal Limited",
+                             isin="INEBBB01002", exchange="BSE", currency="INR",
+                             bse_code="999999")
+        rows, counts = rank_companies(
+            [a, b],
+            {"INEAAA01001": (100.0, "bse_master"),
+             "INEBBB01002": (90.0, "bse_master")},
+        )
+        assert len(rows) == 2
+        assert counts["duplicates_collapsed"] == 0
+        assert {r.isin for r in rows} == {"INEAAA01001", "INEBBB01002"}
+
+    def test_single_nse_null_isin_row_stays_null_isin(self):
+        """A lone NSE NULL-ISIN row with no ISIN-bearing same-name counterpart
+        must remain a physical NULL-ISIN row (no ISIN invented)."""
+        lone = CompanyCandidate(company_id="lone", ticker="LONECO",
+                                name="Lone Company Limited", isin=None,
+                                exchange="NSE", currency="INR", bse_code=None)
+        [rep] = dedupe_candidates([lone])
+        assert rep.isin is None
+        assert rep.ticker == "LONECO"
+
+    def test_ambiguous_name_not_merged(self):
+        """If a name maps to two distinct ISINs (a data collision), a
+        NULL-ISIN row with that name must NOT be merged on the ambiguous
+        name."""
+        iso = CompanyCandidate(company_id="x", ticker="X1", name="Dual Name Co",
+                               isin=None, exchange="NSE", currency="INR")
+        a = CompanyCandidate(company_id="a", ticker="A1", name="Dual Name Co",
+                             isin="INEAAA01001", exchange="BSE", currency="INR")
+        b = CompanyCandidate(company_id="b", ticker="B1", name="Dual Name Co",
+                             isin="INEBBB01002", exchange="BSE", currency="INR")
+        # The ISIN-bearing rows keep their own ISINs; the NULL-ISIN row's name
+        # maps to two ISINs, so it must not be reconciled to either.
+        rows = dedupe_candidates([iso, a, b])
+        isins = sorted(r.isin for r in rows if r.isin)
+        assert isins == ["INEAAA01001", "INEBBB01002"]
+        null_rows = [r for r in rows if r.isin is None]
+        assert len(null_rows) == 1  # the lone NULL-ISIN row, unreconciled
+
+    def test_null_isin_row_still_ranked_via_resolved_bse_mcap(self):
+        """A NULL-ISIN NSE row still finds its BSE market cap through the
+        security-level (name-reconciled) ISIN — matching stays ISIN-first."""
+        sym2isin, code2isin = build_bse_identity_maps(self._master(False))
+        bse_map, _unit = build_bse_mktcap_map(self._master(False))
+        mcap = {isin: (amt, "bse_master") for isin, (amt, _c) in bse_map.items()}
+        # Both VAML rows (NSE NULL-ISIN + BSE ISIN) so the name reconciliation
+        # can resolve the NSE row to the BSE ISIN and match its market cap.
+        nse, bse = self._db_rows()[0], self._db_rows()[1]
+        rows, counts = rank_companies(
+            [nse, bse], mcap, symbol_to_isin=sym2isin,
+            scrip_code_to_isin=code2isin)
+        assert counts["ranked"] == 1
+        assert rows[0].market_cap_inr_crore == bse_map["INE1CDF01017"][0]
+        assert rows[0].mcap_source == "bse_master"
+        # The merged representative carries the security-level ISIN.
+        assert rows[0].isin == "INE1CDF01017"
 
 
 class TestExclusion:
