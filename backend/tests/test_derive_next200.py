@@ -278,7 +278,8 @@ class TestRankCompanies:
         assert rows[0].bse_scrip_code == "543210"   # DB bse_code wins
         assert rows[0].company_id == "c1"
         assert rows[0].current_universe_status == "not_in_nifty500"
-        assert counts == {"ranked": 3, "no_market_cap_available": 0}
+        assert counts == {"ranked": 3, "no_market_cap_available": 0,
+                          "duplicates_collapsed": 0}
 
     def test_master_scrip_code_enriches_rows_without_one(self):
         mcap = {"INE666E01666": (420_000.0, "bse_master")}
@@ -302,7 +303,106 @@ class TestRankCompanies:
         }
         rows, counts = rank_companies(self._companies(), mcap, limit=1)
         assert rows[0].proposed_rank == 501
-        assert counts == {"ranked": 1, "no_market_cap_available": 1}
+        assert counts == {"ranked": 1, "no_market_cap_available": 1,
+                          "duplicates_collapsed": 0}
+
+
+class TestDeduplicateSameSecurity:
+    """The production bug: an NSE row and a BSE row for the same ISIN must
+    count as ONE company, or one security occupies two of the 200 slots and
+    the proposed ranks 501-700 carry the same ISIN twice."""
+
+    def test_nse_and_bse_rows_same_isin_collapse_to_one(self):
+        """Two DB rows, one security (same ISIN, different exchange)."""
+        nse = _company("c-nse", "SOMECO", "Some Co Ltd", "INE123A01001",
+                       exchange="NSE", bse_code=None)
+        bse = _company("c-bse", "SOMECO", "Some Co Ltd", "INE123A01001",
+                       exchange="BSE", bse_code="500123")
+        mcap = {"INE123A01001": (500_000.0, "bse_master")}
+        rows, counts = rank_companies([nse, bse], mcap)
+        # One company, one rank — not two.
+        assert len(rows) == 1
+        assert counts["duplicates_collapsed"] == 1
+        assert counts["ranked"] == 1
+        # The representative keeps the correct identity: ISIN, ticker, the
+        # unified exchange, and the BSE scrip code that lived on the BSE row.
+        assert rows[0].isin == "INE123A01001"
+        assert rows[0].ticker == "SOMECO"
+        assert rows[0].exchange == "NSE/BSE"
+        assert rows[0].bse_scrip_code == "500123"
+        assert rows[0].proposed_rank == 501
+
+    def test_isin_is_the_primary_identity_not_ticker(self):
+        """Same ISIN but different tickers across venues is still one
+        security — ISIN wins over ticker."""
+        a = _company("c1", "SOMECO", "Some Co Ltd", "INE123A01001",
+                     exchange="NSE")
+        b = _company("c2", "SOMECO.BSE", "Some Co Ltd", "INE123A01001",
+                     exchange="BSE")
+        mcap = {"INE123A01001": (500_000.0, "bse_master")}
+        rows, counts = rank_companies([a, b], mcap)
+        assert len(rows) == 1
+        assert counts["duplicates_collapsed"] == 1
+
+    def test_no_isin_falls_back_to_ticker(self):
+        """Without an ISIN, two rows sharing a ticker collapse."""
+        a = _company("c1", "TICKERCO", "Ticker Co Ltd", None, exchange="NSE")
+        b = _company("c2", "TICKERCO", "Ticker Co Ltd", None, exchange="BSE")
+        mcap = {"TICKERCO": (200_000.0, "screener.in")}
+        rows, counts = rank_companies([a, b], mcap)
+        assert len(rows) == 1
+        assert counts["duplicates_collapsed"] == 1
+        assert rows[0].isin is None
+        assert rows[0].ticker == "TICKERCO"
+
+    def test_distinct_isins_are_not_merged(self):
+        """Two genuinely different securities must stay separate."""
+        a = _company("c1", "ALPHA", "Alpha Ltd", "INE111A01111", exchange="NSE")
+        b = _company("c2", "BETA", "Beta Ltd", "INE222B02222", exchange="BSE")
+        mcap = {
+            "INE111A01111": (300_000.0, "bse_master"),
+            "INE222B02222": (100_000.0, "bse_master"),
+        }
+        rows, counts = rank_companies([a, b], mcap)
+        assert len(rows) == 2
+        assert counts["duplicates_collapsed"] == 0
+        assert {r.isin for r in rows} == {"INE111A01111", "INE222B02222"}
+
+    def test_200_rows_are_200_unique_identities(self):
+        """The hard guarantee: 300 candidate rows containing 100 duplicated
+        (NSE+BSE) pairs + 100 single rows = 200 unique securities. The output
+        must be exactly 200 rows with 200 unique ISINs, ranks 501-700."""
+        cands = []
+        mcap = {}
+        # 100 securities, each present twice (NSE + BSE), ISINs A0001..A0100
+        for i in range(1, 101):
+            isin = f"INE{i:08d}X"
+            mcap[isin] = (10_000.0 * i, "bse_master")  # descending distinct
+            cands.append(_company(f"nse-{i}", f"CO{i:03d}",
+                                  f"Co {i} Ltd", isin, exchange="NSE",
+                                  bse_code=f"{500000 + i}"))
+            cands.append(_company(f"bse-{i}", f"CO{i:03d}",
+                                  f"Co {i} Ltd", isin, exchange="BSE"))
+        # 100 single-row securities, ISINs B0001..B0100
+        for i in range(1, 101):
+            isin = f"INEB{i:07d}Y"
+            mcap[isin] = (5_000.0 * i, "bse_master")
+            cands.append(_company(f"single-{i}", f"DS{i:03d}",
+                                  f"DS {i} Ltd", isin, exchange="NSE"))
+        assert len(cands) == 300  # 200 unique securities in 300 rows
+
+        rows, counts = rank_companies(cands, mcap, limit=200)
+        # Exactly 200 rows.
+        assert len(rows) == 200
+        # 200 unique ISINs — no security appears twice.
+        assert len({r.isin for r in rows}) == 200
+        # Ranks are exactly 501..700, contiguous, no gaps.
+        assert [r.proposed_rank for r in rows] == list(range(501, 701))
+        # The 100 duplicated securities collapsed away.
+        assert counts["duplicates_collapsed"] == 100
+        # Market cap is still strictly descending.
+        caps = [r.market_cap_inr_crore for r in rows]
+        assert caps == sorted(caps, reverse=True)
 
 
 class TestExclusion:

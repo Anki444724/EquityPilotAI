@@ -68,8 +68,8 @@ for _module in importlib.__import__("pkgutil").iter_modules(_models.__path__):
 
 from app.services.universe.next200 import (  # noqa: E402
     BseScrip, CandidateRow, CompanyCandidate, classify_company,
-    normalise_name, parse_bse_master, rank_companies, to_csv, to_json,
-    build_bse_mktcap_map,
+    dedupe_candidates, normalise_name, parse_bse_master, rank_companies,
+    to_csv, to_json, build_bse_mktcap_map,
 )
 
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -413,6 +413,17 @@ def main() -> int:
             candidates.append(company)
     print(f"    classification: {status_counts}")
 
+    # A dual-listed security arrives as two rows (an NSE row and a BSE row
+    # for the same ISIN). Collapse them to one company before enrichment and
+    # ranking, or one security would count twice and occupy two of the 200
+    # slots. ISIN is the primary identity; ticker/name are the fallback.
+    total_candidates = len(candidates)
+    candidates = dedupe_candidates(candidates)
+    duplicates_collapsed = total_candidates - len(candidates)
+    print(f"    deduplicated: {total_candidates} candidate rows -> "
+          f"{len(candidates)} unique companies "
+          f"({duplicates_collapsed} same-security rows collapsed)")
+
     bse_unit: str | None = None
     bse_matched = 0
     secondary_matched = 0
@@ -490,7 +501,12 @@ def main() -> int:
             status_counts.get("excluded_nifty500_live_list", 0),
         "excluded_not_active": status_counts.get("excluded_not_active", 0),
         "excluded_non_indian": status_counts.get("excluded_non_indian", 0),
-        "total_candidates": len(candidates),
+        "total_candidates": total_candidates,
+        # Same security listed on NSE and BSE is one company: the rows are
+        # collapsed (ISIN primary identity) before enrichment and ranking,
+        # so every count below is over unique companies.
+        "unique_candidates": len(candidates),
+        "duplicates_collapsed": duplicates_collapsed,
         "bse_mktcap_matched": bse_matched,
         "bse_mktcap_unit": bse_unit,
         "secondary_matched": secondary_matched,

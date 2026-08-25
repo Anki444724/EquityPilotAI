@@ -367,6 +367,124 @@ def normalise_name(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "", (name or "").upper())
 
 
+def _identity_key(cand: Any) -> str:
+    """Identity of a candidate security: ISIN first, then ticker, then name.
+
+    ISIN is the security's legal identifier and the **primary** identity —
+    a dual-listed company keeps one ISIN across NSE and BSE, so the two
+    listing rows of one security must collapse to a single candidate.
+    Without an ISIN we fall back to the uppercase ticker, then the
+    normalised name; those are weaker (two distinct ISIN-less companies
+    could share a ticker) but are the best available signal, and only
+    ISIN-less rows ever reach them.
+    """
+    isin = (getattr(cand, "isin", None) or "").strip().upper()
+    if isin:
+        return f"ISIN:{isin}"
+    ticker = (getattr(cand, "ticker", None) or "").strip().upper()
+    if ticker:
+        return f"TICKER:{ticker}"
+    name = normalise_name(getattr(cand, "name", None) or "")
+    return f"NAME:{name}" if name else "NO-IDENTITY"
+
+
+def _representative_company(members: list[CompanyCandidate]) -> CompanyCandidate:
+    """Merge the NSE/BSE rows of one security into a complete representative.
+
+    The anchor is the most complete member, whose ``company_id`` is the one
+    a later backfill maps onto. Fields are taken from the first member that
+    carries them, and the exchange is unified: an NSE row plus a BSE row for
+    the same ISIN becomes ``NSE/BSE``. This is what keeps the representative
+    carrying the correct ticker, exchange and BSE scrip code even when those
+    live on different rows.
+    """
+    def completeness(m: CompanyCandidate) -> int:
+        return sum(1 for v in (
+            m.company_id, m.ticker, m.name, m.isin, m.exchange, m.sector,
+            m.bse_code,
+        ) if v)
+
+    anchor = max(members, key=completeness)
+
+    parts: list[str] = []
+    for m in members:
+        for part in (m.exchange or "").upper().split("/"):
+            part = part.strip()
+            if part and part not in parts:
+                parts.append(part)
+    if "NSE" in parts and "BSE" in parts:
+        exchange = "NSE/BSE"
+    elif len(parts) == 1:
+        exchange = parts[0]
+    else:
+        exchange = "/".join(parts) if parts else None
+
+    return CompanyCandidate(
+        company_id=anchor.company_id,
+        ticker=next((m.ticker for m in members if (m.ticker or "").strip()),
+                    anchor.ticker),
+        name=next((m.name for m in members if (m.name or "").strip()),
+                  anchor.name),
+        isin=next((m.isin for m in members if (m.isin or "").strip()),
+                  anchor.isin),
+        exchange=exchange,
+        listing_status=next((m.listing_status for m in members
+                             if (m.listing_status or "").strip()), "active"),
+        index_membership=next((m.index_membership for m in members
+                               if (m.index_membership or "").strip()), None),
+        currency=next((m.currency for m in members
+                       if (m.currency or "").strip()), None),
+        sector=next((m.sector for m in members if (m.sector or "").strip()),
+                    None),
+        bse_code=next((m.bse_code for m in members if (m.bse_code or "").strip()),
+                      None),
+    )
+
+
+def _merge_same_security(members: list[Any]) -> Any:
+    """One representative for several rows of the same security.
+
+    ``CompanyCandidate`` rows (the database shape) are field-merged so the
+    representative keeps the best ticker, exchange and BSE scrip code even
+    when those live on different rows. Other shapes keep their most
+    informative member — the BSE master is one row per scrip, so this is a
+    guard, not an expected path.
+    """
+    if all(isinstance(m, CompanyCandidate) for m in members):
+        return _representative_company(members)
+    return next((m for m in members if (getattr(m, "ticker", "") or "").strip()),
+                members[0])
+
+
+def dedupe_candidates(candidates: Sequence[Any]) -> list[Any]:
+    """Collapse same-security rows into one representative, order-preserving.
+
+    The ``companies`` table can hold a dual-listed security twice — an NSE
+    row and a BSE row for the same ISIN (or two rows sharing a ticker when
+    the ISIN is missing). Ranking both would let one company occupy two of
+    the 200 slots. This groups by :func:`_identity_key` (ISIN primary) and
+    keeps a single representative per security.
+
+    Pure and order-preserving: the first group encountered keeps its
+    position, so ranking order is otherwise unaffected.
+    """
+    groups: dict[str, list[Any]] = {}
+    order: list[str] = []
+    for cand in candidates:
+        key = _identity_key(cand)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(cand)
+
+    out: list[Any] = []
+    for key in order:
+        members = groups[key]
+        out.append(members[0] if len(members) == 1
+                   else _merge_same_security(members))
+    return out
+
+
 def rank_companies(
     candidates: Sequence[Any],
     market_cap_inr_crore: Mapping[str, tuple[float | None, str]],
@@ -388,14 +506,25 @@ def rank_companies(
     ranked and is counted in the summary instead of being silently ranked
     at zero.
 
+    Candidates are first collapsed by :func:`dedupe_candidates` so that a
+    dual-listed security (an NSE row and a BSE row for the same ISIN) counts
+    as one company — otherwise one security would occupy two of the 200
+    slots and the proposed ranks 501-700 would carry the same ISIN twice.
+
     Returns ``(rows, counts)`` — rows carry proposed ranks starting at
-    ``first_rank`` (501 by default), counts carry ``ranked`` and
-    ``no_market_cap_available``.
+    ``first_rank`` (501 by default), counts carry ``ranked``,
+    ``no_market_cap_available`` (both over unique companies) and
+    ``duplicates_collapsed`` (how many extra listing rows were folded away).
     """
-    counts: dict[str, int] = {"ranked": 0, "no_market_cap_available": 0}
+    deduped = dedupe_candidates(candidates)
+    counts: dict[str, int] = {
+        "ranked": 0,
+        "no_market_cap_available": 0,
+        "duplicates_collapsed": len(candidates) - len(deduped),
+    }
     ranked: list[tuple[Any, float, str]] = []
 
-    for cand in candidates:
+    for cand in deduped:
         isin = (getattr(cand, "isin", None) or "").strip().upper()
         keys = [k for k in (
             isin,
