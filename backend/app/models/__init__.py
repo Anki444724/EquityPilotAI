@@ -17,6 +17,7 @@ from __future__ import annotations
 from app.models import ai as ai  # noqa: F401
 from app.models import ai_ops as ai_ops  # noqa: F401
 from app.models import analysis as analysis  # noqa: F401
+from app.models import broker as broker  # noqa: F401
 from app.models import company as company  # noqa: F401
 from app.models import document as document  # noqa: F401
 from app.models import filing_collection as filing_collection  # noqa: F401

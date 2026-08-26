@@ -140,10 +140,18 @@ class HybridRetrievalEngine:
     ) -> None:
         self.db = db
         if embedder is None:
+            from app.core.config import settings
             from app.services.retrieval.embeddings import (
                 build_semantic_embedder,
             )
-            embedder = build_semantic_embedder()
+            # EMBEDDING_PROVIDER is the deployment's documented way to select
+            # the semantic provider (e.g. `jina-v3` when the first-choice
+            # key is rejected). It was declared in settings but never passed
+            # here, so the setting silently did nothing — the engine always
+            # took the first *configured* provider regardless.
+            embedder = build_semantic_embedder(
+                preferred=getattr(settings, "EMBEDDING_PROVIDER", None),
+            )
         self.embedder = embedder
         self.reranker = (
             reranker if reranker is not None else build_rerank_provider()
@@ -184,6 +192,18 @@ class HybridRetrievalEngine:
             rankings[RetrievalSignal.LEXICAL] = [c for c, _ in lexical]
             for chunk_id, score in lexical:
                 raw_scores.setdefault(chunk_id, {})["lexical"] = score
+
+        # Observability for the degraded state. The embedding provider can
+        # 401 (an account problem, not a wire problem); `_semantic` then
+        # correctly degrades to [] and retrieval continues on the lexical
+        # signal alone. The production logs proved the failure but never the
+        # recovery — this is the line that says lexical answered.
+        if not semantic and lexical:
+            log.info(
+                "semantic signal unavailable; serving lexical-only results",
+                query=cleaned[:80], company_id=company_id,
+                lexical_hits=len(lexical),
+            )
 
         if intent.has_metadata:
             metadata = self._metadata(intent, company_id, document_ids)

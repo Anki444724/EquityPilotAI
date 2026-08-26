@@ -71,10 +71,16 @@ class EmbeddingBackfillService:
     def __init__(self, db: Any, *, embedder: Any = _UNSET) -> None:
         self.db = db
         if embedder is self._UNSET:
+            from app.core.config import settings
             from app.services.retrieval.embeddings import (
                 build_semantic_embedder,
             )
-            embedder = build_semantic_embedder()
+            # Same pass-through as the engine: a re-embed that ignored
+            # EMBEDDING_PROVIDER would store vectors from a different space
+            # than the one retrieval is serving, corrupting the index.
+            embedder = build_semantic_embedder(
+                preferred=getattr(settings, "EMBEDDING_PROVIDER", None),
+            )
         self.embedder = embedder
 
     def pending(self, spec: str) -> int:
