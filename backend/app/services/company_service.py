@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.domain.financials.canonical import (
@@ -34,9 +34,14 @@ from app.schemas.company import (
 )
 from app.services.live_market import LiveMarketService
 from app.services.platform.cache import Namespace, cache
+from app.services.universe.nifty500 import INDEX_NAME
 
 #: Valid canonical keys, used to skip unknown rows defensively.
 _VALID_ITEMS = {item.value for item in LineItem}
+
+#: EquityPilotAI Universe 1000 = every NIFTY500 constituent plus the next
+#: 500 companies by market cap (see CompanyService._universe_ids).
+_NEXT_TIER_SIZE = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,13 +115,67 @@ class CompanyService:
             for c in ranked
         ]
 
+    def _universe_ids(self) -> Select:
+        """Statement selecting the ids of the EquityPilotAI Universe 1000.
+
+        NIFTY500 membership is authoritative — written by the nifty500
+        importer and included unconditionally, even where a constituent's
+        market cap sits below the non-NIFTY cutoff. The remaining 500 slots
+        go to the largest non-NIFTY500 companies, ranked entirely in SQL
+        (`ROW_NUMBER()` over market cap) so nothing is loaded into Python and
+        the universe is fixed *before* any sector filter or pagination.
+
+        Ordering is market cap desc, then name asc, then id — the last key is
+        unique, so pagination is stable across identical market caps.
+        """
+        ranked = (
+            select(
+                Company.id.label("company_id"),
+                func.row_number()
+                .over(
+                    order_by=(
+                        Company.market_cap.desc().nullslast(),
+                        Company.name.asc(),
+                        Company.id.asc(),
+                    )
+                )
+                .label("cap_rank"),
+            )
+            .where(
+                # NULL-safe "not a NIFTY500 member": rows with no membership
+                # (the imported long tail) compete for the next-tier slots.
+                or_(
+                    Company.index_membership.is_(None),
+                    Company.index_membership != INDEX_NAME,
+                )
+            )
+            .subquery()
+        )
+        return select(Company.id).where(
+            or_(
+                Company.index_membership == INDEX_NAME,
+                Company.id.in_(
+                    select(ranked.c.company_id).where(
+                        ranked.c.cap_rank <= _NEXT_TIER_SIZE
+                    )
+                ),
+            )
+        )
+
     def list_companies(
         self,
         page: int = 1,
         page_size: int = 25,
         sector: str | None = None,
     ) -> tuple[int, list[CompanySummary]]:
-        base = select(Company)
+        """Paginated public list — exactly the EquityPilotAI Universe 1000.
+
+        The universe is established first; the optional sector filter, the
+        total count and the market-cap ordering then operate on it, so
+        `total` is the number of universe companies matching the filter and
+        page boundaries never leak companies outside the universe.
+        """
+        base = select(Company).where(Company.id.in_(self._universe_ids()))
         if sector:
             base = base.where(Company.sector == sector)
         total = self.db.execute(
@@ -124,7 +183,10 @@ class CompanyService:
         ).scalar_one()
         rows = (
             self.db.execute(
-                base.order_by(Company.market_cap.desc().nullslast())
+                base.order_by(
+                    Company.market_cap.desc().nullslast(),
+                    Company.name.asc(),
+                )
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )
