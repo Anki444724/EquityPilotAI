@@ -66,6 +66,15 @@ class Permission(StrEnum):
     REPORT_GENERATE = "report:generate"
     REPORT_DELETE = "report:delete"
 
+    # -- broker (Angel One SmartAPI) -----------------------------------
+    #: Read the caller's own broker session: status, profile, funds, order
+    #: book, positions, holdings, and starting/ending the session itself.
+    BROKER_READ = "broker:read"
+    #: Act on the caller's own broker account: place, modify and cancel
+    #: orders. Deliberately a distinct verb from the research-surface
+    #: permissions — trading a book is its own risk class.
+    BROKER_TRADE = "broker:trade"
+
     # -- platform (Module 10) -----------------------------------------
     APIKEY_MANAGE = "apikey:manage"
     MEMBER_READ = "member:read"
@@ -167,11 +176,13 @@ ROLE_DESCRIPTIONS: dict[Role, str] = {
     ),
     Role.ANALYST: (
         "Publishes research. Writes forecasts, scoring overrides, portfolios "
-        "and reports; uploads and deletes documents."
+        "and reports; uploads and deletes documents. May connect a broker "
+        "account and place, modify or cancel orders."
     ),
     Role.RESEARCHER: (
         "Contributes research. Writes forecasts and reports and uploads "
-        "documents, but cannot delete another member's work or trade a book."
+        "documents, and may read their own broker session, but cannot delete "
+        "another member's work or trade a book."
     ),
     Role.SUBSCRIBER: (
         "Consumes research and runs the AI analyst, but authors nothing "
@@ -204,11 +215,13 @@ _SUBSCRIBER: frozenset[Permission] = _READ_ONLY | {
 
 _RESEARCHER: frozenset[Permission] = _SUBSCRIBER | {
     P.FORECAST_WRITE, P.DOCUMENT_UPLOAD, P.JOB_READ,
+    P.BROKER_READ,
 }
 
 _ANALYST: frozenset[Permission] = _RESEARCHER | {
     P.COMPANY_WRITE, P.SCORING_WRITE, P.DOCUMENT_DELETE,
     P.PORTFOLIO_WRITE, P.PORTFOLIO_DELETE, P.REPORT_DELETE,
+    P.BROKER_TRADE,
 }
 
 _ADMIN: frozenset[Permission] = _ANALYST | {
@@ -455,8 +468,10 @@ class Principal:
 
 
 #: Verbs that mutate. Used to degrade a past-due tenant to read-only without
-#: enumerating every write permission at every call site.
-_WRITE_SUFFIXES = ("write", "delete", "manage", "upload", "generate", "run", "create")
+#: enumerating every write permission at every call site. `trade` is a
+#: mutation of the caller's real-money book, so a past-due tenant cannot
+#: place orders even when it could still read them.
+_WRITE_SUFFIXES = ("write", "delete", "manage", "upload", "generate", "run", "create", "trade")
 
 
 def _is_write(permission: Permission) -> bool:

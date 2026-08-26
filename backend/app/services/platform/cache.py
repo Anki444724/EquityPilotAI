@@ -51,6 +51,11 @@ class Namespace(StrEnum):
     STATEMENTS = "statements"
     NEWS = "news"
     RAG = "rag"
+    #: Broker session state: the single-use login `state` token and the light
+    #: per-user session snapshot the status endpoint reads through. The
+    #: database remains the source of truth; this is a read-through plus a
+    #: short-lived anti-replay marker.
+    BROKER_STATE = "broker_state"
 
 
 #: Default lifetime per namespace, in seconds.
@@ -72,6 +77,10 @@ DEFAULT_TTLS: dict[Namespace, int] = {
     # to expire at all is to bound memory and to pick up newly-ingested
     # documents that did not invalidate explicitly.
     Namespace.RAG: 1_800,
+    # Broker state is deliberately short-lived: a login `state` that outlives
+    # its single use is a replay vector, and the session snapshot must not
+    # shadow the database long after a disconnect.
+    Namespace.BROKER_STATE: 300,
 }
 
 
