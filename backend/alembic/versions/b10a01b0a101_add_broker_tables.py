@@ -53,7 +53,7 @@ def upgrade() -> None:
             sa.Column("angel_login_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("angel_valid_upto", sa.DateTime(timezone=True), nullable=True),
             sa.Column("connected", sa.Boolean(), nullable=False,
-                      server_default=sa.text("1")),
+                      server_default=sa.text("true")),
             sa.Column("last_postback_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True),
                       server_default=sa.func.now(), nullable=False),
