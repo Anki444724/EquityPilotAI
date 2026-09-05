@@ -70,12 +70,17 @@ _WORD = re.compile(r"[a-z\u0900-\u097F]+")
 #: enumerated rather than stemmed. A stemmer tuned for English mangles these.
 #:
 #: Deliberately EXCLUDES words that are also ordinary English: "he", "to",
-#: "so", "me", "is", "hi", "do", "in", "at", "ho". Including them made
-#: "How much is the revenue" score as Hinglish, which is the failure mode that
-#: matters most — an English speaker must never be answered in Hinglish.
+#: "so", "me", "is", "hi", "do", "in", "at", "ho", and "the". Including them
+#: made "How much is the revenue" score as Hinglish, which is the failure mode
+#: that matters most — an English speaker must never be answered in Hinglish.
+#: "the" was the last of them and the worst: it is romanised थे, but it is also
+#: the most common word in English, so any question using it twice scored 4.0
+#: against a threshold of 2.5 and was classified Hinglish outright. Its
+#: siblings below are kept because "tha", "thi" and "thay" are not English
+#: words, and a Hinglish question in the past tense is still Hinglish.
 _HINDI_MARKERS: frozenset[str] = frozenset("""
 kya kyaa kyu kyun kyon kaise kaisa kaisi kaisey kitna kitni kitne
-hai hain hota hoti hote hona huaa hua hui hue tha thi the thay
+hai hain hota hoti hote hona huaa hua hui hue tha thi thay
 nahi nahin nahee mat bina
 mera meri mere tera teri tumhara aapka apna apne apni
 uska uski unka unke iska iski inka inke

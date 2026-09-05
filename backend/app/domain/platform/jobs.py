@@ -75,6 +75,14 @@ class JobKind(StrEnum):
     #: `deploy/backfill_financials.py` drives, so the scheduled sweep and an
     #: on-demand run share one implementation rather than drifting apart.
     FINANCIALS_BACKFILL = "financials_backfill"
+    #: Fetch the Blogger feed and ingest posts that are new or changed.
+    #:
+    #: A collection job in the same family as `FILING_CRAWL`: it reads an
+    #: external source, decides what has changed, and hands the new material
+    #: to the document pipeline. It does not parse, chunk or embed anything
+    #: itself — that is the document worker's job, reached through
+    #: `DocumentIngestionService.accept()` exactly as an upload is.
+    BLOGGER_SYNC = "blogger_sync"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -96,6 +104,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.EMBEDDING_BACKFILL: "Embedding backfill",
     JobKind.AI_SCORE_REFRESH: "AI score refresh",
     JobKind.FINANCIALS_BACKFILL: "Financials backfill",
+    JobKind.BLOGGER_SYNC: "Blogger post sync",
 }
 
 
@@ -184,6 +193,10 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     JobKind.EMBEDDING_BACKFILL: JobPriority.BACKGROUND,
     JobKind.AI_SCORE_REFRESH: JobPriority.BACKGROUND,
     JobKind.FINANCIALS_BACKFILL: JobPriority.BACKGROUND,
+    # Unattended collection, and nobody is waiting on it: a reader who finds
+    # the post on the blog can read it there. It must never sit ahead of a
+    # user's report or an upload in the queue.
+    JobKind.BLOGGER_SYNC: JobPriority.BACKGROUND,
 }
 
 
@@ -267,6 +280,12 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # — the target set is recomputed from the database — so a short run is
     # not a lost run.
     JobKind.FINANCIALS_BACKFILL: RetryPolicy(max_attempts=2, base_seconds=900),
+    # Two attempts with a long first backoff, for the filing crawl's reason:
+    # the usual failure is the source being slow or throttling us, and an
+    # immediate retry lands in the same throttle. The sync is resumable by
+    # construction — every run recomputes what changed from the feed itself —
+    # so a run cut short loses nothing that the next one does not pick up.
+    JobKind.BLOGGER_SYNC: RetryPolicy(max_attempts=2, base_seconds=300),
 }
 
 
@@ -358,6 +377,22 @@ SCHEDULES: tuple[ScheduleSpec, ...] = (
         JobKind.FILING_CRAWL, 12 * 3600,
         "Crawl investor-relations sites, NSE and BSE for new filings and "
         "ingest anything not already held.",
+    ),
+    ScheduleSpec(
+        # Six hourly. A blog publishes a handful of posts a day at most, so
+        # this is about a new analysis becoming searchable the same day it is
+        # posted rather than about freshness to the minute. An idle run is one
+        # paged feed request and a timestamp comparison per post — it writes
+        # nothing at all when the blog has not changed, which is what makes it
+        # safe to leave on a schedule instead of running it by hand.
+        #
+        # `enabled` here is the schedule's own existence, not the feature's:
+        # the handler no-ops unless BLOGGER_ENABLED and BLOGGER_FEED_URL are
+        # configured, so a deployment that has never heard of the blog pays one
+        # dict lookup every six hours and nothing else.
+        JobKind.BLOGGER_SYNC, 6 * 3600,
+        "Fetch the Blogger feed and ingest posts that are new or changed, as "
+        "ordinary research-note documents in the existing pipeline.",
     ),
     ScheduleSpec(
         # Daily. Probing is cheap and IR pages move, but not hourly.

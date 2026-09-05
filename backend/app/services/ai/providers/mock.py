@@ -53,6 +53,34 @@ _TASK = re.compile(r"^TASK:\s*(.+)$", re.MULTILINE)
 _QUESTION = re.compile(r"^ANALYST QUESTION:\s*(.+)$", re.MULTILINE)
 
 
+#: Longest evidence quotation embedded in a composed sentence.
+MAX_QUOTED_CHARS = 320
+
+
+def _quote(value: object, *, limit: int = MAX_QUOTED_CHARS) -> str:
+    """Evidence as it can safely appear *inside* one sentence.
+
+    A computed figure is a number and quotes trivially. A retrieved passage is
+    prose: it ends its own sentences, and pasting it verbatim into
+    `"The platform's figures put X at <passage> [key]"` breaks the line at the
+    passage's first full stop or question mark. The citation audit then measures
+    a fragment that ends before its own marker and reports the figures in it as
+    uncited — for an answer in which every figure came from the evidence, with
+    no unknown key and nothing fabricated. A document-heavy answer would be
+    marked ungrounded for a reason that has nothing to do with grounding.
+
+    So terminators inside a quotation become semicolons, whitespace collapses,
+    and the quotation is capped: the marker stays in the sentence whose numbers
+    it supports, and the answer stays readable instead of reproducing a whole
+    chunk.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"[.!?](?=\s)", ";", text)
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0].rstrip(",;") + " …"
+    return text
+
+
 #: Fiscal years the platform could hold. Anything beyond the forecast horizon
 #: is not a question about missing data — it is a question about the future.
 _FUTURE_YEAR = re.compile(r"\bFY\s?(20[3-9]\d)\b|\b(20[3-9]\d)\b", re.IGNORECASE)
@@ -250,14 +278,14 @@ class OfflineProvider(LLMProvider):
             f"**{task}**",
             "",
             f"The platform's figures put {headline[1].lower()} at "
-            f"{headline[2]} [{headline[0]}]. That is the anchor for the "
+            f"{_quote(headline[2])} [{headline[0]}]. That is the anchor for the "
             "assessment below.",
         ]
 
         if supporting:
             lines += ["", "Supporting evidence:", ""]
             lines += [
-                f"- {label} of {value} [{key}], per {source}."
+                f"- {label} of {_quote(value)} [{key}], per {source}."
                 for key, label, value, source in supporting
             ]
 

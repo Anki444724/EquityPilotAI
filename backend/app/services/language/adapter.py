@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import structlog
@@ -232,11 +232,23 @@ class LanguageAdapter:
         mixed = detect_mixed(question)
         raw = question or ""
 
-        # Phase 2: enrich detection with mixed signal
+        # Phase 2: enrich detection with the mixed signal.
+        #
+        # `Detection` is frozen, so the enriched value is built rather than
+        # written to. The two assignments this replaced raised
+        # FrozenInstanceError — on every question the mixed detector flagged,
+        # which is to say on the Hinglish input this layer exists to serve, and
+        # on any English question that tripped the detector by accident. The
+        # failure surfaced as a 500 from the chat endpoint, several frames away
+        # from its cause.
         if mixed.get("is_mixed"):
-            detection.is_mixed = True
-            if detection.confidence < 0.82:
-                detection.confidence = min(0.92, detection.confidence + mixed.get("confidence_adjustment", 0.0))
+            confidence = detection.confidence
+            if confidence < 0.82:
+                confidence = min(
+                    0.92,
+                    confidence + mixed.get("confidence_adjustment", 0.0),
+                )
+            detection = replace(detection, is_mixed=True, confidence=confidence)
 
         # NORM-001 ... (original logic preserved exactly)
         has_mappable_term = any(

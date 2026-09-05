@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,44 @@ class DocumentType(StrEnum):
     EXCHANGE_FILING = "exchange_filing"
     RESEARCH_NOTE = "research_note"
     OTHER = "other"
+
+
+#: What each document type is called in prose.
+#:
+#: Used to label retrieved evidence, where the reader — and the model — needs to
+#: know what KIND of document a passage came from, because the weight differs: a
+#: filed annual report is the company's own audited statement, a research note is
+#: somebody's reading of it. Labelling every document with one type's name, as
+#: the evidence path once did, was worse than useless — it taught the model to
+#: describe third-party commentary as a company filing.
+DOCUMENT_TYPE_LABELS: dict[str, str] = {
+    DocumentType.ANNUAL_REPORT.value: "Annual Report",
+    DocumentType.QUARTERLY_REPORT.value: "Quarterly Report",
+    DocumentType.INVESTOR_PRESENTATION.value: "Investor Presentation",
+    DocumentType.CONFERENCE_CALL.value: "Conference Call Transcript",
+    DocumentType.CREDIT_RATING.value: "Credit Rating Report",
+    DocumentType.SHAREHOLDING.value: "Shareholding Filing",
+    DocumentType.DRHP.value: "DRHP",
+    DocumentType.ESG_REPORT.value: "ESG Report",
+    DocumentType.EXCHANGE_FILING.value: "Exchange Filing",
+    DocumentType.RESEARCH_NOTE.value: "Research Note",
+    DocumentType.OTHER.value: "Document",
+}
+
+#: The label for a type that is not in the map: an unknown string written by a
+#: newer build, or a document that could not be classified at all.
+FALLBACK_TYPE_LABEL = "Document"
+
+
+def document_type_label(doc_type: str | None) -> str:
+    """The human name for a document type.
+
+    Unknown values fall back rather than being echoed: a label is read by people
+    and quoted by models, and neither should be shown a raw enum member.
+    """
+    if not doc_type:
+        return FALLBACK_TYPE_LABEL
+    return DOCUMENT_TYPE_LABELS.get(doc_type, FALLBACK_TYPE_LABEL)
 
 
 class FileFormat(StrEnum):
@@ -375,7 +414,17 @@ class ParsedDocument:
     title: str | None = None
     author: str | None = None
     producer: str | None = None
-    metadata: dict[str, str] = field(default_factory=dict)
+    #: Format-native metadata, carried through to `Document.doc_metadata`.
+    #:
+    #: Typed `Any` rather than `str` because two sources supply it and only
+    #: one is scalar. A PDF's info dictionary is strings (Title, Producer).
+    #: An HTML document's `<meta>` tags are strings too, except where a tag
+    #: carries a structured value — a Blogger post's label list, which is a
+    #: JSON array in the source and would otherwise be flattened into a
+    #: comma-joined string on the way to the database, losing the very list
+    #: the retrieval layer and the citations need. Decoding happens in the
+    #: parser, once, so nothing downstream has to guess.
+    metadata: dict[str, Any] = field(default_factory=dict)
     #: True when the parser had to rasterise and OCR at least one page.
     used_ocr: bool = False
 

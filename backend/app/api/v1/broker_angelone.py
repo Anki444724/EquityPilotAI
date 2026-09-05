@@ -21,11 +21,12 @@ out of the per-ticker filing chain. A `GET` on `/orders/modify` answers 405
 by construction: modification is a write and there is exactly one method for
 it.
 
-The postback is the only unauthenticated endpoint: Angel One POSTs to it
-directly, with no platform session. It is therefore the strictest endpoint
-here — it updates only an order id this platform created, only when the
-broker's client code matches the owning account, and it refuses and audits
-everything else.
+The postback is this router's only unauthenticated endpoint: Angel One POSTs to
+it directly, with no platform session. (The platform has one other unauthenticated
+surface, `POST /blogger/chat`, which the blog's embedded widget calls — see
+`app/api/v1/blogger.py`.) The postback is therefore the strictest endpoint here —
+it updates only an order id this platform created, only when the broker's client
+code matches the owning account, and it refuses and audits everything else.
 """
 from __future__ import annotations
 

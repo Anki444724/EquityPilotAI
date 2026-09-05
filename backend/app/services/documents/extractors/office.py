@@ -18,7 +18,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from app.domain.documents.types import (
     FileFormat, ParseFailure, ParsedDocument, ParsedPage, TextBlock, TextSource,
@@ -185,6 +185,16 @@ class HtmlParser(DocumentParser):
 
     _HEADINGS = {"h1": 26.0, "h2": 22.0, "h3": 18.0, "h4": 15.0, "h5": 13.0, "h6": 12.0}
 
+    #: Ceilings on `<meta>` capture.
+    #:
+    #: A page saved from a browser can carry a hundred tracking tags, and
+    #: every captured one lands in the document row's JSON column — so an
+    #: unbounded read of an untrusted page is how a 40 KB upload becomes a
+    #: megabyte-sized row that is then copied into every backup. The Blogger
+    #: path writes six tags; the limits exist for everything else.
+    MAX_META_TAGS = 60
+    MAX_META_VALUE_CHARS = 2_000
+
     def parse(self, payload: bytes, *, filename: str = "") -> ParsedDocument:
         try:
             from bs4 import BeautifulSoup
@@ -192,6 +202,10 @@ class HtmlParser(DocumentParser):
             raise ParseFailure("beautifulsoup4 is not installed") from exc
 
         soup = BeautifulSoup(_decode(payload), "html.parser")
+        # Read before the strip below: `<meta>` tags live in the head and are
+        # untouched by it, but capturing first keeps the two operations
+        # independent of each other's ordering.
+        metadata = self._metadata(soup)
         for tag in soup(["script", "style", "noscript"]):
             tag.decompose()
 
@@ -228,12 +242,62 @@ class HtmlParser(DocumentParser):
             index += 1
 
         parsed = ParsedDocument(file_format=FileFormat.HTML)
+        parsed.metadata = metadata
         parsed.pages = _paginate(blocks)
         if tables and parsed.pages:
             parsed.pages[0].tables.extend(tables)
         if soup.title and soup.title.string:
             parsed.title = normalise_whitespace(soup.title.string)
+        author = metadata.get("author") or metadata.get("article:author")
+        if isinstance(author, str) and author.strip():
+            parsed.author = author.strip()[:200]
         return parsed
+
+    @classmethod
+    def _metadata(cls, soup) -> dict[str, Any]:
+        """Capture `<meta name=…>` / `<meta property=…>` pairs.
+
+        This is what lets a source that is *not* an upload carry its own
+        provenance into `Document.doc_metadata`: the Blogger sync writes the
+        post id, canonical URL, published and updated timestamps and label
+        list into the head of the HTML it hands to ingestion, and a re-index
+        years later recovers all of it from the stored bytes rather than
+        depending on a row that a restore might not have.
+
+        Values are strings, except a value that parses as a JSON array or
+        object — a label list arrives as `["NBFC","Shriram Finance"]` and must
+        not be flattened into a comma-joined string on the way to a JSON
+        column, where nothing could turn it back into a list. Scalars are
+        deliberately left alone: `"2026"` is a date, not a number, and a
+        parser that guessed would make the stored metadata type depend on the
+        shape of the value rather than on its meaning.
+        """
+        import json
+
+        captured: dict[str, Any] = {}
+        for tag in soup.find_all("meta"):
+            if len(captured) >= cls.MAX_META_TAGS:
+                break
+            name = tag.get("name") or tag.get("property")
+            content = tag.get("content")
+            if not name or content is None:
+                continue
+            key = normalise_whitespace(str(name))[:120]
+            value = str(content)[: cls.MAX_META_VALUE_CHARS]
+            if not key or not value.strip():
+                continue
+            if value[:1] in ("[", "{"):
+                try:
+                    decoded = json.loads(value)
+                except ValueError:
+                    pass
+                else:
+                    if isinstance(decoded, (list, dict)):
+                        value = decoded
+            # First tag wins: a page repeating a name is not adding to it, and
+            # the duplicate is usually a template artefact.
+            captured.setdefault(key, value)
+        return captured
 
 
 # ---------------------------------------------------------------------------

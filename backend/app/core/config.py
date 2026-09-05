@@ -250,6 +250,48 @@ class Settings(BaseSettings):
     #: registration). Informational — nothing validates it per request.
     ANGELONE_PUBLIC_IP: str | None = None
 
+    # --- Blogger ingestion ---------------------------------------------
+    # The Blogger blog is a *source*, not a second knowledge base. Posts are
+    # fetched as Atom, rendered to HTML and handed to the existing
+    # DocumentIngestionService, so they become ordinary `research_note`
+    # documents with the same chunks, embeddings, citations and retrieval as
+    # an uploaded filing. Nothing here configures a parallel RAG system.
+    #: Master switch for the sync. Off by default: a deployment that has not
+    #: chosen a feed must not start polling one.
+    BLOGGER_ENABLED: bool = False
+    #: Atom feed, e.g. https://equitypilot.blogspot.com/feeds/posts/default
+    BLOGGER_FEED_URL: str = ""
+    #: Ticker used when a post cannot be mapped from its labels or title.
+    #: Empty means "do not guess": an unmapped post is logged and skipped
+    #: rather than attached to an arbitrary company, which would poison that
+    #: company's retrieval with another company's analysis.
+    BLOGGER_DEFAULT_TICKER: str = ""
+    #: Posts read per sync, newest first. Blogger pages the feed, so this is a
+    #: budget rather than a single request size.
+    BLOGGER_MAX_POSTS: int = 100
+    #: Timeout for one outbound feed request, in seconds.
+    BLOGGER_SYNC_TIMEOUT_SECONDS: float = 30.0
+    #: Comma-separated tickers the *public* chat endpoint may answer about.
+    #: An empty list closes the public endpoint entirely — the allowlist is
+    #: the security boundary, so it is empty until an operator opens it.
+    BLOGGER_PUBLIC_TICKERS: str = ""
+    #: Shared token for `POST /api/v1/blogger/sync`, which lets a cron job or
+    #: a webhook trigger a sync without a user session. Empty means the
+    #: endpoint falls back to the platform's own authenticated permission
+    #: check rather than being open. Never logged, never returned.
+    BLOGGER_SYNC_SECRET: str = ""
+    #: Wall-clock budget for one *public* chat answer, in seconds.
+    #:
+    #: The provider router retries each configured provider up to three times
+    #: at a sixty-second HTTP timeout, then falls through to the next provider
+    #: in a four-deep chain — 182 s with one provider configured, 726 s with
+    #: all four. That patience is right for a signed-in analyst waiting on a
+    #: report and wrong for a blog reader behind a proxy that gives up at
+    #: sixty: the answer completes on the server and is lost on the way out,
+    #: which the reader experiences as a hung request. The public endpoint
+    #: therefore bounds the generation and returns a retryable error instead.
+    BLOGGER_CHAT_TIMEOUT_SECONDS: float = 45.0
+
     # --- cors --------------------------------------------------------
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -297,6 +339,45 @@ class Settings(BaseSettings):
     @property
     def email_configured(self) -> bool:
         return bool(self.SMTP_HOST)
+
+    @property
+    def blogger_public_tickers(self) -> list[str]:
+        """The tickers the public Blogger chat may answer about.
+
+        Parsed rather than stored as a list so the value can be set from a
+        plain environment variable (`SHRIRAMFIN,ITC`) without a JSON literal —
+        the same shape every other list-ish deployment value in a compose file
+        would use, and one that cannot be malformed into a wildcard.
+        """
+        return [
+            part.strip().upper()
+            for part in (self.BLOGGER_PUBLIC_TICKERS or "").split(",")
+            if part.strip()
+        ]
+
+    @property
+    def blogger_sync_configured(self) -> bool:
+        """Can a sync actually run? Enabled *and* pointed at a feed.
+
+        Reported separately from `BLOGGER_ENABLED` so the scheduler and the
+        health surface can say "off because there is no feed" instead of the
+        operator having to reason about two flags.
+        """
+        return bool(self.BLOGGER_ENABLED and self.BLOGGER_FEED_URL.strip())
+
+    @property
+    def blogger_chat_timeout_seconds(self) -> float:
+        """The public chat's time budget, never zero and never absurd.
+
+        Clamped rather than trusted: a typo'd `0` would make the endpoint
+        refuse every question, and a value above the provider chain's own worst
+        case would bound nothing. Both are configuration errors, and the sane
+        reading of either is "the default".
+        """
+        budget = float(self.BLOGGER_CHAT_TIMEOUT_SECONDS or 0.0)
+        if budget < 1.0:
+            return 45.0
+        return min(budget, 300.0)
 
     @property
     def ai_configured(self) -> bool:

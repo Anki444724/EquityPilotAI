@@ -2,11 +2,17 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
-    admin, admin_ai, admin_backfill, admin_companies, admin_documents, admin_financials, admin_market, admin_users, ai, ai_scoring, analysis, auth, broker_angelone, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
+    admin, admin_ai, admin_backfill, admin_companies, admin_documents, admin_financials, admin_market, admin_users, ai, ai_scoring, analysis, auth, blogger, broker_angelone, companies, dashboard, documents, filings_admin, forecast, knowledge, market, portfolio, quality, reports, scoring, storage_admin, valuation,
 )
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+# The blog's public endpoints. Registered before every product router, which is
+# the ROUTE-001 discipline applied in advance rather than after a bug: `/blogger`
+# is a literal first segment, and a router that declares a bare path parameter
+# first would capture it as a value. Nothing does today, and this ordering means
+# nothing will by accident tomorrow.
+api_router.include_router(blogger.router)
 api_router.include_router(admin.router)
 api_router.include_router(admin_companies.router)
 api_router.include_router(admin_financials.router)

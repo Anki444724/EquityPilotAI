@@ -79,6 +79,20 @@ DEFAULT_RULES: dict[str, RateRule] = {
     # Postbacks arrive from the broker, not the user: key on IP, and allow a
     # full order-book turnover in a minute without tripping.
     "broker.postback": RateRule(RateScope.IP, limit=120, window_seconds=60),
+    # --- public Blogger chat -----------------------------------------
+    # The one AI endpoint an anonymous caller can reach, and every request
+    # costs a provider call. Keyed on IP because there is no identity to key
+    # on, and deliberately tighter than the `anonymous` ceiling the global
+    # middleware applies: a reader asking a follow-up question needs a handful
+    # of requests a minute, and anything above that from one address is a
+    # script working through a knowledge base it does not pay for.
+    #
+    # The burst absorbs a widget firing an opening question and a status call
+    # together on page load, which is two requests in the same instant for one
+    # human being.
+    "blogger.chat": RateRule(RateScope.IP, limit=12, window_seconds=60, burst=4),
+    # Triggering a sync is an operator action, not a reader one.
+    "blogger.sync": RateRule(RateScope.IP, limit=6, window_seconds=600),
 }
 
 

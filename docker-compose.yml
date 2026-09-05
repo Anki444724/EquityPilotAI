@@ -62,13 +62,43 @@ services:
       ENCRYPTION_KEY: local-development-envelope-key-not-for-production
       NATIVE_AUTH: "true"
       LOG_FORMAT: json
-      CORS_ORIGINS: '["https://equitypilot.in","https://www.equitypilot.in"]'
+      # The blog's own origin is listed explicitly, never a wildcard:
+      # allow_credentials is on, and with credentials enabled a wildcard is
+      # either rejected by the browser or — in the configurations where it is
+      # honoured — an open door. An explicit origin costs one list entry.
+      CORS_ORIGINS: '["https://equitypilot.in","https://www.equitypilot.in","https://equitypilot.blogspot.com"]'
       EMAIL_LINK_BASE: https://equitypilot.in
       OAUTH_REDIRECT_BASE: https://equitypilot.in
       # The API serves requests; the worker container runs the jobs.
       WORKER_ENABLED: "false"
       SCHEDULER_ENABLED: "false"
       BACKUP_DIR: /app/backups
+      # --- Blogger ---------------------------------------------------
+      # The API side of the integration: it serves the blog's public chat and
+      # accepts a sync trigger. Reading the feed is the worker's job.
+      BLOGGER_ENABLED: "true"
+      BLOGGER_FEED_URL: https://equitypilot.blogspot.com/feeds/posts/default
+      BLOGGER_MAX_POSTS: "100"
+      BLOGGER_SYNC_TIMEOUT_SECONDS: "30"
+      # Bound on one public chat answer. The provider chain behind it is
+      # patient to a fault (3 attempts x 60s per provider, 4 providers),
+      # and a blog reader behind a 60s proxy is not: retrieval and
+      # grounding finish in the first second, so an unbounded generation
+      # hangs the request after the work is done. Keep this under the
+      # reverse proxy's read timeout; expiry returns a retryable 504.
+      BLOGGER_CHAT_TIMEOUT_SECONDS: "45"
+      # The only company the public chatbot will discuss. Everything else is
+      # refused before it is looked up, so widening this list is a deliberate
+      # editorial decision rather than a side effect of adding a document.
+      BLOGGER_PUBLIC_TICKERS: SHRIRAMFIN
+      # Empty by default. A real deployment injects a real value from its
+      # secret store; with no value set, POST /blogger/sync is available only
+      # to a signed-in operator holding document:upload.
+      BLOGGER_SYNC_SECRET: ""
+      # Empty by default: a post that names no company is skipped and logged,
+      # never filed against a fallback. Set this only if every post on the blog
+      # really is about one company.
+      BLOGGER_DEFAULT_TICKER: ""
     volumes:
       - backups:/app/backups
     ports:
@@ -103,6 +133,26 @@ services:
       SCHEDULER_ENABLED: "true"
       WORKER_ENABLED: "true"
       WORKER_CONCURRENCY: "2"
+      # --- Blogger ---------------------------------------------------
+      # The worker side of the integration: it runs the scheduled feed sync
+      # and then the document jobs that sync enqueues. Same values as the API
+      # for the settings both read, so a manual `docker compose exec worker
+      # python -m app.services.blogger.sync` behaves exactly like the
+      # scheduled run.
+      BLOGGER_ENABLED: "true"
+      BLOGGER_FEED_URL: https://equitypilot.blogspot.com/feeds/posts/default
+      BLOGGER_MAX_POSTS: "100"
+      BLOGGER_SYNC_TIMEOUT_SECONDS: "30"
+      # Bound on one public chat answer. The provider chain behind it is
+      # patient to a fault (3 attempts x 60s per provider, 4 providers),
+      # and a blog reader behind a 60s proxy is not: retrieval and
+      # grounding finish in the first second, so an unbounded generation
+      # hangs the request after the work is done. Keep this under the
+      # reverse proxy's read timeout; expiry returns a retryable 504.
+      BLOGGER_CHAT_TIMEOUT_SECONDS: "45"
+      BLOGGER_PUBLIC_TICKERS: SHRIRAMFIN
+      BLOGGER_SYNC_SECRET: ""
+      BLOGGER_DEFAULT_TICKER: ""
     volumes:
       - backups:/app/backups
     depends_on:
