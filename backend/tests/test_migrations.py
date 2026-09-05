@@ -104,6 +104,44 @@ class TestMigrationChain:
             f"declares: {offenders}"
         )
 
+    def test_boolean_columns_do_not_use_integer_server_defaults(self):
+        """PostgreSQL rejects integer default expressions on boolean columns.
+
+        `server_default=sa.text("1")` or `"0"` on a `sa.Boolean()` column
+        causes PostgreSQL to fail with:
+        `DatatypeMismatch: column "..." is of type boolean but default expression is of type integer`.
+        Boolean defaults must use `sa.text("true")`, `sa.text("false")`,
+        `sa.true()`, or `sa.false()`.
+        """
+        offenders: list[str] = []
+        for path in _migration_files():
+            text = path.read_text()
+            for match in re.finditer(
+                r'sa\.Column\([^;]+?Boolean\(\)[^;]+?server_default\s*=\s*sa\.text\(["\']\d+["\']\)',
+                text,
+                re.S,
+            ):
+                offenders.append(f"{path.name}: {match.group(0).strip()}")
+        assert not offenders, (
+            f"migrations use integer text defaults for boolean columns: {offenders}"
+        )
+
+    def test_broker_accounts_connected_postgres_offline_render(self):
+        """PostgreSQL offline render must produce `connected BOOLEAN DEFAULT true NOT NULL`."""
+        from sqlalchemy.dialects import postgresql
+        from sqlalchemy.schema import CreateColumn
+
+        path = VERSIONS / "b10a01b0a101_add_broker_tables.py"
+        assert path.exists(), f"{path.name} missing"
+        text = path.read_text()
+        assert 'server_default=sa.text("true")' in text
+        assert 'server_default=sa.text("1")' not in text
+
+        col = sa.Column("connected", sa.Boolean(), nullable=False,
+                        server_default=sa.text("true"))
+        rendered = str(CreateColumn(col).compile(dialect=postgresql.dialect()))
+        assert rendered == "connected BOOLEAN DEFAULT true NOT NULL"
+
 
 class TestMigrationsMatchModels:
     """Run the migrations for real and diff against the models."""
