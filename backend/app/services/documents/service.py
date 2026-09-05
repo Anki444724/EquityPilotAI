@@ -273,7 +273,22 @@ class DocumentService:
         document.fiscal_year = result.fiscal_year
         document.embedding_spec = result.embedding_spec
         document.duplicate_ratio = result.duplicate_ratio
-        document.doc_metadata = dict(result.parsed.metadata or {})
+        # Merged, not replaced.
+        #
+        # `accept()` records what the *caller* knows about a source before the
+        # worker ever runs — the Blogger sync writes the post id, the canonical
+        # URL and the label list at accept time, because those are properties
+        # of the feed entry and not of the bytes. Assigning the parser's
+        # metadata over the column discarded all of it at the first persist,
+        # so a post kept its provenance only until its own pipeline finished.
+        #
+        # On a collision the parser wins: its values are derived from the bytes
+        # actually stored, so re-indexing an edited document reports the edited
+        # metadata rather than the version before it. Keys only the caller knew
+        # survive, which is the whole point of the merge.
+        merged_metadata = dict(document.doc_metadata or {})
+        merged_metadata.update(result.parsed.metadata or {})
+        document.doc_metadata = merged_metadata
 
         for page in result.parsed.pages:
             self.db.add(DocumentPage(

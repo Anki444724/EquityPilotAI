@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -33,6 +34,9 @@ from app.services.ai.prompt_library import (
     BUILTIN_PROMPTS, Capability, OutputStyle, PromptTemplate, get_prompt,
 )
 from app.services.ai.providers.router import ProviderRouter
+
+if TYPE_CHECKING:  # pragma: no cover - annotation only
+    from app.domain.documents.types import SearchHit
 
 log = structlog.get_logger(__name__)
 
@@ -317,6 +321,7 @@ class ResearchAnalyst:
             )
             return []
 
+        kinds = self._evidence_kinds(hits)
         citations: list[Citation] = []
         for index, hit in enumerate(hits, start=1):
             section = hit.section.value.replace("_", " ")
@@ -331,7 +336,12 @@ class ResearchAnalyst:
                 # The category, not just the document name. A reader needs to
                 # know they are being shown an annual report rather than an
                 # aggregator's summary — those carry very different weight.
-                label=f"[Annual Report] {hit.document_title} p.{hit.page}",
+                # Which is also why it cannot be a constant: a Blogger post or a
+                # conference-call transcript carries a different weight again,
+                # and calling either an "Annual Report" teaches the model to
+                # describe third-party commentary as a filed document.
+                label=f"[{kinds.get(hit.document_id, 'Document')}] "
+                      f"{hit.document_title} p.{hit.page}",
                 kind=EvidenceKind.DOCUMENT,
                 # The passage itself is the value: a citation whose value were
                 # a score would give the model nothing to quote.
@@ -348,6 +358,50 @@ class ResearchAnalyst:
                 snippet=passage,
             ))
         return citations
+
+    def _evidence_kinds(self, hits: list[SearchHit]) -> dict[int, str]:
+        """What kind of document each hit came from, by document id.
+
+        One batched lookup for the whole hit list rather than one per citation:
+        a retrieval returns at most a handful of documents, and the label is
+        only needed when there IS evidence — the empty-hits path above never
+        reaches here.
+
+        A document whose provenance says it came from a Blogger feed is labelled
+        as such rather than by its stored type. The type is still true — a
+        research note — but "Blogger post" is the fact a reader needs in order
+        to weigh it, and the fact the model needs in order not to describe the
+        author's commentary as a company filing.
+
+        Failures are swallowed and reported as absent: the caller falls back to
+        a generic label, and a label lookup must never cost the user an answer
+        they were about to get.
+        """
+        from sqlalchemy import select
+
+        from app.domain.documents.types import document_type_label
+        from app.models.document import Document as DocumentRow
+
+        ids = sorted({hit.document_id for hit in hits if hit.document_id})
+        if not ids:
+            return {}
+        try:
+            rows = self.builder.document_service.db.execute(
+                select(DocumentRow.id, DocumentRow.doc_type, DocumentRow.doc_metadata)
+                .where(DocumentRow.id.in_(ids))
+            ).all()
+        except Exception:  # noqa: BLE001 — labels are a refinement, not a gate
+            log.exception("could not resolve evidence document kinds")
+            return {}
+
+        kinds: dict[int, str] = {}
+        for row_id, doc_type, metadata in rows:
+            source = metadata.get("source") if isinstance(metadata, dict) else None
+            kinds[row_id] = (
+                "Blogger post" if source == "blogger"
+                else document_type_label(doc_type)
+            )
+        return kinds
 
     def _refuse(
         self,

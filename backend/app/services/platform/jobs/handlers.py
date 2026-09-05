@@ -742,6 +742,43 @@ def handle_storage_replication(db: Session, payload: dict[str, Any]) -> dict[str
     return summary
 
 
+# ===========================================================================
+# Blogger post sync
+# ===========================================================================
+def handle_blogger_sync(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Fetch the Blogger feed and ingest posts that are new or changed.
+
+    Calls the same service the `python -m app.services.blogger.sync` command
+    runs, so the scheduled path and an operator's manual one cannot drift apart
+    — which matters here more than for most jobs, because the manual run is how
+    a new blog is first connected and the scheduled one is what keeps it
+    current afterwards.
+
+    The handler does the *collecting* only. Every post it accepts becomes a
+    document job, and parsing, chunking, embedding and enrichment are done by
+    the existing document worker at its own priority. Doing that work here
+    would hold a general-purpose worker for the minutes a large HTML corpus
+    takes and delay the second-scale jobs queued behind it.
+
+    Disabled is reported as a skip, not a failure: the schedule is declared in
+    code and cannot read configuration, so on a deployment that has never
+    configured a feed this job fires and does nothing every six hours. Failing
+    it would dead-letter a healthy system.
+    """
+    from app.services.blogger.sync import sync_now
+
+    if not settings.blogger_sync_configured:
+        reason = (
+            "no Blogger feed URL is configured"
+            if settings.BLOGGER_ENABLED else "blogger sync is disabled"
+        )
+        return {"skipped": True, "reason": reason}
+
+    # The same call the CLI makes, so a scheduled run and an operator's manual
+    # one cannot drift apart in behaviour.
+    return sync_now(db, payload)
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.REPORT_GENERATION: handle_report_generation,
     JobKind.DOCUMENT_PROCESSING: handle_document_processing,
@@ -761,6 +798,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.EMBEDDING_BACKFILL: handle_embedding_backfill,
     JobKind.AI_SCORE_REFRESH: handle_ai_score_refresh,
     JobKind.FINANCIALS_BACKFILL: handle_financials_backfill,
+    JobKind.BLOGGER_SYNC: handle_blogger_sync,
 }
 
 

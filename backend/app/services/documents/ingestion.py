@@ -83,6 +83,7 @@ class DocumentIngestionService:
         doc_type: DocumentType | None = None,
         uploaded_by: str | None = None,
         declared_size: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AcceptedUpload:
         """Validate, persist the bytes, create the row, enqueue. No parsing.
 
@@ -90,6 +91,14 @@ class DocumentIngestionService:
         so a row can never reference an object that does not exist; the
         reverse ordering leaves a document pointing at nothing when the
         process dies between the two.
+
+        `metadata` is provenance the *caller* knows and the parser cannot:
+        where a document came from, its canonical URL, the identifiers of the
+        system it was fetched from. It is written to `doc_metadata` at accept
+        time so the row is self-describing while it is still queued, and the
+        pipeline merges rather than replaces it when parsing finishes (see
+        `DocumentService._persist`). An upload that passes nothing behaves
+        exactly as before.
         """
         from app.core.config import settings
         from app.services.documents.extractors.base import DocumentParser
@@ -149,6 +158,7 @@ class DocumentIngestionService:
                 # An older row from before durable storage: adopt these bytes
                 # so it becomes re-indexable.
                 self._adopt(existing, final_key, source_key=None)
+            self._refresh_metadata(existing, metadata)
             return AcceptedUpload(
                 existing, job_id=None, action="duplicate", duplicate_of=existing.id,
             )
@@ -178,6 +188,7 @@ class DocumentIngestionService:
             progress=STATUS_PROGRESS[DocumentStatus.UPLOADED],
             uploaded_by=uploaded_by,
             processing_log=[],
+            doc_metadata=dict(metadata) if metadata else None,
         )
         self.db.add(document)
         self.db.flush()
@@ -231,6 +242,31 @@ class DocumentIngestionService:
         document.storage_key = key
         document.storage_backend = self.storage.backend
         document.storage_location = self.storage.location(key)
+        self.db.commit()
+
+    def _refresh_metadata(
+        self, document: Document, metadata: dict[str, Any] | None,
+    ) -> None:
+        """Record caller-supplied provenance on a document that already exists.
+
+        Reached from the byte-identical branch. The content is unchanged, so
+        there is nothing to re-ingest, but what the *caller* knows about the
+        source can still have moved: a feed entry whose canonical URL was
+        corrected, or a row ingested before its caller started recording
+        provenance at all.
+
+        Merging rather than assigning keeps whatever the parser wrote, and
+        writing nothing when the merged result is unchanged means a repeated
+        sync of an unchanged corpus costs no row update at all — which is what
+        makes the sync safe to run on a schedule.
+        """
+        if not metadata:
+            return
+        merged = dict(document.doc_metadata or {})
+        if all(merged.get(key) == value for key, value in metadata.items()):
+            return
+        merged.update(metadata)
+        document.doc_metadata = merged
         self.db.commit()
 
     def _find_predecessor(self, company_id: str, filename: str) -> Document | None:
