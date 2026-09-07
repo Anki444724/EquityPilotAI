@@ -208,6 +208,24 @@ rather than silently falling back and losing uploads. Outside production it
 falls back to a temp directory with a warning, so CI and developer machines
 need no volume.
 
+### Who drains the queue
+
+`DocumentJob` is its own queue, so it needs a consumer of its own — an
+assumption worth stating plainly, because the gap between "there is a queue"
+and "something reads it" once left every uploaded and Blogger-synced document
+parked in `queued` with `attempts = 0`.
+
+| Deployment shape | Document queue drained by |
+| --- | --- |
+| `python -m app.worker` (the `worker` service) | the platform `Worker`, which alternates between `BackgroundJob` and `DocumentJob` in `Worker.run_pass` |
+| `WORKER_ENABLED=true` in the API process | the same `Worker`, on a background thread |
+| `python -m app.services.documents.worker` | the standalone `DocumentWorker`, for scaling ingestion independently |
+
+A deployment that runs the API with `WORKER_ENABLED=false` and no
+`python -m app.worker` process drains *neither* queue. That is a configuration
+error, not a code path: check for the `worker starting … documents=True` log
+line at boot.
+
 To scale the worker out, run `python -m app.services.documents.worker` as its
 own Railway service against the same database and volume. The claim is a
 conditional UPDATE, so any number may run.

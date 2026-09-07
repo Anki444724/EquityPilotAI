@@ -99,18 +99,15 @@ async def lifespan(app: FastAPI):
     )
 
     if settings.WORKER_ENABLED or settings.SCHEDULER_ENABLED:
+        # `start_in_process` covers both queues: the generic BackgroundJob
+        # queue and the DocumentJob queue that ingestion — including the
+        # Blogger sync — enqueues into. The document worker is not started
+        # separately beside it: two ingestion pipelines in one container buy
+        # nothing, because the claim is atomic, and each one holds the memory
+        # of a half-read PDF while it waits.
         from app.services.platform.jobs.worker import start_in_process
 
         start_in_process(SessionLocal)
-
-        # Document ingestion runs its own loop. Long jobs — a 1000-page
-        # scanned report can take minutes — must not sit in the same queue as
-        # second-scale work like notifications, or one report blocks it all.
-        from app.services.documents.worker import (
-            start_in_process as start_document_worker,
-        )
-
-        start_document_worker(SessionLocal)
 
     yield
 
@@ -123,12 +120,9 @@ async def lifespan(app: FastAPI):
         db.close()
 
     if settings.WORKER_ENABLED or settings.SCHEDULER_ENABLED:
-        from app.services.documents.worker import (
-            stop_in_process as stop_document_worker,
-        )
+        # Stops the generic workers and, in the scheduler-only shape, the
+        # document worker `start_in_process` started in their place.
         from app.services.platform.jobs.worker import stop_in_process
-
-        stop_document_worker()
 
         stop_in_process()
 

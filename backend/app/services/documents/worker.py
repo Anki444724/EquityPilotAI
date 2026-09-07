@@ -1,13 +1,23 @@
 """Background worker for document ingestion.
 
-Runs the pipeline off the request path. Deliberately a separate loop from the
-platform's generic `Worker`: document jobs are long (minutes for a 1000-page
-scanned report) and have their own claim table, so mixing them with
-second-scale jobs like notifications would let one report block the queue.
+Runs the pipeline off the request path. Deliberately a separate *queue* from
+the platform's generic `Worker`: document jobs are long (minutes for a
+1000-page scanned report) and have their own claim table, so folding the rows
+into `BackgroundJob` would let one report block notifications and would throw
+away a retry policy built for documents.
 
-It can run in-process alongside the API (`WORKER_ENABLED=true`) or as its own
-Railway service (`python -m app.services.documents.worker`). The claim is a
-conditional UPDATE, so running several is safe.
+Being a separate queue does not mean a separate process has to run it, and
+assuming that was the bug: `DocumentWorker` existed and was correct, but only
+the API process started it, and a production deployment runs the API with
+`WORKER_ENABLED=false` and its jobs in `python -m app.worker`, which knew only
+about `BackgroundJob`. Every uploaded and Blogger-synced document therefore
+sat in `queued` with a job row nothing claimed.
+
+This class is now the document half of the platform `Worker`, which composes
+it and alternates between the two queues in `Worker.run_pass`. It also still
+runs on its own — `python -m app.services.documents.worker` — for a deployment
+that wants document ingestion scaled independently of the generic queue. The
+claim is a conditional UPDATE, so running several is safe either way.
 """
 from __future__ import annotations
 
