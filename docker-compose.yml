@@ -73,6 +73,13 @@ services:
       WORKER_ENABLED: "false"
       SCHEDULER_ENABLED: "false"
       BACKUP_DIR: /app/backups
+      # Document storage, spelled out in both services that touch it. The API
+      # streams an upload into DOCUMENT_STORAGE_PATH and enqueues a
+      # DocumentJob; the worker later re-reads those exact bytes to parse and
+      # index them. If the two services resolved this differently, the worker
+      # would look for a file that exists only in the API's container.
+      DOCUMENT_STORAGE_BACKEND: "local"
+      DOCUMENT_STORAGE_PATH: /data/documents
       # --- Blogger ---------------------------------------------------
       # The API side of the integration: it serves the blog's public chat and
       # accepts a sync trigger. Reading the feed is the worker's job.
@@ -101,6 +108,13 @@ services:
       BLOGGER_DEFAULT_TICKER: ""
     volumes:
       - backups:/app/backups
+      # The shared document store. A *named* volume rather than a bind mount
+      # or the container filesystem, for two reasons: the bytes must survive
+      # restarts, recreation and rebuilds, and they must be the same bytes
+      # the worker sees. Without this mount each container had its own
+      # ephemeral /data/documents, and every DocumentJob failed looking for
+      # an object only the API could see.
+      - documents:/data/documents
     ports:
       - "8000:8000"
     depends_on:
@@ -128,6 +142,12 @@ services:
       ENCRYPTION_KEY: local-development-envelope-key-not-for-production
       LOG_FORMAT: json
       BACKUP_DIR: /app/backups
+      # Same storage backend and path as the api service — deliberately a
+      # repeat, not a default: a drift between the two is invisible until a
+      # DocumentJob fails claiming its source object. These lines and the
+      # shared volume below are what keep upload and ingestion on one store.
+      DOCUMENT_STORAGE_BACKEND: "local"
+      DOCUMENT_STORAGE_PATH: /data/documents
       # Exactly one process in the deployment runs the scheduler; more than
       # one and every recurring job fires N times.
       SCHEDULER_ENABLED: "true"
@@ -155,6 +175,10 @@ services:
       BLOGGER_DEFAULT_TICKER: ""
     volumes:
       - backups:/app/backups
+      # The same named volume the api service mounts — this is the hand-off.
+      # The worker claims a DocumentJob and reads the stored source from
+      # /data/documents: not a copy of what the API wrote, the very bytes.
+      - documents:/data/documents
     depends_on:
       postgres:
         condition: service_healthy
@@ -177,3 +201,8 @@ volumes:
   postgres_data:
   redis_data:
   backups:
+  # Uploaded documents, mounted at /data/documents by BOTH api and worker.
+  # A named top-level volume survives `compose restart`, container recreation
+  # and image rebuilds; only an explicit `compose down -v` (or `docker volume
+  # rm`) removes it. Anonymous volumes and container-local paths would not.
+  documents:

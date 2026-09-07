@@ -208,6 +208,29 @@ rather than silently falling back and losing uploads. Outside production it
 falls back to a temp directory with a warning, so CI and developer machines
 need no volume.
 
+### One path, two processes
+
+The upload and the ingestion happen in different containers. The API streams
+the stored source into `DOCUMENT_STORAGE_PATH` and enqueues the `DocumentJob`;
+the worker claims the job and reads the source back from *its* view of
+`DOCUMENT_STORAGE_PATH`. Both must resolve to the same bytes, or the claim
+fails with `storage object not found` and the document fails its attempts in a
+row — the database agrees with itself perfectly the whole time.
+
+The production-shaped compose stack (`docker compose up --build`) wires this
+with one named volume, `documents`, mounted at `/data/documents` in **both**
+`api` and `worker`, with `DOCUMENT_STORAGE_BACKEND=local` and
+`DOCUMENT_STORAGE_PATH=/data/documents` set explicitly on both services. A
+named volume survives container restart, recreation and image rebuild; only
+`docker compose down -v` removes it.
+
+On Railway the same rule applies: the bytes must be reachable from both sides
+of the hand-off. With the single-service shape (`WORKER_ENABLED=true` in the
+API process) one Volume attached at `/data/documents` covers both roles. Two
+separate services cannot share one Railway Volume — in that shape both
+services must point at the same S3-compatible bucket
+(`DOCUMENT_STORAGE_BACKEND=r2`) instead of a local path.
+
 ### Who drains the queue
 
 `DocumentJob` is its own queue, so it needs a consumer of its own — an

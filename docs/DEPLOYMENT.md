@@ -66,6 +66,18 @@ workers do not appear under `uvicorn --reload`.
 | `postgres` | 5432 | healthchecked with `pg_isready` |
 | `redis` | 6379 | shared rate-limit counters |
 
+Four named volumes back the stack: `postgres_data`, `redis_data`, `backups`
+and `documents`. `documents` is mounted at `/data/documents` in **both** `api`
+and `worker`, and both services set
+`DOCUMENT_STORAGE_BACKEND=local` / `DOCUMENT_STORAGE_PATH=/data/documents`
+explicitly. That sharing is the hand-off between upload and ingestion: the API
+streams an upload into the volume and enqueues a `DocumentJob`, and the worker
+re-reads those exact bytes to parse and index the document. Two private copies
+of the path — one per container — is the failure mode where the worker fails
+every job with `storage object not found` no matter how many times it
+retries. Named volumes survive container restart, recreation and `--build`
+rebuilds; `docker compose down -v` is the only thing that removes them.
+
 The compose file contains local-only secrets, clearly labelled. They must not
 be reused anywhere — committing a real key is exactly the failure the
 workbook's own `AI Settings` sheet warns about.
@@ -136,6 +148,17 @@ SCHEDULER_ENABLED=true
 
 **Exactly one process may run the scheduler.** Two and every recurring job
 fires twice — two backups, two retention sweeps.
+
+**Document storage.** Whatever stores or ingests documents must see the same
+bytes at `DOCUMENT_STORAGE_PATH` (default `/data/documents`). With the
+single-service shape — `WORKER_ENABLED=true` in the API process — attach one
+Railway Volume at `/data/documents` and set
+`DOCUMENT_STORAGE_BACKEND=local`. Two separate services cannot share a
+Railway Volume, so for a dedicated `worker` service the local path cannot be
+the shared store: point both services at the same S3-compatible bucket
+(`DOCUMENT_STORAGE_BACKEND=r2`, plus the bucket credentials) instead. The
+volume-vs-bucket decision is covered in `docs/DOCUMENT_INGESTION.md`
+§Deployment.
 
 The frontend needs `NEXT_PUBLIC_API_URL` at *build* time, not run time; Next
 inlines `NEXT_PUBLIC_*` during the build, so changing the backend URL requires
