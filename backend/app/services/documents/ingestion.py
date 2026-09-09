@@ -59,7 +59,12 @@ class AcceptedUpload:
 
     document: Document
     job_id: int | None
-    action: str                      # created | duplicate | new_version
+    #: created | duplicate | new_version | recovered.
+    #: `recovered` — the bytes matched a document whose stored object was
+    #: missing; those bytes were written back to storage, the existing row
+    #: repointed at them, and (for a failed document) re-queued. No second
+    #: document: the platform keeps each company's bytes once.
+    action: str
     duplicate_of: int | None = None
     superseded: int | None = None
 
@@ -150,14 +155,12 @@ class DocumentIngestionService:
                 Document.content_hash == digest,
             )
         )
-        if existing is not None:
-            # Byte-identical re-upload. Keep whichever copy is already
-            # referenced and drop the provisional one.
+        if existing is not None and self._stored_source_is_available(existing):
+            # Byte-identical re-upload of a document whose copy is still in
+            # storage. Keep that copy and drop the provisional one — the
+            # platform stores each company's bytes once, and the row already
+            # points at them.
             self.storage.delete(provisional)
-            if not existing.storage_key:
-                # An older row from before durable storage: adopt these bytes
-                # so it becomes re-indexable.
-                self._adopt(existing, final_key, source_key=None)
             self._refresh_metadata(existing, metadata)
             return AcceptedUpload(
                 existing, job_id=None, action="duplicate", duplicate_of=existing.id,
@@ -167,6 +170,31 @@ class DocumentIngestionService:
         with self.storage.open(provisional) as handle:
             final = self.storage.put(final_key, handle)
         self.storage.delete(provisional)
+
+        if existing is not None:
+            # A row holds these bytes but cannot serve them: the object its
+            # storage_key names is missing (a volume that was migrated or
+            # cleaned up), or the row predates durable storage and never had
+            # a key. The copy just written to `final_key` is the one to keep,
+            # so the row is repointed at it. A failed document is re-queued
+            # for the existing worker — with the source restored, re-indexing
+            # is the platform's normal path, and nothing is deleted.
+            log.info(
+                "stored source restored for an existing document",
+                document_id=existing.id, previous_key=existing.storage_key,
+                storage_key=final.key,
+            )
+            self._adopt(existing, final.key, source_key=None)
+            job = (
+                self._queue_reindex(existing)
+                if existing.status == DocumentStatus.FAILED.value
+                else None
+            )
+            self._refresh_metadata(existing, metadata)
+            return AcceptedUpload(
+                existing, job_id=job.id if job else None,
+                action="recovered", duplicate_of=existing.id,
+            )
 
         predecessor = self._find_predecessor(company_id, filename)
         version = (predecessor.version + 1) if predecessor else 1
@@ -306,8 +334,21 @@ class DocumentIngestionService:
         if document.status == DocumentStatus.PROCESSING.value and not force:
             raise IngestionError(f"document {document_id} is already processing")
 
+        job = self._queue_reindex(document)
+        log.info("reindex queued", document_id=document_id, job_id=job.id)
+        return job.id
+
+    def _queue_reindex(self, document: Document) -> DocumentJob:
+        """(Re)schedule `document` for the existing document worker.
+
+        Shared by `reprocess()` and by `accept()` restoring the stored source
+        of a failed document. Reuses the document's job when it has one — a
+        job row is reset to a clean first attempt, never deleted or
+        duplicated — and marks the document queued, which is all the worker
+        needs to claim it.
+        """
         job = self.db.scalar(
-            select(DocumentJob).where(DocumentJob.document_id == document_id)
+            select(DocumentJob).where(DocumentJob.document_id == document.id)
         )
         if job is None:
             job = DocumentJob(
@@ -327,8 +368,21 @@ class DocumentIngestionService:
         self._log(document, ProcessingStage.QUEUED, "re-index requested")
         self.db.flush()
         self.db.commit()
-        log.info("reindex queued", document_id=document_id, job_id=job.id)
-        return job.id
+        return job
+
+    def _stored_source_is_available(self, document: Document) -> bool:
+        """Whether `document` can serve the bytes its content hash names.
+
+        The key must be present and the object it names still in storage. A
+        row that fails this cannot settle a duplicate: the copy it references
+        is not where it claims, and the upload in hand is the one to keep.
+        """
+        if not document.storage_key:
+            return False
+        try:
+            return self.storage.exists(document.storage_key)
+        except StorageError:
+            return False
 
     # ==================================================================
     # Worker path

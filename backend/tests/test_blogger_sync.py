@@ -44,7 +44,9 @@ from app.services.blogger.feed import (
 from app.services.blogger.mapping import (
     CompanyMapper, name_keys, normalise_name, ticker_key,
 )
-from app.services.blogger.sync import BloggerSyncService, main
+from app.services.blogger.sync import (
+    CHANGED_ACTIONS, BloggerSyncService, main,
+)
 from app.services.documents.ingestion import DocumentIngestionService
 from app.services.documents.storage import LocalFileStorage
 from app.services.documents.worker import DocumentWorker
@@ -1097,6 +1099,192 @@ class TestSyncIsRepeatable:
             Document.company_id == shriramfin.id
         ).count() == 1
         assert db_session.query(DocumentJob).count() == 1
+
+    def test_a_failed_document_with_missing_source_is_recovered_from_feed(
+        self, db_session, storage, server, shriramfin, monkeypatch,
+    ):
+        """The production state: the row is FAILED and its object is gone.
+
+        The shared volume lost the object the row's `storage_key` names, and
+        the pipeline exhausted its retries, leaving the row FAILED. The feed
+        is the authoritative source for a Blogger post, so the sync must not
+        report a failure it cannot fix: it re-renders the post and hands the
+        bytes to `accept()`, which writes them back to storage, repoints the
+        row, and re-queues it for the existing worker. The platform keeps
+        each company's bytes once, so unchanged content repairs the row in
+        place rather than making a second document.
+        """
+        monkeypatch.setattr(
+            "app.services.documents.ingestion.get_storage", lambda: storage,
+        )
+        service = BloggerSyncService(
+            db_session, feed=client_for(server), storage=storage,
+        )
+        service.sync()
+        broken = db_session.query(Document).filter(
+            Document.company_id == shriramfin.id
+        ).one()
+        job = db_session.query(DocumentJob).filter(
+            DocumentJob.document_id == broken.id
+        ).one()
+
+        # The object fell out of the shared volume; the job exhausted its
+        # retries and the row is FAILED. The other posts' jobs are cleared so
+        # this test counts exactly the recovered document's work.
+        assert storage.delete(broken.storage_key) is True
+        job.status = "failed"
+        job.error = "stored object unreadable"
+        broken.status = DocumentStatus.FAILED.value
+        broken.error = "stored object unreadable"
+        db_session.commit()
+        db_session.query(DocumentJob).filter(
+            DocumentJob.document_id != broken.id
+        ).delete(synchronize_session=False)
+        db_session.commit()
+        documents_before = db_session.query(Document).count()
+        jobs_before = db_session.query(DocumentJob).count()
+
+        # A dry run reports the recovery without writing anything.
+        dry = service.sync(dry_run=True)
+        assert dry.failed == 0 and dry.changed == 0
+        assert db_session.query(Document).count() == documents_before
+        would = [o for o in dry.outcomes if o.document_id == broken.id]
+        assert len(would) == 1
+        assert would[0].action == "would_ingest"
+        assert "recovered from the feed" in would[0].reason
+
+        result = service.sync()
+
+        # The broken post is the one that changed; nothing failed.
+        assert result.failed == 0
+        changed = [o for o in result.outcomes if o.action in CHANGED_ACTIONS]
+        assert len(changed) == 1
+        assert changed[0].post_id == CORPUS[0].post_id
+        assert changed[0].action == "requeued"
+        assert changed[0].document_id == broken.id
+        assert changed[0].job_id == job.id
+        assert "restored" in changed[0].reason
+
+        # Same row, repaired: unchanged content is restored in place, not
+        # duplicated, and the old state is not erased.
+        assert db_session.query(Document).count() == documents_before
+        db_session.refresh(broken)
+        assert broken.status == DocumentStatus.QUEUED.value
+        assert broken.error is None
+        assert broken.superseded_by is None
+        assert broken.version == 1
+        # The source is back in storage, and it is the feed's current content.
+        assert broken.storage_key
+        assert storage.exists(broken.storage_key)
+        restored = storage.read(broken.storage_key).decode("utf-8")
+        assert f"<title>{CORPUS[0].title}</title>" in restored
+        assert "non-banking finance" in restored
+        assert 'name="blogger_post_id"' in restored
+
+        # The job was re-scheduled through the normal mechanism — reset, not
+        # deleted and not duplicated.
+        assert db_session.query(DocumentJob).count() == jobs_before
+        db_session.refresh(job)
+        assert job.status == "queued"
+        assert job.attempts == 0
+        assert job.error is None
+
+        # The existing worker picks it up and completes it. The worker closes
+        # its session after each job, so the row is read back rather than
+        # refreshed.
+        _drain(db_session, storage)
+        broken = db_session.get(Document, broken.id)
+        assert broken.status == DocumentStatus.COMPLETED.value
+        assert broken.chunk_count > 0
+
+        # And the next sync is quiet: the post is stored and unchanged.
+        again = service.sync()
+        assert again.failed == 0
+        assert again.changed == 0
+        assert again.unchanged >= 1
+
+    def test_a_failed_document_with_missing_source_and_edited_feed_becomes_a_new_version(
+        self, db_session, storage, server, shriramfin, monkeypatch,
+    ):
+        """The same incident, but the author edited the post after ingestion.
+
+        The feed now serves different content, so `accept()` cannot repair the
+        broken row in place — the platform keeps each company's bytes once —
+        and the recovery is the normal versioning path: a new document and a
+        new job, with the broken row retired rather than deleted.
+        """
+        monkeypatch.setattr(
+            "app.services.documents.ingestion.get_storage", lambda: storage,
+        )
+        service = BloggerSyncService(
+            db_session, feed=client_for(server), storage=storage,
+        )
+        service.sync()
+        broken = db_session.query(Document).filter(
+            Document.company_id == shriramfin.id
+        ).one()
+
+        # The author edits the post, then the volume loses the stored object
+        # and the pipeline leaves the row FAILED.
+        edited = CORPUS[0].text + "\n\nA correction: the ratio is 2.6%."
+        server.posts = (
+            FakePost(
+                post_id=CORPUS[0].post_id, title=CORPUS[0].title,
+                labels=CORPUS[0].labels, text=edited,
+                published=CORPUS[0].published,
+                updated=datetime.now(timezone.utc),
+            ),
+            *CORPUS[1:],
+        )
+        assert storage.delete(broken.storage_key) is True
+        broken.status = DocumentStatus.FAILED.value
+        broken.error = "stored object unreadable"
+        db_session.commit()
+        db_session.query(DocumentJob).delete()
+        db_session.commit()
+        documents_before = db_session.query(Document).count()
+        jobs_before = db_session.query(DocumentJob).count()
+
+        result = service.sync()
+
+        # Exactly one recovered outcome, through the normal versioning path.
+        assert result.failed == 0
+        recovered = [
+            o for o in result.outcomes
+            if o.action in ("ingested", "new_version")
+        ]
+        assert len(recovered) == 1
+        assert recovered[0].action == "new_version"
+        assert recovered[0].post_id == CORPUS[0].post_id
+        assert recovered[0].document_id != broken.id
+        assert recovered[0].version == broken.version + 1
+
+        # One new document and one new job, on the existing queue.
+        assert db_session.query(Document).count() == documents_before + 1
+        assert db_session.query(DocumentJob).count() == jobs_before + 1
+
+        current = db_session.get(Document, recovered[0].document_id)
+        assert current.superseded_by is None
+        assert current.version == broken.version + 1
+        # The new current document has a valid storage_key, and the object is
+        # really there.
+        assert current.storage_key
+        assert storage.exists(current.storage_key)
+        assert storage.read(current.storage_key)
+        assert current.status == DocumentStatus.QUEUED.value
+
+        # The old document is preserved and retired, not erased.
+        db_session.refresh(broken)
+        assert broken.superseded_by == current.id
+        assert db_session.get(Document, broken.id) is not None
+
+        # The existing worker processes the recovered version. The worker
+        # closes its session after each job, so the row is read back rather
+        # than refreshed.
+        _drain(db_session, storage)
+        current = db_session.get(Document, current.id)
+        assert current.status == DocumentStatus.COMPLETED.value
+        assert current.chunk_count > 0
 
     def test_dry_run_writes_nothing(self, db_session, storage, server, shriramfin,
                                     monkeypatch):
