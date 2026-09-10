@@ -109,7 +109,8 @@ class UploadResponse(BaseModel):
     """
 
     document: DocumentSummary
-    #: "created", "duplicate" or "new_version".
+    #: "created", "duplicate", "new_version" or "recovered" (the stored copy
+    #: of an existing document was missing and this upload restored it).
     action: str
     duplicate_of: int | None = None
     superseded: int | None = None

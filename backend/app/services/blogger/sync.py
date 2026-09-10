@@ -442,22 +442,42 @@ class BloggerSyncService:
         if not force:
             for row in same_company:
                 if row.status == DocumentStatus.FAILED.value:
-                    # A previous run got as far as storing the bytes and then
-                    # failed in the pipeline. The source is durable, so the
-                    # right action is the platform's own re-index rather than a
-                    # second document — and it is why keeping the original
-                    # bytes was worth the storage.
+                    if self._stored_source_is_available(row):
+                        # A previous run got as far as storing the bytes and
+                        # then failed in the pipeline. The source is durable,
+                        # so the right action is the platform's own re-index
+                        # rather than a second document — and it is why
+                        # keeping the original bytes was worth the storage.
+                        if dry_run:
+                            return PostOutcome(**outcome_base, action="would_ingest",
+                                               document_id=row.id,
+                                               reason="the stored version failed; it would be re-indexed")
+                        job_id = self.ingestion.reprocess(row.id)
+                        log.info("blogger document requeued", document_id=row.id,
+                                 post_id=post.post_id, job_id=job_id)
+                        return PostOutcome(**outcome_base, action="requeued",
+                                           document_id=row.id, version=row.version,
+                                           job_id=job_id,
+                                           reason="the stored version had failed; re-indexed from its source")
+                    # The stored bytes are gone: a legacy row whose object fell
+                    # out of the shared volume, or one that predates source
+                    # retention. `reprocess()` has nothing to read, so it is
+                    # not called. The feed is the authoritative source for a
+                    # Blogger post, so the recovery is a fresh render through
+                    # `accept()`: the bytes return to storage, and the
+                    # existing pipeline either re-indexes the same row
+                    # (unchanged content) or supersedes it with a new version
+                    # (edited post).
                     if dry_run:
                         return PostOutcome(**outcome_base, action="would_ingest",
                                            document_id=row.id,
-                                           reason="the stored version failed; it would be re-indexed")
-                    job_id = self.ingestion.reprocess(row.id)
-                    log.info("blogger document requeued", document_id=row.id,
-                             post_id=post.post_id, job_id=job_id)
-                    return PostOutcome(**outcome_base, action="requeued",
-                                       document_id=row.id, version=row.version,
-                                       job_id=job_id,
-                                       reason="the stored version had failed; re-indexed from its source")
+                                           reason="the stored source is missing; it would be recovered from the feed")
+                    log.warning(
+                        "blogger stored source missing; recovering from the feed",
+                        document_id=row.id, storage_key=row.storage_key,
+                        post_id=post.post_id,
+                    )
+                    break
 
                 unchanged_by = self._unchanged_reason(row, post)
                 if unchanged_by:
@@ -526,6 +546,28 @@ class BloggerSyncService:
                                document_id=document.id, version=document.version,
                                reason="the rendered post is byte-identical to the stored document")
 
+        if accepted.action == "recovered":
+            # The rendered post is the document's own content, and `accept()`
+            # found that the row's stored object was missing: it wrote the
+            # bytes back to storage, repointed the row at them and — for a
+            # failed document — re-queued it for the existing worker. No
+            # second document: the platform keeps each company's bytes once.
+            log.info(
+                "blogger document recovered from the feed", post_id=post.post_id,
+                ticker=company.ticker, document_id=document.id,
+                version=document.version, job_id=accepted.job_id,
+                bytes=len(payload),
+            )
+            if accepted.job_id is not None:
+                return PostOutcome(**outcome_base, action="requeued",
+                                   document_id=document.id,
+                                   version=document.version,
+                                   job_id=accepted.job_id,
+                                   reason="the stored source was missing; restored from the feed and re-indexed")
+            return PostOutcome(**outcome_base, action="duplicate",
+                               document_id=document.id, version=document.version,
+                               reason="the stored source was missing; restored from the feed")
+
         action = "new_version" if accepted.action == "new_version" else "ingested"
         log.info(
             "blogger post ingested", post_id=post.post_id,
@@ -572,6 +614,26 @@ class BloggerSyncService:
         if stored_stamp and stored_stamp == iso_utc(post.effective_date):
             return "the feed timestamp matches the stored document"
         return ""
+
+    def _stored_source_is_available(self, row: Document) -> bool:
+        """Whether the pipeline can re-run `row` from its stored bytes.
+
+        The same question `reprocess()` answers with an error when it is no:
+        the key must be present, and the object it names must still be in the
+        shared document storage. Legacy Blogger documents can fail this — the
+        object fell out of the volume, or the row predates source retention —
+        and for those the feed is the only source left, so the sync recovers
+        by re-rendering the post through `accept()` rather than reporting a
+        failure it cannot fix.
+        """
+        if not row.storage_key:
+            return False
+        from app.services.documents.storage import StorageError
+
+        try:
+            return self.ingestion.storage.exists(row.storage_key)
+        except StorageError:
+            return False
 
     def _supersede_other_companies(
         self,

@@ -150,6 +150,11 @@ async def upload_document(
             "Upload stored and queued for ingestion. Poll status_url for "
             "progress."
         ),
+        "recovered": (
+            "The stored copy of this document had gone missing; your upload "
+            "restored it and re-queued the existing document for ingestion. "
+            "Poll status_url for progress."
+        ),
     }
     return UploadResponse(
         document=DocumentSummary.model_validate(accepted.document),
