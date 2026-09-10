@@ -284,6 +284,16 @@ async def blogger_chat(
                 body.question, memory,
                 source=parse_directive(body.question),
                 language=_public_language(body.language, body.question),
+                # Honour the operator's chosen provider. This is load-bearing:
+                # `AIService`'s shared router is built with no preferred
+                # provider, so without this the chain falls back to
+                # `FALLBACK_ORDER` — which leads with OpenRouter — and a
+                # provider whose credits are spent blocks the request until
+                # this budget is exhausted (see the 45s production timeout).
+                # The authenticated chat passes the same setting; the public
+                # path must too, or Gemini-preferred deployments silently
+                # route every reader through a dead OpenRouter key first.
+                provider=settings.AI_PREFERRED_PROVIDER,
             ),
             timeout=budget,
         )
