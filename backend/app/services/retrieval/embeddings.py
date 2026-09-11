@@ -1,13 +1,24 @@
-"""Semantic embedding providers, in the brief's preference order.
+"""Semantic embedding providers, in preference order.
 
-    1. BAAI/bge-m3            — served by OpenRouter, 1024 dimensions
-    2. jina-embeddings-v3     — Jina's own API, needs JINA_API_KEY
+    1. jina-embeddings-v3     — Jina's own API, needs JINA_API_KEY (free tier)
+    2. BAAI/bge-m3            — served by OpenRouter, 1024 dimensions
     3. text-embedding-3-small — OpenAI, needs OPENAI_API_KEY
 
-`bge-m3` is the default because it is the only one of the three reachable with
-the credentials this deployment holds, and because it is genuinely
-multilingual — which the brief requires and the other two are weaker at for
-Devanagari.
+`jina-v3` is the default. It is the only one of the three reachable with a
+genuinely free API key (Jina's free tier needs no credit card), it is
+multilingual — which the brief requires — and its 1024 dimensions match the
+production `vector(1024)` column, so vectors can be stored without a schema
+change.
+
+`bge-m3` was the default while the deployment held OpenRouter credits. That
+account is now exhausted (HTTP 402) and must not be used, so the
+OpenRouter-backed provider is retained only for deployments that still hold
+credits — selected explicitly via EMBEDDING_PROVIDER, never by default ahead
+of a configured free provider.
+
+`openai-small` stays last: beyond needing a paid OpenAI key it returns 1536
+dimensions, which do not fit the `vector(1024)` column on Postgres. Selecting
+it without a column migration fails writes and degrades retrieval to lexical.
 
 Measured on the live endpoint before this module was written:
 
@@ -221,8 +232,9 @@ class _HTTPEmbeddingProvider(SemanticEmbeddingProvider):
         if code == 402:
             return (
                 f"credit exhausted on the account for {self.key_setting}; "
-                f"top up, or point EMBEDDING_PROVIDER at another configured "
-                f"provider."
+                f"top up, unset {self.key_setting} so selection falls through, "
+                f"or point EMBEDDING_PROVIDER at another configured provider "
+                f"(jina-v3 has a free tier via JINA_API_KEY)."
             )
         return (
             f"forbidden — the {self.key_setting} account lacks permission "
@@ -263,7 +275,11 @@ class _HTTPEmbeddingProvider(SemanticEmbeddingProvider):
 
 
 class BGEM3Provider(_HTTPEmbeddingProvider):
-    """BAAI/bge-m3 via OpenRouter. First preference."""
+    """BAAI/bge-m3 via OpenRouter. Opt-in via EMBEDDING_PROVIDER.
+
+    Retained for deployments whose OpenRouter account still holds credits.
+    This deployment's account is exhausted, so this provider must not be the
+    default: see PROVIDER_ORDER and the JINA_API_KEY runbook."""
 
     name: ClassVar[str] = "bge-m3"
     endpoint: ClassVar[str] = "https://openrouter.ai/api/v1/embeddings"
@@ -273,7 +289,10 @@ class BGEM3Provider(_HTTPEmbeddingProvider):
 
 
 class JinaV3Provider(_HTTPEmbeddingProvider):
-    """jina-embeddings-v3. Second preference; needs JINA_API_KEY."""
+    """jina-embeddings-v3. First preference; needs JINA_API_KEY.
+
+    The production default: a free-tier key with no credit card, 1024
+    dimensions that match the pgvector column, and multilingual coverage."""
 
     name: ClassVar[str] = "jina-v3"
     endpoint: ClassVar[str] = "https://api.jina.ai/v1/embeddings"
@@ -283,7 +302,11 @@ class JinaV3Provider(_HTTPEmbeddingProvider):
 
 
 class OpenAISmallProvider(_HTTPEmbeddingProvider):
-    """text-embedding-3-small. Fallback; needs OPENAI_API_KEY."""
+    """text-embedding-3-small. Last resort; needs OPENAI_API_KEY.
+
+    1536 dimensions do not fit the production `vector(1024)` column, so this
+    provider needs a column migration before it can serve a Postgres
+    deployment. Kept for API compatibility and non-Postgres stores."""
 
     name: ClassVar[str] = "openai-small"
     endpoint: ClassVar[str] = "https://api.openai.com/v1/embeddings"
@@ -292,9 +315,23 @@ class OpenAISmallProvider(_HTTPEmbeddingProvider):
     key_setting: ClassVar[str] = "OPENAI_API_KEY"
 
 
-#: Preference order exactly as the brief specifies.
+#: Preference order. jina-v3 leads: it is the only provider with a genuinely
+#: free API tier, and its 1024 dimensions fit the production column.
+#:
+#: The brief's original order led with bge-m3, which is served by OpenRouter.
+#: That account is exhausted (HTTP 402) and must not be used, so bge-m3 no
+#: longer leads: with both keys configured the deployment embeds with Jina.
+#: A deployment holding only a dead OpenRouter key still selects bge-m3 (the
+#: key is present), fails fast on the 402, trips the circuit breaker and
+#: degrades to lexical — unsetting the key skips it entirely. An explicit
+#: EMBEDDING_PROVIDER still wins: a deployment with live OpenRouter credits
+#: can opt back into bge-m3.
+#:
+#: openai-small is last deliberately. Its 1536 dimensions do not fit the
+#: `vector(1024)` column, so auto-selecting it ahead of a 1024-dimension
+#: provider would trade a working index for write failures on Postgres.
 PROVIDER_ORDER: tuple[type[_HTTPEmbeddingProvider], ...] = (
-    BGEM3Provider, JinaV3Provider, OpenAISmallProvider,
+    JinaV3Provider, BGEM3Provider, OpenAISmallProvider,
 )
 
 _KEY_SETTINGS: dict[str, tuple[str, ...]] = {

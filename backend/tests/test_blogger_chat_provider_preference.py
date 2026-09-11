@@ -6,9 +6,15 @@ Production runs with ``AI_PREFERRED_PROVIDER=Gemini`` and Gemini answers in
 ~2s, yet ``POST /api/v1/blogger/chat`` hit the endpoint's 45s budget every
 time. The cause is not Gemini and not RAG: ``AIService`` builds its shared
 ``ProviderRouter()`` with **no** preferred provider, and the Blogger handler
-never passed one either, so the chain fell back to ``FALLBACK_ORDER``
-(``OpenRouter`` first). OpenRouter, out of credits, blocked the request until
-the endpoint budget was spent — a 504 the reader could only retry.
+never passed one either, so the chain fell back to ``FALLBACK_ORDER`` — which
+at the time led with ``OpenRouter``. OpenRouter, out of credits, blocked the
+request until the endpoint budget was spent — a 504 the reader could only
+retry.
+
+The fix has two layers, and these tests pin both: the handler now passes the
+operator's preference through, AND the declared order leads with Gemini with
+the exhausted OpenRouter account last — so even an unset preference can no
+longer route a reader through the dead key first.
 
 These tests drive the real endpoint with controllable stand-ins for the
 providers, so they pin *selection* and *timing* without a network or an API
@@ -18,6 +24,7 @@ key. They prove:
 2. A normal Gemini response completes within the endpoint budget.
 3. The existing grounded citations / RAG behaviour is intact.
 4. When Gemini actually fails, the chain falls back safely (no hang, no 5xx).
+5. Without any preference, Gemini still leads by default (dead key last).
 """
 from __future__ import annotations
 
@@ -211,8 +218,8 @@ def _ask(client, *, question="What was the Maggi line capacity utilisation?",
 class TestGeminiPreferred:
     def test_uses_gemini_and_completes_within_budget(self, client, indexed_post,
                                                      monkeypatch):
-        # OpenRouter leads FALLBACK_ORDER and would block (it has no credits);
-        # Gemini is the operator's preferred provider and answers fast.
+        # OpenRouter would block (it has no credits); Gemini is the
+        # operator's preferred provider and answers fast.
         _install_controllable_router(
             monkeypatch, {"OpenRouter": "hang", "Gemini": "fast"},
             preferred=None,
@@ -230,23 +237,40 @@ class TestGeminiPreferred:
         # Comfortably inside the 45s endpoint budget (and the real Gemini SLA).
         assert elapsed < settings.blogger_chat_timeout_seconds
 
-    def test_reproduces_the_blocking_path_when_preferred_is_unset(
+    def test_completes_without_preference_because_gemini_leads(
         self, client, indexed_post, monkeypatch,
     ):
-        """The exact production symptom: preferred not honoured -> OpenRouter first.
+        """The old production symptom is gone at the default level too.
 
-        This pins the *blocking* path that the fix removes. We compress the
-        endpoint budget so the test is fast while remaining faithful: the first
-        provider in the chain hangs, so ``asyncio.wait_for`` is what fires.
+        Previously, an unset preference meant the chain honoured
+        FALLBACK_ORDER with OpenRouter first — the dead key blocked and the
+        endpoint 504'd. The declared order now leads with Gemini with the
+        exhausted OpenRouter account last, so even without a preference the
+        reader is answered by the healthy provider first.
         """
-        # Mirror the pre-fix reality: the operator's preference is never wired
-        # in, so the chain honours FALLBACK_ORDER (OpenRouter first).
         monkeypatch.setattr(settings, "AI_PREFERRED_PROVIDER", None)
         _install_controllable_router(
             monkeypatch, {"OpenRouter": "hang", "Gemini": "fast"},
             preferred=None,
         )
-        # Compress the budget so the dead key is bounded but the test stays quick.
+        _CALLS.clear()
+
+        response = _ask(client)
+
+        assert response.status_code == 200, response.text
+        assert _CALLS == ["Gemini"], _CALLS
+
+    def test_endpoint_budget_still_bounds_a_fully_dead_chain(
+        self, client, indexed_post, monkeypatch,
+    ):
+        """The 504 guard remains: when NO provider can answer, the reader gets
+        a retryable timeout instead of a hung connection."""
+        monkeypatch.setattr(settings, "AI_PREFERRED_PROVIDER", None)
+        _install_controllable_router(
+            monkeypatch, {"OpenRouter": "hang", "Gemini": "hang"},
+            preferred=None,
+        )
+        # Compress the budget so the dead chain is bounded but the test stays quick.
         monkeypatch.setattr(settings, "BLOGGER_CHAT_TIMEOUT_SECONDS", 1.5)
 
         response = _ask(client)
@@ -331,7 +355,7 @@ class TestRouterOrdering:
         monkeypatch.setattr(svc, "_router", ProviderRouter())
         assert svc._router.preferred is None
 
-    def test_fallback_order_leads_with_openrouter_without_preference(self):
+    def test_fallback_order_leads_with_gemini_without_preference(self):
         configs = [
             ProviderConfig(name=n, endpoint="x", payload_shape="offline",
                            auth_header="", response_path="", default_model="m",
@@ -339,6 +363,9 @@ class TestRouterOrdering:
             for n in ("OpenRouter", "Gemini", "OpenAI", "Claude")
         ]
         router = ProviderRouter(configs=configs, preferred=None)
-        assert router.chain()[0].name == "OpenRouter"
-        # Once the caller supplies the preference, Gemini leads.
+        assert [c.name for c in router.chain()] == [
+            "Gemini", "OpenAI", "Claude", "OpenRouter",
+        ]
+        # Once the caller supplies the preference, it still wins.
+        assert router.chain(preferred="Claude")[0].name == "Claude"
         assert router.chain(preferred="Gemini")[0].name == "Gemini"

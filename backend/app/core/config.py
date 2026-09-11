@@ -172,9 +172,16 @@ class Settings(BaseSettings):
 
     # --- Retrieval Engine 2.0 -------------------------------------------
     #: Semantic embedding provider. Empty selects the first configured one in
-    #: the brief's preference order: bge-m3, jina-v3, then openai-small.
+    #: preference order: jina-v3, bge-m3, then openai-small.
+    #:
+    #: jina-v3 is the production default (free JINA_API_KEY tier, 1024
+    #: dimensions matching the pgvector column). bge-m3 is served by
+    #: OpenRouter, whose account on this deployment is exhausted — select it
+    #: explicitly only where that account still holds credits. openai-small
+    #: returns 1536 dimensions and needs a column migration on Postgres.
     EMBEDDING_PROVIDER: str | None = None
-    #: jina-embeddings-v3 (second preference) needs its own key.
+    #: jina-embeddings-v3 (first preference) needs its own key. Free tier,
+    #: no credit card: https://jina.ai/embeddings/
     JINA_API_KEY: str | None = None
     #: Cross-encoder reranker. All three must be set or the local
     #: lexical-coverage reranker is used instead.

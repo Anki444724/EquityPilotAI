@@ -71,7 +71,9 @@ reference when a database password changes, and a hard-coded copy goes stale.
 | Variable | Required | Notes |
 |---|---|---|
 | `GEMINI_API_KEY` | Recommended | Primary. From <https://aistudio.google.com/apikey>. |
-| `OPENROUTER_API_KEY` | Recommended | Fallback when Gemini fails or is out of quota. |
+| `OPENROUTER_API_KEY` | Only if funded | Last-resort fallback. Leave empty when the account holds no credits — an unset key is skipped, a dead one only adds failures. |
+| `JINA_API_KEY` | Recommended | Free tier, no credit card. Powers semantic embeddings (`EMBEDDING_PROVIDER=jina-v3`). |
+| `EMBEDDING_PROVIDER` | Recommended | `jina-v3`. Without it the first configured embedding provider is used. |
 | `AI_PREFERRED_PROVIDER` | No | Blank uses the declared order. |
 | `AI_MOCK_MODE` | No (`true`) | Keeps the offline provider as a floor so the AI layer degrades rather than errors. |
 
@@ -243,8 +245,13 @@ Recorded because a verification tool that lies is worse than none:
 Fallback order is declared in `providers/router.FALLBACK_ORDER`:
 
 ```
-Gemini → OpenRouter → OpenAI → Claude → Offline
+Gemini → OpenAI → Claude → OpenRouter → Offline
 ```
+
+OpenRouter is last because its account holds no credits: a dead key early in
+the chain only adds failures before a live model is reached. Leave
+`OPENROUTER_API_KEY` empty unless that account is topped up — the chain skips
+providers with no key.
 
 The chain skips any provider without a key, so configuring one is enough and
 configuring none is safe.

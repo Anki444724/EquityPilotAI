@@ -38,19 +38,21 @@ PROVIDER_MODULES = (openrouter, openai, claude, gemini)
 #: An ordering that matters commercially should not be a side effect of an
 #: import tuple, which is what it was before this constant existed.
 #:
-#: **Phase 1 reversal — OpenRouter now leads, Gemini follows.** The earlier
-#: order put Gemini first, and in practice that meant the platform served
-#: template prose: the Gemini free tier's daily generation quota is spent
-#: within a handful of reports, every subsequent call returns 429 with a
-#: QuotaFailure detail, and the chain fell through to the offline provider.
-#: A provider that answers reliably belongs ahead of one that answers for the
-#: first few requests of the day. Gemini is retained immediately behind it, so
-#: an OpenRouter outage still reaches a live model before the template.
+#: **OpenRouter is last.** Phase 1 put OpenRouter first because it answered
+#: reliably while the Gemini free tier spent its daily generation quota within
+#: a handful of reports and 429'd for the rest of the day. That reasoning held
+#: only while the OpenRouter account held credits. It no longer does: the
+#: account returns HTTP 402, so leading with it routes every request through a
+#: dead provider first — which is exactly the 45s Blogger-chat timeout the
+#: AI_PREFERRED_PROVIDER fix worked around. Gemini therefore leads again
+#: (matching the production `AI_PREFERRED_PROVIDER=Gemini`), and OpenRouter is
+#: retained only as a last resort ahead of the offline composer, for
+#: deployments whose account still holds credits.
 #:
 #: A provider absent from this list still works — it sorts after everything
 #: named here — so adding a vendor module does not require editing the order
 #: unless it needs a specific position.
-FALLBACK_ORDER: tuple[str, ...] = ("OpenRouter", "Gemini", "OpenAI", "Claude")
+FALLBACK_ORDER: tuple[str, ...] = ("Gemini", "OpenAI", "Claude", "OpenRouter")
 
 MAX_ATTEMPTS = 3
 BASE_BACKOFF_SECONDS = 0.5
