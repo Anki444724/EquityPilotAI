@@ -86,22 +86,21 @@ class _Answering:
 class TestFallbackOrder:
     """PD-001 — the order is declared, not inherited from an import tuple."""
 
-    def test_openrouter_precedes_gemini(self):
-        """Phase 1 reversal.
-
-        The order was Gemini-first, which in practice meant the platform
-        served template prose: the Gemini free tier spends its daily
-        generation quota within a few reports and 429s thereafter, so the
-        chain fell through to the offline composer for the rest of the day.
-        A provider that answers reliably belongs in front of one that answers
-        for the first few requests.
+    def test_gemini_leads_and_openrouter_is_last(self):
+        """OpenRouter led in Phase 1 because it answered reliably while the
+        Gemini free tier spent its daily quota within a few reports. That
+        account is now exhausted (HTTP 402), so leading with it routes every
+        request through a dead provider first — the 45s Blogger-chat timeout.
+        Gemini leads again (matching AI_PREFERRED_PROVIDER=Gemini) and
+        OpenRouter is the last resort ahead of the offline composer.
         """
-        assert FALLBACK_ORDER.index("OpenRouter") < FALLBACK_ORDER.index("Gemini")
+        assert FALLBACK_ORDER.index("Gemini") == 0
+        assert FALLBACK_ORDER.index("OpenRouter") == len(FALLBACK_ORDER) - 1
 
     def test_the_chain_follows_the_declared_order(self):
         # Deliberately registered in the wrong order to prove the sort runs.
         router = ProviderRouter(configs=_configured(claude, openrouter, gemini))
-        assert [c.name for c in router.chain()] == ["OpenRouter", "Gemini", "Claude"]
+        assert [c.name for c in router.chain()] == ["Gemini", "Claude", "OpenRouter"]
 
     def test_an_explicit_preference_overrides_the_default_order(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
@@ -133,44 +132,44 @@ class TestFallbackOrder:
         assert [c.name for c in ProviderRouter(configs=configs).chain()] == ["Gemini"]
 
 
-class TestOpenRouterToGeminiFallback:
-    """The hop the brief asks for, proven end to end.
+class TestGeminiFirstFallback:
+    """The hop that matters now that OpenRouter is the last resort.
 
-    Phase 1 reversed the direction: OpenRouter is the primary writing layer
-    and Gemini the standby, so the interesting hop is now OpenRouter down to
-    Gemini rather than the other way round.
+    Gemini leads the chain; when it is unusable the router falls through to
+    the next live provider rather than failing. Phase 1 proved the reverse
+    hop (OpenRouter down to Gemini) while OpenRouter held credits.
     """
 
-    def test_gemini_serves_when_openrouter_is_out_of_quota(self):
+    def test_next_provider_serves_when_gemini_is_out_of_quota(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         dead = _Failing(RateLimitError(
-            "quota", provider="OpenRouter", retry_after=0.01,
+            "quota", provider="Gemini", retry_after=0.01,
             quota_exhausted=True,
         ))
-        alive = _Answering("Gemini")
-        router.build = lambda c: dead if c.name == "OpenRouter" else alive
+        alive = _Answering("OpenRouter")
+        router.build = lambda c: dead if c.name == "Gemini" else alive
 
         response = asyncio.run(router.complete(_request(), use_cache=False))
-        assert response.provider == "Gemini"
-        assert response.fell_back_from == "OpenRouter"
+        assert response.provider == "OpenRouter"
+        assert response.fell_back_from == "Gemini"
 
     def test_the_fallback_is_recorded_not_hidden(self):
         """A caller must be able to tell it did not get its first choice."""
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         router.build = lambda c: (
-            _Failing(ProviderError("down", provider="OpenRouter",
+            _Failing(ProviderError("down", provider="Gemini",
                                    retryable=False))
-            if c.name == "OpenRouter" else _Answering("Gemini")
+            if c.name == "Gemini" else _Answering("OpenRouter")
         )
         response = asyncio.run(router.complete(_request(), use_cache=False))
-        assert response.fell_back_from == "OpenRouter"
+        assert response.fell_back_from == "Gemini"
         assert router.ledger.fallbacks == 1
 
     def test_no_fallback_marker_when_the_first_choice_answers(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         router.build = lambda c: _Answering(c.name)
         response = asyncio.run(router.complete(_request(), use_cache=False))
-        assert response.provider == "OpenRouter"
+        assert response.provider == "Gemini"
         assert response.fell_back_from is None
 
     def test_the_whole_chain_is_exhausted_before_giving_up(self):
@@ -192,10 +191,10 @@ class TestQuotaAwareRetry:
     def test_an_exhausted_quota_is_not_retried(self):
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         dead = _Failing(RateLimitError(
-            "quota", provider="OpenRouter", retry_after=0.01,
+            "quota", provider="Gemini", retry_after=0.01,
             quota_exhausted=True,
         ))
-        router.build = lambda c: dead if c.name == "OpenRouter" else _Answering("Gemini")
+        router.build = lambda c: dead if c.name == "Gemini" else _Answering("OpenRouter")
         asyncio.run(router.complete(_request(), use_cache=False))
         assert dead.attempts == QUOTA_EXHAUSTED_ATTEMPTS == 1
 
@@ -204,10 +203,10 @@ class TestQuotaAwareRetry:
         provider that was merely busy for a second."""
         router = ProviderRouter(configs=_configured(gemini, openrouter))
         dead = _Failing(RateLimitError(
-            "busy", provider="OpenRouter", retry_after=0.001,
+            "busy", provider="Gemini", retry_after=0.001,
             quota_exhausted=False,
         ))
-        router.build = lambda c: dead if c.name == "OpenRouter" else _Answering("Gemini")
+        router.build = lambda c: dead if c.name == "Gemini" else _Answering("OpenRouter")
         asyncio.run(router.complete(_request(), use_cache=False))
         assert dead.attempts == MAX_ATTEMPTS == 3
 

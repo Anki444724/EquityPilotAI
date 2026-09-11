@@ -287,12 +287,12 @@ async def blogger_chat(
                 # Honour the operator's chosen provider. This is load-bearing:
                 # `AIService`'s shared router is built with no preferred
                 # provider, so without this the chain falls back to
-                # `FALLBACK_ORDER` — which leads with OpenRouter — and a
-                # provider whose credits are spent blocks the request until
-                # this budget is exhausted (see the 45s production timeout).
-                # The authenticated chat passes the same setting; the public
-                # path must too, or Gemini-preferred deployments silently
-                # route every reader through a dead OpenRouter key first.
+                # `FALLBACK_ORDER`. That order now leads with Gemini and keeps
+                # the credit-exhausted OpenRouter key last, but the explicit
+                # preference is still what guarantees Gemini-preferred
+                # deployments never route a reader through a dead key first
+                # (see the 45s production timeout). The authenticated chat
+                # passes the same setting; the public path must too.
                 provider=settings.AI_PREFERRED_PROVIDER,
             ),
             timeout=budget,

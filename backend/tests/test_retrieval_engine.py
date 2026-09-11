@@ -217,9 +217,16 @@ def test_build_reranker_uses_a_cross_encoder_when_configured():
 
 # ============================================================== embeddings
 
-def test_provider_order_matches_the_brief():
+def test_provider_order_leads_with_the_free_tier():
+    """jina-v3 leads; the brief's bge-m3-first order ended with the credits.
+
+    The brief specified bge-m3 first, which is served by OpenRouter. That
+    account is exhausted (HTTP 402) and must not be used, so the default is
+    now the provider with a genuinely free tier. openai-small is last: its
+    1536 dimensions do not fit the production `vector(1024)` column.
+    """
     assert PROVIDER_ORDER == (
-        BGEM3Provider, JinaV3Provider, OpenAISmallProvider,
+        JinaV3Provider, BGEM3Provider, OpenAISmallProvider,
     )
 
 
@@ -251,16 +258,93 @@ def test_builder_follows_the_preference_order():
         JINA_API_KEY = "b"
         OPENAI_API_KEY = "c"
 
-    assert isinstance(build_semantic_embedder(_Settings()), BGEM3Provider)
+    assert isinstance(build_semantic_embedder(_Settings()), JinaV3Provider)
 
 
 def test_builder_skips_an_unconfigured_first_choice():
+    class _Settings:
+        OPENROUTER_API_KEY = "a"
+        JINA_API_KEY = None
+        OPENAI_API_KEY = None
+
+    assert isinstance(build_semantic_embedder(_Settings()), BGEM3Provider)
+
+
+def test_builder_skips_to_openai_when_only_it_is_configured():
     class _Settings:
         OPENROUTER_API_KEY = None
         JINA_API_KEY = None
         OPENAI_API_KEY = "c"
 
     assert isinstance(build_semantic_embedder(_Settings()), OpenAISmallProvider)
+
+
+class TestOpenRouterRemoval:
+    """OpenRouter must not be selected by default; Jina is the free path.
+
+    Production runs with OPENROUTER_API_KEY unset (that account is exhausted
+    and returns HTTP 402) and JINA_API_KEY set. These pin that shape: the
+    dead provider is never picked, the free one is, and an explicit
+    EMBEDDING_PROVIDER still wins for deployments with live OpenRouter
+    credits.
+    """
+
+    def test_production_shape_selects_jina(self):
+        class _Settings:
+            OPENROUTER_API_KEY = None
+            JINA_API_KEY = "jina-free-key"
+            OPENAI_API_KEY = None
+
+        embedder = build_semantic_embedder(_Settings())
+        assert isinstance(embedder, JinaV3Provider)
+
+    def test_jina_wins_over_a_stale_openrouter_key(self):
+        """Even if the dead key is still set, it must not be preferred."""
+
+        class _Settings:
+            OPENROUTER_API_KEY = "sk-or-v1-dead"
+            JINA_API_KEY = "jina-free-key"
+            OPENAI_API_KEY = None
+
+        assert isinstance(build_semantic_embedder(_Settings()), JinaV3Provider)
+
+    def test_explicit_bge_m3_opts_back_in(self):
+        """Deployments with live OpenRouter credits can still choose bge-m3."""
+
+        class _Settings:
+            OPENROUTER_API_KEY = "a"
+            JINA_API_KEY = "b"
+            OPENAI_API_KEY = None
+
+        embedder = build_semantic_embedder(_Settings(), preferred="bge-m3")
+        assert isinstance(embedder, BGEM3Provider)
+
+    def test_explicit_jina_is_honoured(self):
+        class _Settings:
+            OPENROUTER_API_KEY = "a"
+            JINA_API_KEY = "b"
+            OPENAI_API_KEY = "c"
+
+        embedder = build_semantic_embedder(_Settings(), preferred="jina-v3")
+        assert isinstance(embedder, JinaV3Provider)
+
+    def test_a_preferred_provider_without_a_key_falls_through(self):
+        """Preferring jina-v3 with no JINA_API_KEY must not yield nothing."""
+
+        class _Settings:
+            OPENROUTER_API_KEY = "a"
+            JINA_API_KEY = None
+            OPENAI_API_KEY = None
+
+        embedder = build_semantic_embedder(_Settings(), preferred="jina-v3")
+        assert isinstance(embedder, BGEM3Provider)
+
+    def test_jina_and_bge_share_the_production_dimension(self):
+        """Both 1024-dimension providers fit the `vector(1024)` column; the
+        1536-dimension fallback does not, which is why it sorts last."""
+        assert JinaV3Provider("k").spec.dimension == 1024
+        assert BGEM3Provider("k").spec.dimension == 1024
+        assert OpenAISmallProvider("k").spec.dimension == 1536
 
 
 def test_batches_respect_both_count_and_token_limits():

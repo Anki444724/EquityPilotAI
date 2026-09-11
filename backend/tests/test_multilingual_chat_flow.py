@@ -402,7 +402,42 @@ class TestEmbeddingProvider401:
     def test_402_diagnosis_mentions_credit(self):
         from app.services.retrieval.embeddings import BGEM3Provider
 
-        assert "credit" in BGEM3Provider("k")._terminal_diagnosis(402)  # noqa: SLF001
+        diagnosis = BGEM3Provider("k")._terminal_diagnosis(402)  # noqa: SLF001
+        assert "credit" in diagnosis
+        assert "EMBEDDING_PROVIDER" in diagnosis
+        assert "OPENROUTER_API_KEY" in diagnosis
+
+    def test_402_trips_the_circuit_like_401(self, monkeypatch):
+        """The production symptom: bge-m3 via OpenRouter returns HTTP 402
+        (no credits). A standing billing state, not a blip — one attempt,
+        then the breaker opens and retrieval degrades to lexical."""
+        from app.services.retrieval.embeddings import BGEM3Provider
+
+        provider = BGEM3Provider("sk-or-v1-no-credits", timeout=5)
+        calls = {"n": 0}
+
+        def fake_urlopen(request, timeout=None):
+            calls["n"] += 1
+            raise self._http_error(402, "Payment Required")
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        with pytest.raises(RuntimeError, match="HTTP Error 402"):
+            provider.embed(["hello"])
+
+        assert provider._tripped_until > time.monotonic()  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="circuit open"):
+            provider.embed(["hello again"])
+        assert calls["n"] == 1
+
+    def test_402_diagnosis_names_the_free_alternative(self):
+        """An operator reading the log should learn the fix, not just the
+        failure: jina-v3 has a free tier."""
+        from app.services.retrieval.embeddings import BGEM3Provider
+
+        diagnosis = BGEM3Provider("k")._terminal_diagnosis(402)  # noqa: SLF001
+        assert "jina-v3" in diagnosis
+        assert "JINA_API_KEY" in diagnosis
 
     def test_embedding_provider_setting_selects_the_provider(self, monkeypatch):
         """EMBEDDING_PROVIDER must actually be honoured by the engine.
@@ -424,6 +459,12 @@ class TestEmbeddingProvider401:
 
         monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", None)
         engine = HybridRetrievalEngine(_FakeDB())
+        # jina-v3 is the default; the OpenRouter-backed provider no longer
+        # leads now that its account is exhausted.
+        assert isinstance(engine.embedder, JinaV3Provider)
+
+        monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", "bge-m3")
+        engine = HybridRetrievalEngine(_FakeDB())
         assert isinstance(engine.embedder, BGEM3Provider)
 
     def test_backfill_honours_the_same_setting(self, monkeypatch):
@@ -437,6 +478,27 @@ class TestEmbeddingProvider401:
         monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", "jina-v3")
         service = EmbeddingBackfillService(_FakeDB())
         assert isinstance(service.embedder, JinaV3Provider)
+
+    def test_production_shape_embeds_with_jina(self, monkeypatch):
+        """OPENROUTER_API_KEY unset (exhausted account), JINA_API_KEY set:
+        retrieval and backfill must agree on jina-v3, with or without the
+        explicit EMBEDDING_PROVIDER setting."""
+        from app.core.config import settings
+        from app.services.retrieval.backfill import EmbeddingBackfillService
+        from app.services.retrieval.embeddings import JinaV3Provider
+
+        monkeypatch.setattr(settings, "OPENROUTER_API_KEY", None)
+        monkeypatch.setattr(settings, "JINA_API_KEY", "jina-free-key")
+        monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
+
+        for preferred in ("jina-v3", None):
+            monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", preferred)
+            assert isinstance(
+                HybridRetrievalEngine(_FakeDB()).embedder, JinaV3Provider,
+            )
+            assert isinstance(
+                EmbeddingBackfillService(_FakeDB()).embedder, JinaV3Provider,
+            )
 
 
 # ---------------------------------------------------------------------------
