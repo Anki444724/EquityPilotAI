@@ -44,6 +44,30 @@ _VALID_ITEMS = {item.value for item in LineItem}
 #: 500 companies by market cap (see CompanyService._universe_ids).
 _NEXT_TIER_SIZE = 500
 
+#: Hindi/English grammar and function words that routinely appear in chat
+#: questions and must never be read as ticker mentions. In running text these
+#: are postpositions ("par", "ke", "se"), copulas ("hai", "hain"), articles
+#: and pronouns ("the", "me") — grammar, not a company reference. They remain
+#: a *ticker* when written in ALL CAPS, which is the deliberate, unambiguous
+#: intent a ticker in a question is: "PAR ka debt kya hai?" names PAR, while
+#: "…ke basis par explain karo" uses the postposition and names nobody.
+_GRAMMAR_WORDS = frozenset({
+    "KA", "KI", "KE", "KO", "SE", "PAR", "HAI", "HAIN", "THE",
+    "ME", "MEIN", "YA", "HI", "NA",
+})
+
+
+def _is_grammar_word(token: str) -> bool:
+    """True when `token` is a grammar/function word written as ordinary text.
+
+    An ALL-CAPS occurrence ("PAR", "SE", "THE") is deliberate ticker intent
+    and is therefore not a grammar word; only lower/mixed-case occurrences
+    are filtered. This keeps the lowercase-ticker contract ("tcs ka debt")
+    intact while stopping the Hindi postposition "par" from silently
+    retargeting a chat already scoped to another company (e.g. BEL → PAR).
+    """
+    return token.upper() in _GRAMMAR_WORDS and not token.isupper()
+
 
 @dataclass(frozen=True, slots=True)
 class CompanyContext:
@@ -87,7 +111,10 @@ class CompanyService:
 
         * **Ticker** — a case-insensitive whole-token match against a stored
           ticker. Tickers are how this product's UI labels companies, and a
-          ticker in a question is unambiguous intent.
+          ticker in a question is unambiguous intent. Grammar/function words
+          written as ordinary text (Hindi "par", "ka", "ke"; English "the",
+          "me") are not tickers — only an ALL-CAPS occurrence of those letters
+          counts, so "par" never retargets a chat but "PAR" still does.
         * **Full name** — the company's complete stored name appears in the
           text. Partial names ('Reliance' without 'Industries') are
           deliberately not matched: a common word must not silently retarget
@@ -104,13 +131,17 @@ class CompanyService:
         found: dict[str, Company] = {}
 
         # Ticker tokens: words of 2+ characters, matched whole and
-        # case-insensitively against the stored tickers.
+        # case-insensitively against the stored tickers. Grammar/function
+        # words written as ordinary text are skipped, so a Hindi postposition
+        # ("par") or an English article ("the") can never be mistaken for a
+        # ticker; an ALL-CAPS occurrence of the same letters is still the
+        # deliberate ticker intent and is kept (see `_is_grammar_word`).
         import re
 
         tokens = {
             token.upper()
             for token in re.findall(r"[A-Za-z][A-Za-z0-9.&\-]*", raw)
-            if len(token) > 1
+            if len(token) > 1 and not _is_grammar_word(token)
         }
         if tokens:
             rows = self.db.execute(
