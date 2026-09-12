@@ -432,6 +432,42 @@ class TestCrossLanguageQuery:
         result = self.adapter.normalise_query("TCS ka revenue kitna hai")
         assert "hai" not in result.english.lower().split()
 
+    @pytest.mark.parametrize("ratio", ["P/E", "P/B", "P/S", "EV/EBITDA",
+                                       "EV/Sales"])
+    def test_ratio_tokens_survive_normalisation(self, ratio):
+        """A ratio token is one lexical unit — never split into letters."""
+        result = self.adapter.normalise_query(
+            f"BEL ka {ratio} aur valuation kya hai",
+        )
+        assert ratio in result.english.split(), result.english
+
+    def test_devanagari_ratio_token_survives_normalisation(self):
+        result = self.adapter.normalise_query("पी/ई कितना है")
+        assert "पी/ई" in result.english.split()
+
+    @pytest.mark.parametrize("word", [
+        "batao", "batana", "samjhao", "samjha", "samjho", "dekho",
+        "dekhiye", "dikhao", "dikhaiye", "karna", "karta", "karti",
+        "karte", "kiya", "kare", "karo", "kijiye", "chahiye", "sakta",
+        "sakti", "sakte",
+    ])
+    def test_hinglish_imperatives_are_removed(self, word):
+        """The imperative carries no retrieval signal and must not dilute
+        the query — "explain karo" retrieves on "explain", never on "karo"."""
+        result = self.adapter.normalise_query(f"kamai kitni hai {word}")
+        assert word not in result.english.lower().split(), result.english
+
+    def test_bel_valuation_question_keeps_ratio_drops_imperative(self):
+        result = self.adapter.normalise_query(
+            "BEL ki valuation expensive hai ya reasonable? "
+            "P/E, ROE aur ROCE ke basis par explain karo.",
+        )
+        tokens = result.english.split()
+        assert "P/E" in tokens
+        assert "ROE" in tokens
+        assert "ROCE" in tokens
+        assert "karo" not in tokens
+
     def test_normalisation_reports_what_it_mapped(self):
         result = self.adapter.normalise_query("kamai kitni hai")
         assert result.mapped

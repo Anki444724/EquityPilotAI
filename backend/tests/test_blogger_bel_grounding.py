@@ -17,8 +17,11 @@ import uuid
 import pytest
 
 from app.core.config import settings
+from app.domain.ai.types import Citation
 from app.models.company import Company
 from app.models.document import Document, DocumentChunk, DocumentJob
+from app.services.ai.citation_engine import audit
+from app.services.ai.providers.mock import _quote
 from app.services.blogger.sync import BloggerSyncService
 from app.services.documents.storage import LocalFileStorage
 from app.services.documents.worker import DocumentWorker
@@ -164,6 +167,25 @@ class TestBloggerBELGrounding:
         assert "P/E" in evidence
         assert "48.2" in evidence
 
+    def test_valuation_answer_is_reported_grounded(
+        self, client, indexed_bel_post,
+    ):
+        """The composed anchor sentence embeds the retrieved passage, whose
+        final sentence ends in a full stop. If `_quote` leaves that trailing
+        terminator in place, the citation audit splits the anchor sentence
+        before its `[doc]` marker and reports 0% coverage — a grounded answer
+        marked ungrounded. The answer must be reported grounded, without the
+        coverage warning."""
+        body = _ask(
+            client,
+            question="BEL ki valuation expensive hai ya reasonable? "
+                     "P/E, ROE aur ROCE ke basis par explain karo.",
+        ).json()
+        assert body["grounded"] is True, body["warnings"]
+        assert not any(
+            "citation" in warning.lower() for warning in body["warnings"]
+        ), body["warnings"]
+
     def test_explicit_all_caps_ticker_mention_is_not_this_path(
         self, client, indexed_bel_post,
     ):
@@ -174,3 +196,49 @@ class TestBloggerBELGrounding:
             question="PAR ka debt kya hai?",
         ).json()
         assert body["ticker"] == PUBLISHED
+
+
+class TestQuoteTrailingNumericTerminator:
+    """`_quote` must not leave a passage-final full stop in the anchor
+    sentence, or the citation audit ends the sentence before the marker that
+    follows and reports the figures as uncited."""
+
+    def _anchor(self, passage: str) -> str:
+        return (
+            f"The platform's figures put p/e at {_quote(passage)} [doc_1]. "
+            "That is the anchor for the assessment below."
+        )
+
+    def _verdict(self, composed: str, passage: str):
+        return audit(composed, [Citation(
+            key="doc_1", label="Report p.1", snippet=passage,
+            kind=None, source="Blogger post",
+        )])
+
+    def test_passage_ending_in_numeric_sentence_stays_cited(self):
+        """`48.2.` at the end of the passage is a numeric sentence, and its
+        trailing full stop is not preceded by whitespace — the lookahead-only
+        rule left it in place and the audit then read a grounded answer as
+        0% covered."""
+        passage = "At the current price BEL trades at a P/E of 48.2."
+        quoted = _quote(passage)
+        assert quoted == "At the current price BEL trades at a P/E of 48.2;"
+        verdict = self._verdict(self._anchor(passage), passage)
+        assert verdict.is_supported, verdict.summary
+        assert verdict.numeric_sentences == 1
+        assert verdict.cited_sentences == 1
+        assert verdict.coverage == 1.0
+
+    def test_passage_ending_in_word_sentence_stays_cited(self):
+        """The non-numeric case that the Blogger fixture produces: the final
+        full stop belongs to a word, not a number, and must be neutralised
+        exactly the same way."""
+        passage = (
+            "Valuation: BEL trades at a P/E of 48.2x, ROE of 27.4% and ROCE "
+            "of 36.4%. The intrinsic value figure is model-dependent."
+        )
+        quoted = _quote(passage)
+        assert quoted.endswith("model-dependent;")
+        verdict = self._verdict(self._anchor(passage), passage)
+        assert verdict.is_supported, verdict.summary
+        assert verdict.coverage == 1.0
