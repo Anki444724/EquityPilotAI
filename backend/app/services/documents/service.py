@@ -608,7 +608,7 @@ class DocumentService:
                 document_ids=document_ids,
             )
         except Exception:  # noqa: BLE001 — never lose an answer to the new path
-            log.exception("hybrid retrieval failed; using legacy index")
+            logger.exception("hybrid retrieval failed; using legacy index")
             return None
 
         if not results:
