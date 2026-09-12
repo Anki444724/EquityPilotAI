@@ -41,6 +41,7 @@ class AuditCategory(StrEnum):
     PORTFOLIO = "portfolio"
     REPORT = "report"
     AI = "ai"
+    BROKER = "broker"
     ADMIN = "admin"
     SECURITY = "security"
     SYSTEM = "system"
@@ -129,6 +130,19 @@ class AuditAction(StrEnum):
     BACKUP_RESTORED = "system.backup.restored"
     SETTINGS_CHANGED = "system.settings.changed"
 
+    # -- broker (Angel One SmartAPI) -----------------------------------
+    BROKER_LOGIN_STARTED = "broker.login.started"
+    BROKER_LOGIN_SUCCEEDED = "broker.login.succeeded"
+    BROKER_LOGIN_FAILED = "broker.login.failed"
+    BROKER_CALLBACK_REJECTED = "broker.callback.rejected"
+    BROKER_DISCONNECTED = "broker.disconnected"
+    BROKER_ORDER_PLACED = "broker.order.placed"
+    BROKER_ORDER_MODIFIED = "broker.order.modified"
+    BROKER_ORDER_CANCELLED = "broker.order.cancelled"
+    BROKER_ORDER_REJECTED = "broker.order.rejected"
+    BROKER_POSTBACK_RECEIVED = "broker.postback.received"
+    BROKER_POSTBACK_REJECTED = "broker.postback.rejected"
+
     # -- recycle bin / soft delete -------------------------------------
     RECYCLE_SOFT_DELETED = "recycle.soft_deleted"
     RECYCLE_RESTORED = "recycle.restored"
@@ -202,6 +216,18 @@ _ACTION_META: dict[AuditAction, tuple[AuditCategory, AuditSeverity]] = {
     AuditAction.BACKUP_CREATED: (AuditCategory.SYSTEM, AuditSeverity.NOTICE),
     AuditAction.BACKUP_RESTORED: (AuditCategory.SYSTEM, AuditSeverity.CRITICAL),
     AuditAction.SETTINGS_CHANGED: (AuditCategory.SYSTEM, AuditSeverity.NOTICE),
+
+    AuditAction.BROKER_LOGIN_STARTED: (AuditCategory.BROKER, AuditSeverity.INFO),
+    AuditAction.BROKER_LOGIN_SUCCEEDED: (AuditCategory.BROKER, AuditSeverity.NOTICE),
+    AuditAction.BROKER_LOGIN_FAILED: (AuditCategory.BROKER, AuditSeverity.WARNING),
+    AuditAction.BROKER_CALLBACK_REJECTED: (AuditCategory.BROKER, AuditSeverity.WARNING),
+    AuditAction.BROKER_DISCONNECTED: (AuditCategory.BROKER, AuditSeverity.NOTICE),
+    AuditAction.BROKER_ORDER_PLACED: (AuditCategory.BROKER, AuditSeverity.NOTICE),
+    AuditAction.BROKER_ORDER_MODIFIED: (AuditCategory.BROKER, AuditSeverity.NOTICE),
+    AuditAction.BROKER_ORDER_CANCELLED: (AuditCategory.BROKER, AuditSeverity.NOTICE),
+    AuditAction.BROKER_ORDER_REJECTED: (AuditCategory.BROKER, AuditSeverity.WARNING),
+    AuditAction.BROKER_POSTBACK_RECEIVED: (AuditCategory.BROKER, AuditSeverity.INFO),
+    AuditAction.BROKER_POSTBACK_REJECTED: (AuditCategory.BROKER, AuditSeverity.WARNING),
 
     AuditAction.RECYCLE_SOFT_DELETED: (AuditCategory.ADMIN, AuditSeverity.WARNING),
     AuditAction.RECYCLE_RESTORED: (AuditCategory.ADMIN, AuditSeverity.NOTICE),

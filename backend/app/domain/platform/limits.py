@@ -65,6 +65,20 @@ DEFAULT_RULES: dict[str, RateRule] = {
     "ai.run": RateRule(RateScope.TENANT, limit=60, window_seconds=60),
     "report.generate": RateRule(RateScope.TENANT, limit=20, window_seconds=60),
     "document.upload": RateRule(RateScope.TENANT, limit=30, window_seconds=60),
+    # --- broker (Angel One SmartAPI) ---------------------------------
+    # Session setup is rare and human-paced; a burst of logins from one
+    # user is credential experimentation and must be choked fast.
+    "broker.login": RateRule(RateScope.USER, limit=5, window_seconds=600),
+    # Read paths proxy straight to the broker; keep them well under the
+    # broker's own quota so the platform is never the account's noisiest
+    # client.
+    "broker.read": RateRule(RateScope.USER, limit=60, window_seconds=60, burst=10),
+    # Orders are the highest-stakes call in the product. Ten per minute per
+    # user is plenty for a person and a floor under script behaviour.
+    "broker.trade": RateRule(RateScope.USER, limit=10, window_seconds=60),
+    # Postbacks arrive from the broker, not the user: key on IP, and allow a
+    # full order-book turnover in a minute without tripping.
+    "broker.postback": RateRule(RateScope.IP, limit=120, window_seconds=60),
 }
 
 

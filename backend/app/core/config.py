@@ -229,6 +229,37 @@ class Settings(BaseSettings):
     #: Enables a deterministic offline provider for demos and tests.
     AI_MOCK_MODE: bool = True
 
+    # --- Angel One SmartAPI (broker) ---------------------------------
+    # The platform's SmartAPI application key, from Angel One's developer
+    # portal — a platform-level secret in the same class as the AI keys.
+    # Per-user trading sessions are *never* environment variables: each
+    # user's access token is enveloped in `broker_accounts` (see
+    # `app/models/broker.py`), so a .env leak yields the app key, not a
+    # customer's trading session.
+    ANGELONE_API_KEY: str | None = None
+    #: Where `/broker/angelone/login` sends the browser for the broker's own
+    #: sign-in page.
+    ANGELONE_LOGIN_URL: str = "https://risk.angelone.in/fund/auth"
+    #: Base of the SmartAPI REST contract for data and order calls.
+    ANGELONE_API_BASE: str = "https://api.angelone.com/pal"
+    #: Registered with Angel One as the authorization callback. Production:
+    #: https://equitypilot.in/api/v1/broker/angelone/callback
+    ANGELONE_REDIRECT_URL: str = "http://localhost:8000/api/v1/broker/angelone/callback"
+    #: Registered with Angel One as the order-status postback endpoint.
+    #: Production: https://equitypilot.in/api/v1/broker/angelone/postback
+    ANGELONE_POSTBACK_URL: str = "http://localhost:8000/api/v1/broker/angelone/postback"
+    #: Where the browser lands after a successful callback — a configured
+    #: frontend URL, never caller-supplied, so the redirect cannot be
+    #: weaponised into an open redirect.
+    ANGELONE_FRONTEND_REDIRECT: str = "http://localhost:3000"
+    #: Lifetime of the single-use callback `state` token, in seconds.
+    ANGELONE_STATE_TTL_SECONDS: int = 300
+    #: Timeout for every outbound broker HTTP call, in seconds.
+    ANGELONE_TIMEOUT_SECONDS: float = 15.0
+    #: The public IP the broker sees this deployment from (SmartAPI console
+    #: registration). Informational — nothing validates it per request.
+    ANGELONE_PUBLIC_IP: str | None = None
+
     # --- cors --------------------------------------------------------
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
