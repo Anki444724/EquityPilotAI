@@ -120,15 +120,28 @@ QUERY_TERMS: dict[str, str] = {
 #: Romanised Hindi grammar words that carry no retrieval signal. Removing them
 #: stops "hai" and "ka" from diluting the lexical query — the corpus contains
 #: neither, so every one is a term that can only fail to match.
+#:
+#: The imperative family is included for the same reason: "explain karo" is one
+#: idea and "karo" by itself retrieves nothing. Without it a valuation question
+#: ending in "…ke basis par explain karo" keeps the bare imperative in the
+#: retrieval query, where it can only dilute the embedding.
 _QUERY_NOISE: frozenset[str] = frozenset("""
 hai hain hota hoti hote tha thi the ka ki ke ko se me mein par
 aur ya lekin magar toh phir bhi hi na nahi nahin
 mera meri tera teri uska uski iska iski unka inka apna apni
-batao bataye bataiye samjhao dekho please
+batao bataye bataiye batana samjhao samjha samjho dekho dekhiye
+dikhao dikhaiye karna karta karti karte kiya kare karo kijiye
+chahiye chaahiye sakta sakti sakte please
 है हैं का की के को से में पर और या लेकिन तो भी ही नहीं
+करो करना किया कीजिए बताओ बताना समझाओ समझा दिखाओ देखिए चाहिए सकता सकती सकते
 """.split())
 
-_WORD_RE = re.compile(r"[\w\u0900-\u097F]+", re.UNICODE)
+#: Word tokens, Devanagari included. The optional slash-joined tail keeps
+#: ratio tokens whole: "P/E" must reach the retriever as the concept "P/E",
+#: not as the pair "P" "E". Split on the slash, the strongest valuation signal
+#: in a Hinglish question is destroyed and the dedup stage can only shrink it
+#: further.
+_WORD_RE = re.compile(r"[\w\u0900-\u097F]+(?:/[\w\u0900-\u097F]+)*", re.UNICODE)
 
 
 @dataclass(slots=True)

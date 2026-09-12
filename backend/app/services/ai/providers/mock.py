@@ -73,9 +73,16 @@ def _quote(value: object, *, limit: int = MAX_QUOTED_CHARS) -> str:
     and the quotation is capped: the marker stays in the sentence whose numbers
     it supports, and the answer stays readable instead of reproducing a whole
     chunk.
+
+    A terminator at the very end of the passage — *"…trades at a P/E of 48.2."*
+    — is a terminator too. It is followed by nothing, not by whitespace, so it
+    must be replaced by end-of-string as well: left as a full stop, the audit's
+    sentence splitter ends the anchor sentence before the `[key]` that follows
+    it, and a passage whose final sentence is numeric ("48.2.") makes a
+    grounded answer read as 0% covered.
     """
     text = re.sub(r"\s+", " ", str(value or "")).strip()
-    text = re.sub(r"[.!?](?=\s)", ";", text)
+    text = re.sub(r"[.!?](?=\s|$)", ";", text)
     if len(text) > limit:
         text = text[:limit].rsplit(" ", 1)[0].rstrip(",;") + " …"
     return text
