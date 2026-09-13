@@ -27,6 +27,10 @@ from app.domain.ai.sourcing import (
 from app.domain.language.types import CANONICAL_LANGUAGE, Language
 from app.services.ai.citation_engine import CitationAudit, annotate, audit
 from app.services.ai.context_builder import ContextBuilder, GroundedContext
+from app.services.ai.financial_answer_engine import (
+    DeterministicAnswer, FinancialAnswerEngine,
+)
+from app.services.ai.financial_intent import FinancialIntentResolver
 from app.services.ai.guardrails import GuardrailReport, check, enforce
 from app.services.ai.memory import ConversationMemory
 from app.services.ai.prompt_builder import BuiltPrompt, PromptBuilder
@@ -183,6 +187,54 @@ class ResearchAnalyst:
                      language=language.value,
                      original=question[:120], english=retrieval_query[:120])
 
+        # The source restriction is decided before anything answers, because
+        # it also decides whether the deterministic path below is permitted
+        # to run at all (see below).
+        directive = source or parse_directive(question)
+
+        # --- deterministic financial answer path --------------------------
+        #
+        # A canonical financial question ("What is the P/E?") names a figure
+        # the platform has already computed. Answering it from the same
+        # citations, without a model, is cheaper, faster and cannot drift
+        # from the evidence — and it is provider-free, so a deployment with
+        # no API key can still answer these questions.
+        #
+        # What this path must NOT touch: company resolution (already done
+        # through AnalysisService), RAG (no retrieval call), and the prompt/
+        # provider machinery. What it must still run: the citation audit,
+        # the guardrail check and enforcement, the annotation and the
+        # language/display pipeline — everything a provider answer runs,
+        # via the same funnel, with zero-token accounting.
+        #
+        # It declines — and the provider path below takes over unchanged —
+        # whenever the resolver cannot identify exactly one supported
+        # intent, the question restricts its sources (a deterministic
+        # answer from the financial database would violate a
+        # "documents only" restriction), or the context was handed in by a
+        # caller that restricted it itself.
+        if (
+            capability == Capability.CHAT.value
+            and question.strip()
+            and context_override is None
+            and not directive.scope.is_restricted
+        ):
+            intent = FinancialIntentResolver().resolve(retrieval_query)
+            if intent is not None:
+                answer = FinancialAnswerEngine().answer(intent, context)
+                started = time.perf_counter()
+                log.info(
+                    "deterministic financial answer",
+                    intent=intent.value, question=question[:160],
+                    used_evidence=[c.key for c in answer.used_citations],
+                    missing_evidence=answer.missing,
+                )
+                return await self._deterministic(
+                    capability, answer, context,
+                    (time.perf_counter() - started) * 1000, memory, question,
+                    language=language,
+                )
+
         retrieved = self._retrieve(retrieval_query, capability) if retrieve else []
         if retrieved:
             context = context.with_citations(retrieved)
@@ -198,7 +250,8 @@ class ResearchAnalyst:
         #
         # Enforced by *removing* inadmissible evidence before the prompt is
         # built. Asking the model to ignore what it can see is not a control.
-        directive = source or parse_directive(question)
+        # `directive` was resolved before the deterministic path above, which
+        # declines to run under a restriction.
         if directive.scope.is_restricted:
             context = context.restricted_to(SCOPE_KINDS[directive.scope])
             log.info(
@@ -462,16 +515,106 @@ class ResearchAnalyst:
     ) -> AnalystResult:
         """Verify, classify and record.
 
-        The single funnel every capability, chat turn and report section
-        passes through, which is why the Language Adapter is invoked here and
-        nowhere else. Crucially the audit, the guardrail check and the
-        citation annotation all run on the ENGLISH text first: the evidence
-        chain is verified in the canonical language and only then rendered,
-        so a translation can never change what was audited.
+        The single funnel every provider response passes through. It is a
+        thin adapter over :meth:`_verify_and_record`, which the deterministic
+        path shares — so a provider answer and a provider-free answer are
+        verified, guarded, annotated, remembered and rendered by identical
+        code. For provider responses the token accounting is unchanged: the
+        reported prompt tokens are the provider's, falling back to the
+        estimate exactly as before.
         """
-        citation_audit = audit(response.content, built.citations)
-        guardrails = check(response.content, citation_audit)
-        content = enforce(response.content, guardrails)
+        return await self._verify_and_record(
+            capability, context, elapsed_ms, memory, question,
+            raw_content=response.content,
+            citations=built.citations,
+            provider=response.provider,
+            model=response.model,
+            prompt_key=built.prompt_key,
+            prompt_version=built.prompt_version,
+            prompt_tokens=response.usage.prompt_tokens or built.approx_prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+            cost_usd=response.cost_usd,
+            cached=response.cached,
+            fell_back_from=response.fell_back_from,
+            language=language,
+        )
+
+    async def _deterministic(
+        self,
+        capability: str,
+        answer: DeterministicAnswer,
+        context: GroundedContext,
+        elapsed_ms: float,
+        memory: ConversationMemory | None,
+        question: str,
+        *,
+        language: "Language | None" = None,
+    ) -> AnalystResult:
+        """Finalise a provider-free answer through the same funnel.
+
+        The deterministic engine composes its text from the context's own
+        citations, so the citation audit, guardrail check, annotation, memory
+        write and language adaptation all run exactly as for a provider
+        response. The accounting reflects what actually happened: no model,
+        no prompt, no tokens, no cost — and no invented
+        ``CompletionResponse`` that would smuggle an estimated prompt-token
+        count into the ledger. Latency is measured for real.
+        """
+        return await self._verify_and_record(
+            capability, context, elapsed_ms, memory, question,
+            raw_content=answer.content,
+            citations=context.citations,
+            provider="deterministic",
+            model="none",
+            prompt_key=capability,
+            prompt_version=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cost_usd=0.0,
+            cached=False,
+            fell_back_from=None,
+            language=language,
+        )
+
+    async def _verify_and_record(
+        self,
+        capability: str,
+        context: GroundedContext,
+        elapsed_ms: float,
+        memory: ConversationMemory | None,
+        question: str,
+        *,
+        raw_content: str,
+        citations: list[Citation],
+        provider: str,
+        model: str,
+        prompt_key: str,
+        prompt_version: int,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+        cached: bool,
+        fell_back_from: str | None,
+        language: "Language | None" = None,
+    ) -> AnalystResult:
+        """Verify, classify and record.
+
+        The single funnel every capability, chat turn and report section
+        passes through — provider-generated and deterministic alike — which
+        is why the Language Adapter is invoked here and nowhere else.
+        Crucially the audit, the guardrail check and the citation annotation
+        all run on the ENGLISH text first: the evidence chain is verified in
+        the canonical language and only then rendered, so a translation can
+        never change what was audited.
+
+        `raw_content` is the answer exactly as produced (provider response or
+        deterministic composition): it is what the audit sees and what memory
+        stores. Guardrail enforcement may append the disclosure on top of it
+        for the RESULT, but memory keeps the raw canonical English turn.
+        """
+        citation_audit = audit(raw_content, citations)
+        guardrails = check(raw_content, citation_audit)
+        content = enforce(raw_content, guardrails)
 
         warnings: list[str] = list(guardrails.violations)
         if not citation_audit.is_supported:
@@ -496,7 +639,7 @@ class ResearchAnalyst:
             # it would also mean a user who switched language mid-session
             # carried untranslatable history forward.
             memory.add(
-                Role.ASSISTANT, response.content,
+                Role.ASSISTANT, raw_content,
                 citations=[c.key for c in citation_audit.resolved],
             )
 
@@ -507,7 +650,7 @@ class ResearchAnalyst:
         # A translation cannot alter what was audited, which is what makes
         # "same evidence and citations in every language" structural rather
         # than merely tested.
-        display = annotate(content, built.citations)
+        display = annotate(content, citations)
         language_block: dict | None = None
 
         if language is not None and language is not CANONICAL_LANGUAGE:
@@ -539,14 +682,14 @@ class ResearchAnalyst:
             # comparing two responses must be comparing like with like.
             content=content,
             display_content=display,
-            provider=response.provider, model=response.model,
-            prompt_key=built.prompt_key, prompt_version=built.prompt_version,
+            provider=provider, model=model,
+            prompt_key=prompt_key, prompt_version=prompt_version,
             citations=citation_audit.resolved,
             citation_audit=citation_audit, guardrails=guardrails,
-            prompt_tokens=response.usage.prompt_tokens or built.approx_prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            cost_usd=response.cost_usd, latency_ms=elapsed_ms,
-            cached=response.cached, fell_back_from=response.fell_back_from,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd, latency_ms=elapsed_ms,
+            cached=cached, fell_back_from=fell_back_from,
             warnings=warnings,
             language=language_block,
         )

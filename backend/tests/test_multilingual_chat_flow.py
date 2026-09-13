@@ -249,9 +249,14 @@ class TestAnalystInstructionRegression:
 
         router = _FakeRouter("Total debt is 4,90,000 cr [debt].")
         analyst = ResearchAnalyst(_FakeBuilder(), router=router)
+        # A non-financial question on purpose: canonical financial questions
+        # ("...total debt...") are now served by the provider-free
+        # deterministic path and never reach the provider whose prompt this
+        # test inspects. The language flow under test is identical either
+        # way; the question just must not resolve to a financial intent.
         result = _run(analyst.run(
             "chat",
-            question="Reliance ka total debt kitna hai?",
+            question="Reliance ka business kaisa hai?",
             language=Language.HINGLISH,
         ))
         # The request completed (enforce() appends the disclosure footer),
@@ -268,7 +273,11 @@ class TestAnalystInstructionRegression:
 class TestAnalystOutboundAdaptation:
     """API → run() → _finalise() → adapt(), on the analyst itself."""
 
-    QUESTION = "Reliance ka total debt kitna hai?"
+    # A non-financial question on purpose: canonical financial questions are
+    # answered by the provider-free deterministic path and never reach the
+    # provider prompt this test inspects. The adapter behaviour under test is
+    # independent of the question's topic.
+    QUESTION = "Reliance ka business kaisa hai?"
     SENTENCE = "Total debt is 4,90,000 cr [debt]."
 
     def _analyst(self, monkeypatch) -> ResearchAnalyst:
@@ -317,8 +326,10 @@ class TestAnalystOutboundAdaptation:
 
     def test_english_request_bypasses_the_adapter(self, monkeypatch):
         analyst, router = self._analyst(monkeypatch)
+        # Non-financial question: a canonical financial question would be
+        # served deterministically and would not inspect a provider prompt.
         result = _run(analyst.run(
-            "chat", question="How much is the total debt?",
+            "chat", question="How is the business doing?",
         ))
         # No language block, no instruction, no translation — the canonical
         # path is unchanged: display is the annotated English only.
