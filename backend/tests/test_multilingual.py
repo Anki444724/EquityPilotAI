@@ -727,12 +727,19 @@ class TestScoreConsistency:
         which is in `_refuse` — a path that has no model response at all. The
         assertion was reading the wrong function. Scoped to `_finalise`, which
         is the one that writes a generated answer to memory.
+
+        After the deterministic path joined the pipeline, the memory write
+        lives in the shared verification funnel `_verify_and_record`, which
+        both `_finalise` (provider responses) and `_deterministic` (the
+        provider-free path) pass through. The invariant is unchanged: memory
+        stores the RAW answer text — the funnel's `raw_content`, never the
+        enforced or display-rendered copy.
         """
         source = (pathlib.Path(__file__).resolve().parents[1]
                   / "app" / "services" / "ai" / "analyst.py").read_text()
         finalise = source.split("async def _finalise")[1]
         memory_block = finalise.split("if memory is not None:")[1][:900]
-        assert "response.content" in memory_block
+        assert "raw_content" in memory_block
         # And the translated text must not be what is stored.
         assert "memory.add(Role.ASSISTANT, display" not in finalise
 

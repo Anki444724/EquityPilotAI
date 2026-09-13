@@ -541,6 +541,23 @@ class ContextBuilder:
                 unit=unit, source=source, fiscal_year=year,
             ))
 
+        # Growth citations come from the canonical financial engine's own
+        # computation — `income_statement_sections()` is the single place the
+        # year-on-year growth is derived, so it is read here rather than
+        # re-derived. A second growth formula would be a second source of
+        # truth, and the audit cannot tell the two apart.
+        for section in self.analysis.statements.income_statement_sections():
+            if section.key != "growth":
+                continue
+            for row in section.rows:
+                if row.key in ("revenue_growth", "pat_growth") \
+                        and row.values and row.values[-1] is not None:
+                    context.add(Citation(
+                        key=row.key, label=row.label, kind=EvidenceKind.STATEMENT,
+                        value=row.values[-1], unit="%", source=source_is,
+                        fiscal_year=year,
+                    ))
+
         # A short history matters: a level without a trend invites the model to
         # infer direction it cannot see.
         if len(self.analysis.incomes) >= 3:
