@@ -187,10 +187,20 @@ class AdaptedResponse:
     #: How the language was decided: "requested", "detected" or "preference".
     source: str = "detected"
     latency_ms: float = 0.0
+    #: "full" when the text is wholly in `language`, "partial" when the internal
+    #: renderer produced a mix of the target language and canonical English, and
+    #: "none" when the text is English because nothing could render it.
+    fidelity: str = "full"
+    #: Share of the answer actually rendered in the target language.
+    coverage: float = 1.0
 
     @property
     def is_translated(self) -> bool:
         return self.translation.translated and self.language is not CANONICAL_LANGUAGE
+
+    @property
+    def is_partial(self) -> bool:
+        return self.fidelity == "partial"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -202,6 +212,8 @@ class AdaptedResponse:
             "resolved_from": self.source,
             "detected": self.detection.as_dict(),
             "translation": self.translation.as_dict(),
+            "fidelity": self.fidelity,
+            "coverage": round(self.coverage, 3),
             "latency_ms": round(self.latency_ms, 1),
         }
 
@@ -374,12 +386,34 @@ class LanguageAdapter:
         if result.translated:
             final_text = get_translation_memory().apply(result.text, language)
 
+        # Phase 2A: a partial rendering — the internal renderer's output when it
+        # could render some of the answer and had to leave the rest in English —
+        # is text in the target language that is not wholly in it. It is served,
+        # because a reader who asked in Hindi is better off with a partly
+        # rendered answer than an English one, but it is labelled: `fidelity`
+        # says partial, `translated` stays False so the analyst raises the
+        # warning, and `coverage` states how much was actually rendered.
+        fidelity = (getattr(result, "fidelity", "") or "full").lower()
+        partial = fidelity == "partial" and bool((result.text or "").strip())
+        served_language = (
+            result.language if (result.translated or partial) else CANONICAL_LANGUAGE
+        )
+
         return AdaptedResponse(
             text=final_text,
-            language=result.language if result.translated else CANONICAL_LANGUAGE,
-            spec=spec_for(result.language if result.translated
-                          else CANONICAL_LANGUAGE),
+            language=served_language,
+            spec=spec_for(served_language),
             detection=detection, translation=result, source=source,
+            fidelity=(
+                "partial" if partial
+                else "full" if result.translated
+                else "none"
+            ),
+            coverage=(
+                1.0 if result.translated
+                else float(getattr(result, "coverage", 0.0) or 0.0)
+                if partial else 0.0
+            ),
             latency_ms=(time.perf_counter() - started) * 1000,
         )
 

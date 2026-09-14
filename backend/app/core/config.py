@@ -201,9 +201,13 @@ class Settings(BaseSettings):
 
     # --- Multilingual AI Response Engine -----------------------------------
     #: Which translator renders the final answer.
-    #: One of: llm | glossary | passthrough | none.
+    #: One of: llm | glossary | passthrough | none | internal | hybrid.
     #: `llm` reuses the existing provider router, so it needs no new key and
     #: inherits the caching, fallback and cost accounting already in place.
+    #: `internal` renders with the platform's own deterministic renderer and
+    #: constructs no provider at all; `hybrid` uses it when it can complete an
+    #: answer and falls back to it when the provider fails (the HTTP 402 case),
+    #: which is how the external dependency is retired in Phase 2E.
     TRANSLATION_PROVIDER: str = "llm"
     #: Master switch. When off, every response is English regardless of the
     #: request — detection still runs and is still reported, so a client can
