@@ -23,6 +23,7 @@ from app.domain.calc import safe_div
 from app.domain.forecast.assumptions import Scenario
 from app.services.analysis_service import AnalysisService
 from app.services.forecast.service import ForecastService
+from app.services.scoring.overall_score import ScoreResult
 from app.services.scoring.service import ScoringService
 from app.services.valuation.service import ValuationService
 
@@ -42,6 +43,13 @@ class GroundedContext:
     unavailable: list[str] = field(default_factory=list)
     #: Free-text excerpts from uploaded documents (Module 7 will populate).
     documents: list[tuple[str, str]] = field(default_factory=list)
+    #: The ScoreResult behind the scoring citations, kept for consumers that
+    #: interpret rather than quote — the Phase 2A deterministic
+    #: investment-intelligence engine reads its category narratives and
+    #: warning list from here. It is the SAME object whose figures were
+    #: published as `overall_score` / `grade` / `score_{category}` citations;
+    #: nothing is recomputed. ``None`` when scoring did not run.
+    score: ScoreResult | None = None
 
     def add(self, citation: Citation) -> None:
         if citation.value is not None:
@@ -694,6 +702,11 @@ class ContextBuilder:
         except Exception:
             context.unavailable.append("Institutional score")
             return
+
+        # Kept for the Phase 2A deterministic engine, which interprets this
+        # exact result instead of re-deriving any of it. The citations below
+        # remain the audit's source of truth for every figure.
+        context.score = result
 
         context.add(Citation(
             key="overall_score", label="Institutional score",

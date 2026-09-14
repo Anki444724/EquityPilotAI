@@ -30,7 +30,8 @@ from app.services.ai.context_builder import ContextBuilder, GroundedContext
 from app.services.ai.financial_answer_engine import (
     DeterministicAnswer, FinancialAnswerEngine,
 )
-from app.services.ai.financial_intent import FinancialIntentResolver
+from app.services.ai.financial_intent import INVESTMENT_INTENTS, FinancialIntentResolver
+from app.services.ai.investment_answer_engine import InvestmentAnswerEngine
 from app.services.ai.guardrails import GuardrailReport, check, enforce
 from app.services.ai.memory import ConversationMemory
 from app.services.ai.prompt_builder import BuiltPrompt, PromptBuilder
@@ -192,13 +193,21 @@ class ResearchAnalyst:
         # to run at all (see below).
         directive = source or parse_directive(question)
 
-        # --- deterministic financial answer path --------------------------
+        # --- deterministic answer path ------------------------------------
         #
         # A canonical financial question ("What is the P/E?") names a figure
         # the platform has already computed. Answering it from the same
         # citations, without a model, is cheaper, faster and cannot drift
         # from the evidence — and it is provider-free, so a deployment with
         # no API key can still answer these questions.
+        #
+        # Phase 2A extends the same path to investment-intelligence
+        # questions ("BEL kaisi company hai?", "BEL ki financial quality
+        # kaisi hai?"). Those interpret the EXISTING ScoreResult and its
+        # citations — the InvestmentAnswerEngine reads the scoring output
+        # the ContextBuilder already computed; it does not score anything
+        # itself. Both engines reach this code because the resolver hands
+        # back exactly one intent or none, exactly as before.
         #
         # What this path must NOT touch: company resolution (already done
         # through AnalysisService), RAG (no retrieval call), and the prompt/
@@ -221,14 +230,23 @@ class ResearchAnalyst:
         ):
             intent = FinancialIntentResolver().resolve(retrieval_query)
             if intent is not None:
-                answer = FinancialAnswerEngine().answer(intent, context)
                 started = time.perf_counter()
-                log.info(
-                    "deterministic financial answer",
-                    intent=intent.value, question=question[:160],
-                    used_evidence=[c.key for c in answer.used_citations],
-                    missing_evidence=answer.missing,
-                )
+                if intent in INVESTMENT_INTENTS:
+                    answer = InvestmentAnswerEngine().answer(intent, context)
+                    log.info(
+                        "deterministic investment answer",
+                        intent=intent.value, question=question[:160],
+                        used_evidence=[c.key for c in answer.used_citations],
+                        missing_evidence=answer.missing,
+                    )
+                else:
+                    answer = FinancialAnswerEngine().answer(intent, context)
+                    log.info(
+                        "deterministic financial answer",
+                        intent=intent.value, question=question[:160],
+                        used_evidence=[c.key for c in answer.used_citations],
+                        missing_evidence=answer.missing,
+                    )
                 return await self._deterministic(
                     capability, answer, context,
                     (time.perf_counter() - started) * 1000, memory, question,
