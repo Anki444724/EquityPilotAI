@@ -602,8 +602,20 @@ class TestRecommendationIsAuthoritative:
         assert "BUY" not in rendered.upper()
 
     def test_support_explains_the_overrides_the_scoring_engine_applied(self):
+        # P1-1: rationale is authoritative. The engine must only claim a cap
+        # when the rationale proves it bound. So this test now supplies a
+        # rationale that actually contains the three cap reasons, mirroring the
+        # real scoring engine's output when caps bind.
+        rationale = (
+            "Composite score of 70.0/100 maps to ACCUMULATE. "
+            "Capped at HOLD: valuation scores 2.0/10, so the shares are expensive "
+            "regardless of business quality. "
+            "Capped at REDUCE: financial risk scores 2.5/10, indicating balance-sheet fragility. "
+            "Capped at HOLD: confidence is only 40% (60% of weighted inputs are missing), "
+            "which does not support a directional call."
+        )
         score = make_score(
-            recommendation="HOLD", confidence=0.40,
+            recommendation="HOLD", confidence=0.40, rationale=rationale,
             categories=categories(
                 financial_quality=8.0, growth_quality=7.0, valuation=2.0,
                 financial_risk=2.5,
@@ -618,6 +630,93 @@ class TestRecommendationIsAuthoritative:
         assert "low data confidence" in joined
         # Every clause is traceable to the result the recommendation came from.
         assert "strongest scored areas" in joined
+        # And the rationale is the source of truth for caps.
+        assert "valuation scores" in score.recommendation_rationale.lower()
+        assert "financial risk scores" in score.recommendation_rationale.lower()
+        assert "confidence is only" in score.recommendation_rationale.lower()
+
+    def test_p1_1_cap_condition_exists_but_does_not_bind(self):
+        """P1-1 regression: a potential cap exists but did not bind.
+
+        Valuation is expensive (2.0) and financial risk is fragile (2.5), but
+        the composite already maps to HOLD, so neither cap actually reduced the
+        recommendation. The rationale therefore does NOT contain cap reasons,
+        and the engine must NOT claim that valuation or risk capped it.
+        """
+        # Base is already HOLD, so caps do not bind.
+        rationale = "Composite score of 50.0/100 maps to HOLD."
+        score = make_score(
+            overall=50.0,
+            recommendation="HOLD",
+            rationale=rationale,
+            categories=categories(
+                financial_quality=8.0, growth_quality=7.0, valuation=2.0,
+                financial_risk=2.5,
+            ),
+        )
+        report = build(make_intelligence_context(score))
+        joined = " ".join(report.recommendation_support).lower()
+        rendered = report.render().lower()
+
+        # Potential cap conditions exist (valuation 2.0, risk 2.5) but must NOT be claimed
+        assert "capped by valuation" not in joined, "valuation cap claimed when it did not bind"
+        assert "capped by balance-sheet risk" not in joined, "risk cap claimed when it did not bind"
+        # Explanation must agree with rationale — rationale says HOLD from composite, no caps
+        assert "composite score of 50.0/100 maps to hold" in rationale.lower()
+        assert score.recommendation_rationale == rationale
+        # Rendered support should not invent a cap either
+        assert "capped by valuation" not in rendered
+        assert "capped by balance-sheet risk" not in rendered
+
+    def test_p1_1_valuation_cap_binds_only_when_rationale_proves_it(self):
+        """Valuation expensive but base already HOLD → no cap claim; when rationale
+        contains valuation cap, engine must claim it."""
+        # Case 1: expensive but does NOT bind
+        rationale_no_cap = "Composite score of 50.0/100 maps to HOLD."
+        score_no_cap = make_score(
+            overall=50.0, recommendation="HOLD", rationale=rationale_no_cap,
+            categories=categories(valuation=2.0, financial_quality=8.0),
+        )
+        report_no_cap = build(make_intelligence_context(score_no_cap))
+        assert "capped by valuation" not in " ".join(report_no_cap.recommendation_support).lower()
+
+        # Case 2: expensive and DOES bind (base ACCUMULATE capped to HOLD)
+        rationale_with_cap = (
+            "Composite score of 70.0/100 maps to ACCUMULATE. "
+            "Capped at HOLD: valuation scores 2.0/10, so the shares are expensive regardless of business quality."
+        )
+        score_with_cap = make_score(
+            overall=70.0, recommendation="HOLD", rationale=rationale_with_cap,
+            categories=categories(valuation=2.0, financial_quality=8.0),
+        )
+        report_with_cap = build(make_intelligence_context(score_with_cap))
+        assert "capped by valuation" in " ".join(report_with_cap.recommendation_support).lower()
+        assert "valuation scores" in score_with_cap.recommendation_rationale.lower()
+
+    def test_p1_1_confidence_cap_binds_only_when_rationale_proves_it(self):
+        """Low confidence condition exists but does NOT bind when base is HOLD."""
+        rationale_no_cap = "Composite score of 50.0/100 maps to HOLD."
+        score_no_cap = make_score(
+            overall=50.0, recommendation="HOLD", rationale=rationale_no_cap,
+            confidence=0.40,
+            categories=categories(financial_quality=8.0),
+        )
+        report_no_cap = build(make_intelligence_context(score_no_cap))
+        assert "low data confidence" not in " ".join(report_no_cap.recommendation_support).lower()
+
+        rationale_with_cap = (
+            "Composite score of 70.0/100 maps to ACCUMULATE. "
+            "Capped at HOLD: confidence is only 40% (60% of weighted inputs are missing), "
+            "which does not support a directional call."
+        )
+        score_with_cap = make_score(
+            overall=70.0, recommendation="HOLD", rationale=rationale_with_cap,
+            confidence=0.40,
+            categories=categories(financial_quality=8.0),
+        )
+        report_with_cap = build(make_intelligence_context(score_with_cap))
+        assert "low data confidence" in " ".join(report_with_cap.recommendation_support).lower()
+        assert "confidence is only" in score_with_cap.recommendation_rationale.lower()
 
     def test_the_same_recommendation_survives_an_unfavourablereading(self):
         """The engine may disagree in tone with a weak company but it may not

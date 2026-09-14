@@ -949,7 +949,10 @@ class InstitutionalIntelligenceEngine:
         the *why*: which existing conditions the scoring engine applied as
         overrides — valuation, balance-sheet fragility, data confidence — and
         which scored areas support the call. Every clause is read off the same
-        `ScoreResult`, so the explanation cannot drift from the decision.
+        `ScoreResult`, and the cap explanations are grounded in
+        `recommendation_rationale`, which is the authoritative record of which
+        caps actually bound. A potential cap condition that did not bind must
+        not be claimed as a cap.
         """
         if score is None:
             return None, []
@@ -973,27 +976,33 @@ class InstitutionalIntelligenceEngine:
         if quality is not None and quality.grade_hint in _WEAK_HINTS:
             case.warn("It is constrained by weak financial quality.")
 
-        valuation = self._category(score, "valuation")
-        if (valuation is not None
-                and valuation.raw_score <= EXPENSIVE_VALUATION_SCORE
-                and valuation.weight > 0):
+        # P1-1: recommendation_rationale is authoritative for caps.
+        # The scoring engine only appends a cap reason to the rationale when the
+        # cap actually reduces the recommendation. Re-deriving caps from raw
+        # scores would claim a cap that existed as a condition but did not bind
+        # (e.g. expensive valuation when base was already HOLD).
+        rationale_lower = (score.recommendation_rationale or "").lower()
+        valuation_capped = "valuation scores" in rationale_lower
+        risk_capped = "financial risk scores" in rationale_lower
+        confidence_capped = "confidence is only" in rationale_lower
+
+        if valuation_capped:
             case.warn(
                 "It is capped by valuation rather than driven by the composite "
                 "alone, which is the scoring engine's own rule."
             )
-        risk = self._category(score, "financial_risk")
-        if risk is not None and risk.raw_score <= FRAGILE_BALANCE_SHEET_SCORE:
+        if risk_capped:
             case.warn(
                 "It is capped by balance-sheet risk, which the scoring engine "
                 "ranks above quality."
             )
-        confidence = self._confidence_of(score)
-        if confidence is not None and confidence < LOW_CONFIDENCE_THRESHOLD:
+        if confidence_capped:
             case.warn(
                 "It was pulled toward HOLD by low data confidence, as the "
                 "scoring engine does when too many weighted inputs are missing."
             )
         support = case.warnings
+        confidence = self._confidence_of(score)
 
         signal = IntelligenceSignal(
             key="recommendation", label="Recommendation",
