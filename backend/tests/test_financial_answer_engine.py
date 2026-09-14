@@ -4,20 +4,36 @@ Covers every supported intent, the exact citation keys each answer uses, the
 missing-evidence behaviour, determinism, and the no-fabrication property
 (verifying each answer with the platform's own citation audit against the
 evidence the answer was built from).
+
+The intent set now spans both deterministic engines (Phase 1 canonical
+figures and Phase 2A investment intelligence), so the cross-cutting tests
+below dispatch each intent to its own engine — the same dispatch the analyst
+performs — and the fixture context carries a real ``ScoreResult`` alongside
+its citations, exactly as the ContextBuilder produces them together.
 """
 from __future__ import annotations
+
+import functools
 
 import pytest
 
 from app.domain.ai.types import Citation, EvidenceKind
+from app.domain.scoring.inputs import ScoringInputs
+from app.domain.scoring.weights import DEFAULT_PROFILE
+from app.domain.financials.statements import (
+    build_balance_sheet, build_cash_flow, build_income_statement,
+)
 from app.services.ai.citation_engine import audit
 from app.services.ai.context_builder import GroundedContext
 from app.services.ai.financial_answer_engine import (
     DeterministicAnswer, FinancialAnswerEngine,
 )
 from app.services.ai.financial_intent import (
-    FinancialIntent, FinancialIntentResolver,
+    INVESTMENT_INTENTS, FinancialIntent, FinancialIntentResolver,
 )
+from app.services.ai.investment_answer_engine import InvestmentAnswerEngine
+from app.services.scoring.overall_score import ScoreResult, compute_score
+from tests.conftest import make_financials
 
 NAME = "Acme Industries"
 TICKER = "ACME"
@@ -31,8 +47,36 @@ def cite(key: str, value, *, unit: str = "", kind: EvidenceKind = EvidenceKind.S
     )
 
 
+@functools.lru_cache(maxsize=1)
+def reference_score() -> ScoreResult:
+    """A REAL ScoreResult: the existing scoring engine run over the shared
+    fixture statements. The Phase 2A engine under test must interpret exactly
+    this object — a hand-typed result would let the test and the engine drift
+    apart about what a ScoreResult contains."""
+    fin = make_financials()
+    years = list(fin.fiscal_years)
+    inputs = ScoringInputs(
+        company_id="c1", ticker=TICKER, name=NAME,
+        incomes=[build_income_statement(fin, y) for y in years],
+        balances=[build_balance_sheet(fin, y) for y in years],
+        cash_flows=[build_cash_flow(fin, y) for y in years],
+        current_price=1200.0,
+        wacc=0.114, cost_of_equity=0.131,
+        intrinsic_value=1390.0, upside=0.158,
+        ev_ebitda=9.5, pe_ratio=24.0,
+    )
+    return compute_score(inputs, DEFAULT_PROFILE)
+
+
 def full_context(**drop: bool) -> GroundedContext:
-    """The richest context the ContextBuilder can carry for these intents."""
+    """The richest context the ContextBuilder can carry for these intents.
+
+    The scoring citations mirror exactly what
+    ``ContextBuilder._add_scoring`` publishes for the result this context
+    also carries in ``score`` — so the Phase 2A intents are exercised the
+    way production assembles them.
+    """
+    score = reference_score()
     citations = [
         # Market
         cite("price", 1200.0, unit="₹", kind=EvidenceKind.MARKET, fiscal_year=None),
@@ -64,19 +108,40 @@ def full_context(**drop: bool) -> GroundedContext:
         cite("valuation_upside", 0.158, unit="%", kind=EvidenceKind.VALUATION, fiscal_year=None),
         cite("valuation_recommendation", "Accumulate", kind=EvidenceKind.VALUATION, fiscal_year=None),
         cite("data_quality", "illustrative", kind=EvidenceKind.VALUATION, fiscal_year=None),
+        # Scoring — the same keys ContextBuilder._add_scoring publishes
+        cite("overall_score", score.overall_score, unit="/100",
+             kind=EvidenceKind.SCORING, fiscal_year=None),
+        cite("grade", score.grade, kind=EvidenceKind.SCORING, fiscal_year=None),
+        cite("recommendation", score.recommendation,
+             kind=EvidenceKind.SCORING, fiscal_year=None),
+        cite("confidence", score.confidence.confidence, unit="%",
+             kind=EvidenceKind.SCORING, fiscal_year=None),
     ]
+    for category in score.categories:
+        citations.append(cite(f"score_{category.key}", category.raw_score,
+                              unit="/10", kind=EvidenceKind.SCORING,
+                              fiscal_year=None))
     keep = [c for c in citations if not drop.get(c.key, False)]
     return GroundedContext(
         company_id="c1", ticker=TICKER, name=NAME, citations=keep,
+        score=score,
     )
 
 
-ENGINE = FinancialAnswerEngine()
+#: The analyst's dispatch rule, mirrored here: the Phase 1 engine answers the
+#: canonical figure intents, the Phase 2A engine the investment intents.
+def engine_for(intent: FinancialIntent):
+    if intent in INVESTMENT_INTENTS:
+        return InvestmentAnswerEngine()
+    return FinancialAnswerEngine()
+
+
+PHASE1_ENGINE = FinancialAnswerEngine()
 RESOLVER = FinancialIntentResolver()
 
 
 def audited_answer(intent: FinancialIntent, context: GroundedContext) -> DeterministicAnswer:
-    answer = ENGINE.answer(intent, context)
+    answer = engine_for(intent).answer(intent, context)
     a = audit(answer.content, context.citations)
     assert a.unknown_keys == [], f"unresolvable citations: {a.unknown_keys}"
     assert a.uncited_numbers == [], (
@@ -393,8 +458,8 @@ class TestDeterminismAndFabrication:
     @pytest.mark.parametrize("intent", list(FinancialIntent))
     def test_output_is_deterministic(self, intent):
         context = full_context()
-        first = ENGINE.answer(intent, context).content
-        second = ENGINE.answer(intent, context).content
+        first = engine_for(intent).answer(intent, context).content
+        second = engine_for(intent).answer(intent, context).content
         assert first == second
 
     def _context(self, intent: FinancialIntent) -> GroundedContext:
@@ -417,13 +482,13 @@ class TestDeterminismAndFabrication:
     @pytest.mark.parametrize("intent", list(FinancialIntent))
     def test_only_existing_citation_keys_are_cited(self, intent):
         context = full_context()
-        answer = ENGINE.answer(intent, context)
+        answer = engine_for(intent).answer(intent, context)
         import re
         markers = re.findall(r"\[([a-z][a-z0-9_.]*)\]", answer.content)
         assert set(markers) <= {c.key for c in context.citations}
 
     def test_citations_reused_across_answers(self):
         """An engine instance is stateless: answers do not leak between calls."""
-        a1 = ENGINE.answer(FinancialIntent.PE, full_context())
-        a2 = ENGINE.answer(FinancialIntent.ROE, full_context())
+        a1 = PHASE1_ENGINE.answer(FinancialIntent.PE, full_context())
+        a2 = PHASE1_ENGINE.answer(FinancialIntent.ROE, full_context())
         assert [c.key for c in a1.used_citations] != [c.key for c in a2.used_citations]
