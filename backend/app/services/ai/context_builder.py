@@ -15,12 +15,14 @@ guardrail layer distinguish a reported fact from a forecast downstream.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 import structlog
 
 from app.domain.ai.types import Citation, EvidenceKind
 from app.domain.calc import safe_div
 from app.domain.forecast.assumptions import Scenario
+from app.domain.knowledge.temporal import YearObservation
 from app.services.analysis_service import AnalysisService
 from app.services.forecast.service import ForecastService
 from app.services.scoring.overall_score import ScoreResult
@@ -50,6 +52,19 @@ class GroundedContext:
     #: published as `overall_score` / `grade` / `score_{category}` citations;
     #: nothing is recomputed. ``None`` when scoring did not run.
     score: ScoreResult | None = None
+    #: The domain objects behind the `temporal_timeline` citation — the yearly
+    #: observations as generation produced them, read back through
+    #: `TemporalMemoryService.observations`. Kept typed for consumers that
+    #: interpret the series rather than quote it: the institutional
+    #: intelligence engine reads the per-dimension trends and their measured
+    #: counterparts here, which the rendered citation does not carry. Empty
+    #: when temporal memory holds nothing readable for this company.
+    temporal: list[YearObservation] = field(default_factory=list)
+    #: Management credibility exactly as `TemporalMemoryService.credibility`
+    #: computed it — the same numbers the `management_credibility` citation
+    #: renders, so a consumer that interprets them cannot disagree with the
+    #: evidence block. ``None`` when temporal memory was not read at all.
+    credibility: dict[str, Any] | None = None
 
     def add(self, citation: Citation) -> None:
         if citation.value is not None:
@@ -388,6 +403,14 @@ class ContextBuilder:
             service = TemporalMemoryService(session)
             rows = [r for r in service.timeline(company.id, limit=12)
                     if not r.is_fallback]
+            # The typed series, for consumers that reason over it rather than
+            # render it. Read through the service's one parser so the trends
+            # and measured counterparts on the context are the same objects
+            # the timeline citation was rendered from — a second JSON parser
+            # would be a second interpretation of the same column.
+            context.temporal = service.observations(
+                company.id, limit=12, include_fallback=False,
+            )
         except Exception:  # noqa: BLE001 - never break an answer on this
             log.exception("temporal memory read failed", company_id=company.id)
             return
@@ -414,6 +437,7 @@ class ContextBuilder:
         ))
 
         credibility = service.credibility(company.id)
+        context.credibility = credibility
         if credibility.get("score") is not None:
             context.add(Citation(
                 key="management_credibility",

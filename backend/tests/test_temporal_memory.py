@@ -20,8 +20,8 @@ from sqlalchemy.pool import StaticPool
 import app.models as _models_pkg
 from app.db.base import Base
 from app.domain.knowledge.temporal import (
-    GuidanceVerdict, ObservationTrend, YearObservation, credibility_score,
-    trend_of,
+    TRACKED_DIMENSIONS, GuidanceVerdict, ObservationTrend, YearObservation,
+    credibility_score, trend_of,
 )
 from app.models.company import Company
 from app.models.knowledge import YearlyObservation
@@ -355,6 +355,181 @@ def test_dimensions_round_trip_as_json(db, company):
     assert stored["moat"] == "unknown"
     # Every tracked dimension is present, so a ten-year series stays aligned.
     assert stored["management_quality"] == "unknown"
+
+
+def test_dimensions_are_read_back_into_the_domain_series(db, company):
+    """The other half of the round trip: DB JSON -> timeline() -> dimensions.
+
+    `test_dimensions_round_trip_as_json` proves generation reaches the column.
+    Nothing proved the column reached `YearObservation.dimensions`, and it did
+    not: `_to_domain` reconstructed findings, confidence, guidance and the
+    verdict and silently dropped every DimensionReading. A reader of the
+    timeline therefore saw a per-year narrative with no trends and no measured
+    counterpart, and no way to tell the difference between "the filing showed
+    no change" and "the data was thrown away".
+    """
+    service = _service(db, {
+        2025: {
+            "findings": ["Revenue grew."], "confidence": 0.9,
+            "dimensions": {"debt": "improving", "roce": "deteriorating",
+                           "moat": "nonsense-value"},
+            "prior_year_verdict": "not_assessable",
+        },
+    })
+    service.generate_year(company.id, 2025)
+
+    service = TemporalMemoryService(db)
+    # The row still carries the JSON column verbatim — no schema change.
+    row = service.timeline(company.id)[0]
+    assert isinstance(row.dimensions, str)
+    assert json.loads(row.dimensions)[0]["dimension"] == "management_quality"
+
+    observation = service.observations(company.id)[0]
+    readings = {d.dimension: d for d in observation.dimensions}
+
+    # Every tracked axis survives the read, so a ten-year series stays aligned.
+    assert set(readings) == set(TRACKED_DIMENSIONS)
+    # The trend the model stated is reconstructed as the domain enum.
+    assert readings["debt"].trend == ObservationTrend.IMPROVING
+    assert readings["roce"].trend == ObservationTrend.DETERIORATING
+    # An unrecognised trend degrades to UNKNOWN on the way back too.
+    assert readings["moat"].trend == ObservationTrend.UNKNOWN
+
+
+def test_dimension_metrics_are_read_back_and_contradictions_still_fire(db, company):
+    """The measured counterpart must come back too, or the flag is dead.
+
+    `contradicts_metric` compares the narrative trend against `metric_value`
+    and `metric_prior`. Dropping either on read-back made the property return
+    False for every stored year — a contradiction that existed in the filing
+    reading as agreement forever, which is worse than not computing it at all.
+    """
+    service = TemporalMemoryService(db)
+    # Lower net debt is better, so "improving" alongside RISING net debt is
+    # exactly the contradiction the inverse-debt rule exists to catch.
+    measured = {2025: {"net_debt": 500.0}, 2026: {"net_debt": 900.0}}
+    service._evidence_for = lambda cid, y: ("[E1] x", [1])  # noqa: SLF001
+    service._metrics_for = lambda cid, y: measured.get(y, {})  # noqa: SLF001
+    service._ask = lambda **kw: ({  # noqa: SLF001
+        "findings": ["x"], "confidence": 0.9,
+        "dimensions": {"debt": "improving"},
+        "prior_year_verdict": "not_assessable",
+    }, "stub:model", False)
+
+    for year in (2025, 2026):
+        service.generate_year(company.id, year)
+
+    observations = TemporalMemoryService(db).observations(company.id)
+    latest = observations[-1]
+    debt = next(d for d in latest.dimensions if d.dimension == "debt")
+
+    assert debt.metric_value == 900.0
+    assert debt.metric_prior == 500.0
+    assert debt.contradicts_metric is True, "inverse debt logic lost on read-back"
+
+
+def test_dimension_metrics_agreeing_with_the_narrative_are_not_flagged(db, company):
+    """The flag must stay a flag, not become a constant."""
+    row = YearlyObservation(
+        company_id=company.id, fiscal_year=2025, confidence=0.9,
+        status="current", prior_verdict="not_assessable",
+        dimensions=json.dumps([
+            {"dimension": "debt", "trend": "improving",
+             "metric_value": 400.0, "metric_prior": 500.0},
+            {"dimension": "roce", "trend": "improving",
+             "metric_value": 22.0, "metric_prior": 18.0},
+        ]),
+    )
+    db.add(row)
+    db.commit()
+
+    readings = {d.dimension: d for d in
+                TemporalMemoryService(db).observations(company.id)[0].dimensions}
+    assert readings["debt"].contradicts_metric is False, "deleveraging read as a contradiction"
+    assert readings["roce"].contradicts_metric is False
+
+
+def test_a_metric_without_a_prior_year_is_not_a_contradiction(db, company):
+    """One side of the comparison missing is an absence of evidence, not a
+    disagreement."""
+    db.add(YearlyObservation(
+        company_id=company.id, fiscal_year=2025, confidence=0.9,
+        status="current", prior_verdict="not_assessable",
+        dimensions=json.dumps([
+            {"dimension": "debt", "trend": "improving", "metric_value": 900.0},
+        ]),
+    ))
+    db.commit()
+
+    reading = TemporalMemoryService(db).observations(company.id)[0].dimensions[0]
+    assert reading.metric_value == 900.0
+    assert reading.metric_prior is None
+    assert reading.contradicts_metric is False
+
+
+def test_malformed_dimensions_json_does_not_crash_the_read(db, company):
+    """The column is read on the answer path. One bad row must not take the
+    AI layer down for a company whose other years are fine."""
+    db.add_all([
+        YearlyObservation(
+            company_id=company.id, fiscal_year=2024, confidence=0.9,
+            status="current", prior_verdict="not_assessable",
+            dimensions="{not json at all",
+        ),
+        YearlyObservation(
+            company_id=company.id, fiscal_year=2025, confidence=0.9,
+            status="current", prior_verdict="not_assessable",
+            dimensions=json.dumps({"debt": "improving"}),
+        ),
+        YearlyObservation(
+            company_id=company.id, fiscal_year=2026, confidence=0.9,
+            status="current", prior_verdict="delivered",
+            dimensions=json.dumps([
+                "not an entry",
+                {"trend": "improving"},                       # no dimension
+                {"dimension": "", "trend": "improving"},       # empty name
+                {"dimension": 7, "trend": "improving"},        # not a name
+                {"dimension": "debt", "trend": "improving",
+                 "metric_value": "not a number", "metric_prior": True},
+            ]),
+        ),
+    ])
+    db.commit()
+
+    observations = TemporalMemoryService(db).observations(company.id)
+    assert [o.fiscal_year for o in observations] == [2024, 2025, 2026]
+    assert [o.dimensions for o in observations[:2]] == [[], []]
+
+    # The usable entry in a partly-malformed row still reads back; the
+    # unusable metric values are dropped rather than coerced.
+    assert len(observations[2].dimensions) == 1
+    reading = observations[2].dimensions[0]
+    assert reading.dimension == "debt"
+    assert reading.metric_value is None
+    assert reading.metric_prior is None
+    # The rest of the row is untouched by the malformed column.
+    assert observations[2].prior_verdict == GuidanceVerdict.DELIVERED
+
+
+def test_observations_exclude_template_fallback_years(db, company):
+    """Fallback prose is retained as history but is not evidence, so the typed
+    read used for reasoning must not serve it."""
+    db.add_all([
+        YearlyObservation(
+            company_id=company.id, fiscal_year=2025, confidence=0.9,
+            status="current", prior_verdict="not_assessable", is_fallback=False,
+        ),
+        YearlyObservation(
+            company_id=company.id, fiscal_year=2026, confidence=0.9,
+            status="current", prior_verdict="not_assessable", is_fallback=True,
+        ),
+    ])
+    db.commit()
+    service = TemporalMemoryService(db)
+
+    assert [o.fiscal_year for o in service.observations(company.id)] == [2025, 2026]
+    assert [o.fiscal_year for o in
+            service.observations(company.id, include_fallback=False)] == [2025]
 
 
 def test_malformed_model_output_is_recorded_as_fallback(db, company):
