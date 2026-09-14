@@ -342,8 +342,9 @@ def test_continuous_learning_on_specialized_documents(
     # Mocks
     mock_analysis_service.for_ticker.return_value = MagicMock()
     mock_memory_service.return_value.run.return_value = type("Enr", (), {"stages": [], "written": 0})()
-    
-    # Mock AI Service record
+
+    # Mock AI Service record - note: this test intentionally mocks AIService to isolate
+    # specialized doc logic; the P1-2 real persistence test below does NOT mock record().
     mock_ai_service_inst = MagicMock()
     mock_ai_service.return_value = mock_ai_service_inst
 
@@ -364,3 +365,105 @@ def test_continuous_learning_on_specialized_documents(
     processor._trigger_continuous_learning(company, document_id=51, result=result_pres)
     assert any("Investor Presentation Intelligence" in h for h in result_pres.highlights)
     assert mock_pres_insights.called
+
+
+def test_p1_2_continuous_learning_real_persistence():
+    """P1-2 regression: _trigger_continuous_learning must persist institutional_continuous
+    using the real AnalystResult dataclass (including cached=False), not a fake object
+    missing the cached attribute required by AIService.record().
+
+    This test does NOT mock AIService.record() — it exercises the real persistence path.
+    Asserts:
+    - no AttributeError
+    - AIAnalysis record persisted with capability institutional_continuous
+    - citation_keys non-empty
+    - usage record created with cached=False
+    - highlight appended
+    """
+    from tests.conftest import TestingSession
+    from app.models.ai import AIAnalysis, AIUsageRecord
+    from app.services.analysis_service import AnalysisService
+
+    db = TestingSession()
+    try:
+        # Use seeded reference company BHARATCP (has financials, scores, etc.)
+        analysis = AnalysisService.for_ticker(db, "BHARATCP", provision=False)
+        assert analysis is not None and analysis.has_data, "seeded company missing"
+        company = db.get(Company, analysis.company.id)
+        assert company is not None
+
+        # Create a completed document for this company
+        doc_id = 99991
+        # Clean any previous doc with same id
+        existing = db.get(Document, doc_id)
+        if existing:
+            db.delete(existing)
+            db.commit()
+        doc = Document(
+            id=doc_id, company_id=company.id, filename="test_filing.pdf",
+            doc_type="annual_report", file_format="pdf",
+            content_hash="p1-2-test-hash", status="completed",
+        )
+        db.add(doc)
+        db.commit()
+
+        # Clean previous AIAnalysis / AIUsageRecord for this company/capability to isolate
+        db.query(AIAnalysis).filter(
+            AIAnalysis.company_id == company.id,
+            AIAnalysis.capability == "institutional_continuous",
+        ).delete()
+        db.query(AIUsageRecord).filter(
+            AIUsageRecord.capability == "institutional_continuous",
+        ).delete()
+        db.commit()
+
+        processor = PostFilingProcessor(db)
+        result = PostFilingResult(company_id=company.id, ticker=company.ticker, document_id=doc_id)
+
+        # This must NOT raise AttributeError: 'R' object has no attribute 'cached'
+        processor._trigger_continuous_learning(company, document_id=doc_id, result=result)
+
+        # Highlight appended
+        assert any("Institutional Intelligence refreshed" in h for h in result.highlights), \
+            f"highlight missing, got {result.highlights}, warnings {result.warnings}"
+
+        # No AttributeError warning about cached
+        assert not any("cached" in w.lower() and "attribute" in w.lower() for w in result.warnings), \
+            f"cached AttributeError leaked into warnings: {result.warnings}"
+
+        # AIAnalysis persisted
+        persisted = db.execute(
+            select(AIAnalysis).where(
+                AIAnalysis.company_id == company.id,
+                AIAnalysis.capability == "institutional_continuous",
+            ).order_by(AIAnalysis.created_at.desc()).limit(1)
+        ).scalars().first()
+        assert persisted is not None, "institutional_continuous AIAnalysis not persisted"
+        # citation_keys non-empty (institutional intelligence carries citations)
+        assert persisted.citation_keys, "citation_keys empty, should carry citation keys"
+        assert len(persisted.citation_keys) > 0
+
+        # Usage record created correctly with cached=False
+        usage = db.execute(
+            select(AIUsageRecord).where(
+                AIUsageRecord.capability == "institutional_continuous",
+            ).order_by(AIUsageRecord.id.desc()).limit(1)
+        ).scalars().first()
+        assert usage is not None, "AIUsageRecord not created"
+        assert usage.cached is False, f"cached should be False, got {usage.cached}"
+        assert usage.provider == "system"
+        assert usage.succeeded is True
+
+        # Content includes institutional intelligence render
+        assert "INSTITUTIONAL INTELLIGENCE" in (persisted.content or "")
+
+    finally:
+        # Cleanup
+        try:
+            db.query(AIAnalysis).filter(AIAnalysis.company_id == company.id).delete()
+            db.query(AIUsageRecord).filter(AIUsageRecord.capability == "institutional_continuous").delete()
+            db.query(Document).filter(Document.id == doc_id).delete()
+            db.commit()
+        except Exception:
+            db.rollback()
+        db.close()

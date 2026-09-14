@@ -374,20 +374,45 @@ class PostFilingProcessor:
 
             # 2. Phase 3 Institutional Intelligence full refresh (Thesis, Mgmt, Industry, Confidence, etc.)
             try:
+                from app.services.ai.analyst import AnalystResult
+
                 analyst = AIService(self.db).analyst_for(analysis)
                 engine = InstitutionalIntelligenceEngine(analyst)
+                # Deterministic: the engine reads the grounded context the
+                # analyst already built plus the temporal memory on it. No
+                # provider is called on this path, which is what lets the
+                # refresh run for every filing regardless of LLM availability.
                 inst = engine.build_full_intelligence(analysis, company.ticker)
-                # Persist traceable record in AI Memory
-                fake_result = type("R", (), {
-                    "capability": "institutional_continuous",
-                    "content": f"Continuous learning refresh (full institutional) for doc {document_id}",
-                    "provider": "system", "model": "phase3",
-                    "prompt_key": "continuous", "prompt_version": 1,
-                    "citations": [], "citation_audit": None, "guardrails": None,
-                    "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
-                    "latency_ms": 0.0, "is_supported": True, "warnings": []
-                })()
-                AIService(self.db).record(company.id, fake_result, owner=None)
+                content = (
+                    f"Continuous learning refresh (full institutional) for "
+                    f"doc {document_id}"
+                )
+                if inst is not None:
+                    content = f"{content}\n\n{inst.render()}"[:3000]
+                # Persist traceable record in AI Memory, carrying the citation
+                # keys its signals rest on so the record can be audited later.
+                # P1-2: Use the real AnalystResult dataclass so AIService.record()
+                # sees every field it requires, including cached=False. The previous
+                # fake object missed cached and display_content, causing AttributeError.
+                real_result = AnalystResult(
+                    capability="institutional_continuous",
+                    content=content,
+                    display_content=content,
+                    provider="system",
+                    model="phase3",
+                    prompt_key="continuous",
+                    prompt_version=1,
+                    citations=list(getattr(inst, "citations", None) or []),
+                    citation_audit=None,
+                    guardrails=None,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_usd=0.0,
+                    latency_ms=0.0,
+                    cached=False,
+                    warnings=[],
+                )
+                AIService(self.db).record(company.id, real_result, owner=None)
                 result.highlights.append("Continuous Learning: Institutional Intelligence refreshed")
             except Exception as e:
                 result.warnings.append(f"Continuous institutional: {str(e)[:80]}")
@@ -405,33 +430,54 @@ class PostFilingProcessor:
                             .order_by(DocumentChunk.chunk_index).limit(50)
                         ).scalars().all()
                     ]
+                    # P1-2: Same fix for conference call / presentation — use real AnalystResult
+                    from app.services.ai.analyst import AnalystResult as _AnalystResult
+
                     if doc.doc_type == "conference_call":
                         cc = extract_conference_call_insights(chunks)
                         if cc.get("available"):
-                            fake_cc = type("R", (), {
-                                "capability": "conference_call_intelligence",
-                                "content": str(cc)[:3000],
-                                "provider": "system", "model": "extractor-v1",
-                                "prompt_key": "conference_call", "prompt_version": 1,
-                                "citations": [], "citation_audit": None, "guardrails": None,
-                                "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
-                                "latency_ms": 0.0, "is_supported": True, "warnings": []
-                            })()
-                            AIService(self.db).record(company.id, fake_cc, owner=None)
+                            real_cc = _AnalystResult(
+                                capability="conference_call_intelligence",
+                                content=str(cc)[:3000],
+                                display_content=str(cc)[:3000],
+                                provider="system",
+                                model="extractor-v1",
+                                prompt_key="conference_call",
+                                prompt_version=1,
+                                citations=[],
+                                citation_audit=None,
+                                guardrails=None,
+                                prompt_tokens=0,
+                                completion_tokens=0,
+                                cost_usd=0.0,
+                                latency_ms=0.0,
+                                cached=False,
+                                warnings=[],
+                            )
+                            AIService(self.db).record(company.id, real_cc, owner=None)
                             result.highlights.append("Conference Call Intelligence: extracted + stored in AI Memory")
                     else:
                         pres = extract_presentation_insights(chunks)
                         if pres.get("available"):
-                            fake_pres = type("R", (), {
-                                "capability": "investor_presentation_intelligence",
-                                "content": str(pres)[:3000],
-                                "provider": "system", "model": "extractor-v1",
-                                "prompt_key": "investor_presentation", "prompt_version": 1,
-                                "citations": [], "citation_audit": None, "guardrails": None,
-                                "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
-                                "latency_ms": 0.0, "is_supported": True, "warnings": []
-                            })()
-                            AIService(self.db).record(company.id, fake_pres, owner=None)
+                            real_pres = _AnalystResult(
+                                capability="investor_presentation_intelligence",
+                                content=str(pres)[:3000],
+                                display_content=str(pres)[:3000],
+                                provider="system",
+                                model="extractor-v1",
+                                prompt_key="investor_presentation",
+                                prompt_version=1,
+                                citations=[],
+                                citation_audit=None,
+                                guardrails=None,
+                                prompt_tokens=0,
+                                completion_tokens=0,
+                                cost_usd=0.0,
+                                latency_ms=0.0,
+                                cached=False,
+                                warnings=[],
+                            )
+                            AIService(self.db).record(company.id, real_pres, owner=None)
                             result.highlights.append("Investor Presentation Intelligence: extracted + stored in AI Memory")
             except Exception as e:
                 result.warnings.append(f"Doc intelligence extraction: {str(e)[:80]}")
