@@ -73,6 +73,15 @@ class TranslationResult:
     #: Protected spans that did not survive. Non-empty means the translation
     #: was rejected and the English text returned instead.
     integrity_problems: list[str] = field(default_factory=list)
+    #: How complete the rendering is: "full", "partial" or "none". A boolean
+    #: cannot express "some of this answer was rendered and the rest was kept in
+    #: canonical English", and the internal renderer can produce exactly that —
+    #: so the distinction is carried explicitly rather than inferred. Providers
+    #: that translate or decline leave it at the default.
+    fidelity: str = "full"
+    #: Share of the answer that was rendered, for a partial result. 1.0 when
+    #: the text is wholly in the target language.
+    coverage: float = 1.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +89,8 @@ class TranslationResult:
             "translated": self.translated,
             "provider": self.provider,
             "detail": self.detail,
+            "fidelity": self.fidelity,
+            "coverage": round(self.coverage, 3),
             "latency_ms": round(self.latency_ms, 1),
             "cost_usd": round(self.cost_usd, 6),
             "integrity_problems": self.integrity_problems,
@@ -508,4 +519,22 @@ def build_translator(settings: Any | None = None) -> Translator:
         return PassthroughTranslator()
     if choice == "glossary":
         return GlossaryTranslator()
+    if choice in {"internal", "internal-only", "internal_only"}:
+        # Internal rendering only: no external provider is constructed, so no
+        # key, quota or endpoint can affect a response. This is the mode Phase
+        # 2E will make the default; it is opt-in here so Phase 2A changes no
+        # production behaviour by itself.
+        from app.services.language.internal_renderer import (
+            InternalRendererTranslator,
+        )
+        return InternalRendererTranslator()
+    if choice in {"hybrid", "internal-first", "internal_first"}:
+        # Internal rendering when it can complete the answer, the provider for
+        # arbitrary prose, and the internal renderer again if the provider fails.
+        from app.services.language.internal_renderer import (
+            InternalFallbackTranslator, InternalRendererTranslator,
+        )
+        return InternalFallbackTranslator(
+            primary=LLMTranslator(), internal=InternalRendererTranslator(),
+        )
     return LLMTranslator()
