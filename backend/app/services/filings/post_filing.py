@@ -376,14 +376,26 @@ class PostFilingProcessor:
             try:
                 analyst = AIService(self.db).analyst_for(analysis)
                 engine = InstitutionalIntelligenceEngine(analyst)
+                # Deterministic: the engine reads the grounded context the
+                # analyst already built plus the temporal memory on it. No
+                # provider is called on this path, which is what lets the
+                # refresh run for every filing regardless of LLM availability.
                 inst = engine.build_full_intelligence(analysis, company.ticker)
-                # Persist traceable record in AI Memory
+                content = (
+                    f"Continuous learning refresh (full institutional) for "
+                    f"doc {document_id}"
+                )
+                if inst is not None:
+                    content = f"{content}\n\n{inst.render()}"[:3000]
+                # Persist traceable record in AI Memory, carrying the citation
+                # keys its signals rest on so the record can be audited later.
                 fake_result = type("R", (), {
                     "capability": "institutional_continuous",
-                    "content": f"Continuous learning refresh (full institutional) for doc {document_id}",
+                    "content": content,
                     "provider": "system", "model": "phase3",
                     "prompt_key": "continuous", "prompt_version": 1,
-                    "citations": [], "citation_audit": None, "guardrails": None,
+                    "citations": list(getattr(inst, "citations", None) or []),
+                    "citation_audit": None, "guardrails": None,
                     "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
                     "latency_ms": 0.0, "is_supported": True, "warnings": []
                 })()

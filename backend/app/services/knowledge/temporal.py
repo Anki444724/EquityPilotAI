@@ -66,6 +66,24 @@ SYSTEM_PROMPT = (
 )
 
 
+def _optional_float(value: Any) -> float | None:
+    """A stored metric, or ``None`` when it is absent or not a number.
+
+    `bool` is excluded explicitly. ``True`` is an ``int`` in Python, so without
+    the check a malformed "metric_value": true would read back as 1.0 — a
+    figure the company never reported, silently entering the contradiction
+    check.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(slots=True)
 class ObservationRun:
     company_id: str
@@ -666,6 +684,63 @@ class TemporalMemoryService:
         return row
 
     @staticmethod
+    def _dimensions_from_json(
+        raw: Any, fiscal_year: int | None = None,
+    ) -> list[DimensionReading]:
+        """Rebuild the stored dimension readings, tolerating any stored shape.
+
+        The read side of the `dimensions` column :meth:`_persist` writes. It is
+        deliberately defensive: the column was written by whichever version of
+        the generation prompt last ran for that year, it is read on the answer
+        path, and one malformed row must not take the AI layer down for a
+        company whose other years are perfectly good.
+
+        A trend is the only field that can be *wrong* rather than absent, and
+        an unrecognised one degrades to :attr:`ObservationTrend.UNKNOWN` — the
+        same rule generation applies — so a future trend value cannot silently
+        become a direction here.
+
+        `contradicts_metric` is not read back. It is a computed property of
+        :class:`DimensionReading`, derived from the trend and the two metrics;
+        the stored copy is a display artefact of the version that wrote it, and
+        re-deriving it is what keeps the flag correct when the domain rule
+        changes.
+
+        Missing or unusable entries are skipped rather than defaulted: a
+        reading with no dimension name is not a reading, and inventing
+        "unknown" for it would put a phantom axis into a ten-year series.
+        """
+        if not raw:
+            return []
+        try:
+            stored = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            log.warning("unreadable temporal dimensions JSON",
+                        fiscal_year=fiscal_year, error=str(exc)[:160])
+            return []
+        if not isinstance(stored, list):
+            return []
+
+        readings: list[DimensionReading] = []
+        for entry in stored:
+            if not isinstance(entry, dict):
+                continue
+            dimension = entry.get("dimension")
+            if not isinstance(dimension, str) or not dimension.strip():
+                continue
+            try:
+                trend = ObservationTrend(str(entry.get("trend", "")).lower())
+            except ValueError:
+                trend = ObservationTrend.UNKNOWN
+            readings.append(DimensionReading(
+                dimension=dimension.strip(),
+                trend=trend,
+                metric_value=_optional_float(entry.get("metric_value")),
+                metric_prior=_optional_float(entry.get("metric_prior")),
+            ))
+        return readings
+
+    @staticmethod
     def _to_domain(row: YearlyObservation) -> YearObservation:
         try:
             verdict = GuidanceVerdict(row.prior_verdict)
@@ -674,12 +749,41 @@ class TemporalMemoryService:
         return YearObservation(
             fiscal_year=row.fiscal_year,
             findings=(row.findings or "").split("\n") if row.findings else [],
+            # Without this the yearly DimensionReading objects — the trend and
+            # the measured counterpart a narrative claim is checked against —
+            # were written on the way in and lost on the way out, so every
+            # consumer of the series read a timeline with no dimensions in it.
+            dimensions=TemporalMemoryService._dimensions_from_json(
+                row.dimensions, fiscal_year=row.fiscal_year,
+            ),
             confidence=row.confidence or 0.0,
             guidance=row.guidance,
             prior_verdict=verdict,
             verdict_reasoning=row.verdict_reasoning,
             generated_by=row.generated_by,
         )
+
+    def observations(
+        self, company_id: str, *, limit: int = 20,
+        include_fallback: bool = True,
+    ) -> list[YearObservation]:
+        """The current series as domain objects, oldest year first.
+
+        The typed read of :meth:`timeline`, and the one place the stored JSON
+        columns are turned back into the objects generation produced. Callers
+        that *reason* over the series — trends, measured-versus-narrative
+        disagreements — read it through here so those judgements are made from
+        the typed objects rather than from a second parser.
+
+        `include_fallback=False` drops template observations: prose written for
+        a year the model could not actually read. They stay in the database as
+        history, but they are not evidence and must not be reasoned over as if
+        they were.
+        """
+        rows = self.timeline(company_id, limit=limit)
+        if not include_fallback:
+            rows = [row for row in rows if not row.is_fallback]
+        return [self._to_domain(row) for row in rows]
 
     def render_timeline(self, company_id: str, *, limit: int = 20) -> str:
         """The series in the brief's compact form, for prompts and display."""
