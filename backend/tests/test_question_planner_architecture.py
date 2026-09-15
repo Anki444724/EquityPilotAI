@@ -414,7 +414,12 @@ class TestDeterministicPathRegression:
 
 # ===========================================================================
 class TestShadowMode:
-    """The planner is in the repository, not in the answer path."""
+    """Keep the planner pure while allowing its Part 2C composition consumer.
+
+    The planner remains a planning-only package. The internal composition
+    layer is the single production boundary permitted to consume its plans.
+    Other production modules must not import the planner directly.
+    """
 
     def test_analyst_does_not_import_the_planner(self):
         source = (APP / "services" / "ai" / "analyst.py").read_text()
@@ -427,10 +432,13 @@ class TestShadowMode:
 
     def test_no_production_module_outside_the_planner_imports_it(self):
         offenders = []
+        composition_layer = APP / "services" / "ai" / "internal_composer.py"
         for path in python_files(APP):
             if PLANNER in path.parents:
                 continue
             if path.name in {"__init__.py"}:
+                continue
+            if path == composition_layer:
                 continue
             source = path.read_text()
             if "services.ai.planner" in source or "services . ai . planner" in source:
