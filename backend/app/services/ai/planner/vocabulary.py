@@ -1,0 +1,340 @@
+"""The planner's intent vocabulary.
+
+**This is not a second intent registry.** The canonical patterns live in
+``app.services.ai.financial_intent`` and are read here through
+:data:`INTENT_PATTERNS` — the same mapping the resolver matches on, exposed
+as a read-only view. A pattern is therefore defined exactly once, and the
+planner cannot drift from the engine that will execute the plan it produces.
+
+What this module adds, on top of the canonical patterns, is what the
+resolver deliberately does not have:
+
+* **phrases / aliases** — wording the canonical regexes never covered,
+  including Hindi and Hinglish. The resolver could afford to miss these
+  because missing meant "fall through to the provider". The planner cannot:
+  its job is to say what the question is *about*, and "financially strong"
+  is plainly about financial quality.
+* **negative evidence** — wording that suppresses an intent even when a
+  pattern fires. This is what stops the Hindi postposition "pe" from being
+  read as the P/E ratio, and "sell software" from being read as a
+  recommendation.
+* **precedence** — which intent wins when two matches overlap, so "debt
+  risk" is a financial-risk question rather than a debt question that
+  happens to mention risk.
+
+The resolver is untouched by all three. It keeps its exactly-one rule and
+its fail-closed ``None``, because that rule protects the *execution* path:
+answering one intent of a two-intent question is a partial answer, and a
+partial answer is a wrong answer. The planner may return several intents
+precisely because it never answers — it hands the whole set upstream.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Mapping
+
+from app.services.ai.financial_intent import (
+    INVESTMENT_INTENTS, INTENT_PATTERNS, FinancialIntent,
+)
+
+from .types import IntentFamily
+
+
+@dataclass(frozen=True, slots=True)
+class IntentSpec:
+    """Everything the planner knows about one intent.
+
+    ``patterns`` is DERIVED from the canonical registry in
+    ``__post_init__``; it is never supplied by the caller and must never be
+    re-declared here. A spec that carried its own copy of a pattern would
+    be the drift this layering exists to prevent.
+
+    ``phrases`` are regexes; ``aliases`` are literal substrings. The split
+    is because Devanagari does not sit reliably on regex word boundaries —
+    a matra is a combining mark, so ``\\b`` can land in the middle of what a
+    reader sees as a single word.
+    """
+
+    intent: FinancialIntent
+    family: IntentFamily
+    #: Derived from ``INTENT_PATTERNS``. Do not pass; see above.
+    patterns: tuple[str, ...] = field(default=())
+    #: Additional regexes the planner recognises.
+    phrases: tuple[str, ...] = field(default=())
+    #: Literal case-insensitive substrings — Devanagari and romanised.
+    aliases: tuple[str, ...] = field(default=())
+    #: Regexes that SUPPRESS this intent when they match the raw question.
+    negative: tuple[str, ...] = field(default=())
+    #: Higher wins when two matches overlap. Generic intents score low.
+    precedence: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "patterns", tuple(INTENT_PATTERNS.get(self.intent, ())),
+        )
+
+    def rules(self) -> tuple[tuple[str, bool], ...]:
+        """Every matching rule as ``(rule, is_regex)``.
+
+        Canonical patterns first, so that when an intent matches on both a
+        canonical pattern and a planner phrase the audit reports the
+        canonical reason.
+        """
+        return (
+            tuple((p, True) for p in self.patterns)
+            + tuple((p, True) for p in self.phrases)
+            + tuple((a, False) for a in self.aliases)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Negative evidence
+#
+# Every entry exists because of a real false positive, observed in this
+# repository. They are matched against the RAW question, never the
+# normalised text: normalisation is what turns "pe kya" into "pe what", and
+# the Hindi postposition is only visible before that rewrite.
+# ---------------------------------------------------------------------------
+
+#: "Reliance pe kya bolte ho?" — "pe" is the Hindi postposition (on/about),
+#: not the price-to-earnings ratio. The tell is a Hindi interrogative or
+# verb immediately after it, which "P/E zyada hai kya?" never has.
+_PE_AS_POSTPOSITION = (
+    r"\bpe\s+(?:kya|kyun|kyon|kaun|kaise|kaisa|kaisi|kab|kahan|kaunsa|konsa)\b",
+    r"\bpe\s+\w*(?:te|ta|ti|na|ne|nge|ngi|oge|ogi)\b\s*(?:ho|hai|hain|the|thi)\b",
+    r"\bpe\s+(?:bol\w*|kehte?|kehta|kaho|batao|bataiye|vichar|raye|raaye)\b",
+    r"\bpe\s+(?:ka|ki|ke|par|me|mein|aur|se|hi|bhi)\b",
+)
+
+#: "Does the company sell software?" — the verb "sell" about a product is not
+#: a SELL recommendation. The tell is a product noun after it, or a
+#: third-person company subject before it.
+#:
+#: The auxiliary is restricted to a company subject on purpose. A first
+#: auxiliary ("should I buy") is the opposite of evidence: "Should I buy
+#: this stock?" is exactly the recommendation question this intent exists
+#: for, and an earlier rule that matched any "should/does … buy" silently
+#: suppressed it.
+#:
+#: "buyback" is a corporate action and "holdings" a shareholding fact;
+#: neither is a call on the stock.
+_NOT_A_RECOMMENDATION = (
+    r"\b(?:does|do|did)\s+(?:the\s+)?"
+    r"(?:company|firm|business|it|they|ye|kya)\s+(?:sell|sells|buy|buys)\b",
+    r"\b(?:what|which)\s+\w*\s*(?:does|do)\s+\w+\s+sell\b",
+    r"\b(?:sells?|buys?)\s+(?:software|products?|services?|goods|items?|insurance|"
+    r"data|licen\w*|subscriptions?|hardware|chemicals?|steel|cement|oil|gas|power|"
+    r"coal|sugar|tea|coffee|fabric|yarn|paper|drugs?|medicines?|vehicles?|cars?|"
+    r"bikes?|phones?|chips?|semiconductors?|electricity|fertilizers?)\b",
+    r"\bbuy\s*-?\s*backs?\b",
+    r"\bholdings?\b",
+    r"\bpromoters?\s+hold\w*\b",
+    r"\bstake\s+hold\w*\b",
+    r"\b(?:goods|units?|shares?|assets?)\s+sold\b",
+    r"\bcost\s+of\s+\w+\s+sold\b",
+)
+
+
+# ---------------------------------------------------------------------------
+# The vocabulary
+#
+# Only the gaps are filled. Every intent inherits its canonical patterns;
+# the literal phrases below are wording the canonical regexes demonstrably
+# miss today.
+# ---------------------------------------------------------------------------
+_SPECS: tuple[IntentSpec, ...] = (
+    # ---------------------------------------------------------- Phase 1 ----
+    IntentSpec(
+        intent=FinancialIntent.PE,
+        family=IntentFamily.PHASE1,
+        negative=_PE_AS_POSTPOSITION,
+        precedence=50,
+    ),
+    IntentSpec(
+        intent=FinancialIntent.VALUATION,
+        family=IntentFamily.PHASE1,
+        phrases=(
+            # "Is the stock expensive?" is a valuation question — and
+            # pointedly NOT a recommendation, which is where a lone
+            # adjective about price would otherwise land.
+            r"\bexpensive\b", r"\bcheap(?:er|est)?\b", r"\bpricey\b",
+            r"\bover\s*-?\s*priced\b", r"\bunder\s*-?\s*priced\b",
+            r"\bworth\s+(?:buying|investing)\b",
+        ),
+        aliases=("mehnga", "mehenga", "mahanga", "sasta"),
+        precedence=45,
+    ),
+    IntentSpec(intent=FinancialIntent.PB, family=IntentFamily.PHASE1,
+               precedence=50),
+    IntentSpec(intent=FinancialIntent.EPS, family=IntentFamily.PHASE1,
+               precedence=50),
+    IntentSpec(intent=FinancialIntent.DEBT, family=IntentFamily.PHASE1,
+               aliases=("karz", "karja"), precedence=50),
+    IntentSpec(intent=FinancialIntent.ROE, family=IntentFamily.PHASE1,
+               precedence=50),
+    IntentSpec(intent=FinancialIntent.ROCE, family=IntentFamily.PHASE1,
+               precedence=50),
+    IntentSpec(intent=FinancialIntent.MARKET_PRICE, family=IntentFamily.PHASE1,
+               precedence=50),
+    # Growth: specific before generic. The specificity table in
+    # financial_intent.py already encodes this for the resolver; the
+    # precedence values do the same work for overlapping spans here, so
+    # "revenue growth" is one intent and not two.
+    IntentSpec(intent=FinancialIntent.REVENUE_GROWTH,
+               family=IntentFamily.PHASE1, precedence=60),
+    IntentSpec(intent=FinancialIntent.PROFIT_GROWTH,
+               family=IntentFamily.PHASE1, precedence=60),
+
+    # ------------------------------------------------------- Phase 2A ------
+    IntentSpec(
+        intent=FinancialIntent.OVERALL_ASSESSMENT,
+        family=IntentFamily.INVESTMENT,
+        phrases=(r"\bhow\s+good\s+is\b", r"\bhow\s+bad\s+is\b"),
+        # Low precedence: "overall" modifies whatever else was asked for
+        # rather than being a question in its own right.
+        precedence=20,
+    ),
+    IntentSpec(
+        intent=FinancialIntent.FINANCIAL_QUALITY,
+        family=IntentFamily.INVESTMENT,
+        phrases=(
+            r"\bfinancially\s+strong\b",
+            r"\bfinancially\s+(?:healthy|sound|solid|stable)\b",
+            r"\bfinancial\s+health\b",
+            r"\bbalance\s+sheet\s+strong\b",
+            r"\bbalance\s+sheet\s+quality\b",
+            r"\bfundamentally\s+strong\b",
+            r"\bfundamentals?\s+(?:strong|healthy|solid)\b",
+            r"\bquality\s+of\s+earnings\b",
+        ),
+        # Full phrases rather than the bare word "वित्तीय": the bare word
+        # also appears inside "वित्तीय जोखिम" (financial risk), and a
+        # two-word alias keeps the two intents from both firing.
+        aliases=(
+            "वित्तीय गुणवत्ता", "वित्तीय सेहत", "वित्तीय स्थिति",
+            "वित्तीय मजबूती", "vittiya gunvatta", "vittiya sehat",
+        ),
+        precedence=50,
+    ),
+    IntentSpec(
+        intent=FinancialIntent.GROWTH_QUALITY,
+        family=IntentFamily.INVESTMENT,
+        # Generic. Deliberately low precedence, so a specific growth intent
+        # overlapping the same span wins.
+        precedence=30,
+    ),
+    IntentSpec(
+        intent=FinancialIntent.FINANCIAL_RISK,
+        family=IntentFamily.INVESTMENT,
+        phrases=(
+            # "debt risk" and "liquidity risk" overlap the DEBT pattern's
+            # span; the higher precedence resolves that overlap instead of
+            # reporting both intents for one question.
+            r"\bdebt\s+risk\b", r"\bliquidity\s+risk\b",
+            r"\bsolvency\s+risk\b", r"\bbankruptcy\s+risk\b",
+            r"\bdebt\s+(?:burden|trap|stress)\b",
+            r"\bover\s*-?\s*leveraged\b", r"\bhighly\s+leveraged\b",
+        ),
+        aliases=("वित्तीय जोखिम", "वित्तीय संकट", "vittiya jokhim"),
+        precedence=55,
+    ),
+    IntentSpec(
+        intent=FinancialIntent.STRENGTHS,
+        family=IntentFamily.INVESTMENT,
+        phrases=(r"\bwhat\s+is\s+good\s+about\b", r"\bkey\s+positives?\b"),
+        aliases=("ताकत", "मजबूती"),
+        precedence=40,
+    ),
+    IntentSpec(
+        intent=FinancialIntent.WEAKNESSES,
+        family=IntentFamily.INVESTMENT,
+        phrases=(r"\bwhat\s+is\s+bad\s+about\b", r"\bkey\s+negatives?\b",
+                 r"\bred\s+flags?\b"),
+        aliases=("कमजोरी", "कमज़ोरी"),
+        precedence=40,
+    ),
+    IntentSpec(intent=FinancialIntent.INVESTMENT_CASE,
+               family=IntentFamily.INVESTMENT, precedence=40),
+    IntentSpec(
+        intent=FinancialIntent.RECOMMENDATION,
+        family=IntentFamily.INVESTMENT,
+        phrases=(r"\bshould\s+i\s+(?:invest|buy)\b", r"\bbuy\s+hai\s+ya\s+sell\b"),
+        aliases=("सिफारिश", "शिफारिश", "सलाह"),
+        negative=_NOT_A_RECOMMENDATION,
+        precedence=40,
+    ),
+)
+
+
+INTENT_VOCABULARY: Mapping[FinancialIntent, IntentSpec] = MappingProxyType(
+    {spec.intent: spec for spec in _SPECS}
+)
+
+
+def family_for(intent: FinancialIntent) -> IntentFamily:
+    """Which engine owns an intent. Single source: ``INVESTMENT_INTENTS``."""
+    return (
+        IntentFamily.INVESTMENT if intent in INVESTMENT_INTENTS
+        else IntentFamily.PHASE1
+    )
+
+
+_COMPILED: dict[str, re.Pattern[str]] = {}
+
+
+def compiled(pattern: str) -> re.Pattern[str]:
+    """Compile once per pattern.
+
+    The planner runs once per question; recompiling the whole vocabulary on
+    every question is the kind of cost that only shows up under load.
+    """
+    got = _COMPILED.get(pattern)
+    if got is None:
+        got = re.compile(pattern, re.IGNORECASE)
+        _COMPILED[pattern] = got
+    return got
+
+
+def negative_patterns(intent: FinancialIntent) -> tuple[re.Pattern[str], ...]:
+    return tuple(compiled(p) for p in INTENT_VOCABULARY[intent].negative)
+
+
+# ---------------------------------------------------------------------------
+# Non-intent question shapes
+#
+# Neither is an intent. They exist so the planner can report "ambiguous" or
+# "comparison" rather than returning no intents and looking as though it
+# simply failed to understand.
+# ---------------------------------------------------------------------------
+
+#: A judgement with no object. "Good company hai?" is evaluative, but which
+#: supported intent was meant is a guess — recorded as ambiguity, never
+#: resolved to one.
+_VAGUE_EVALUATIVE = re.compile(
+    r"\b(?:good|bad|nice|fine|okay|ok|decent|solid|safe|risky|best|worst)\b"
+    r"[^.?!]{0,20}\b(?:company|stock|share|business|firm|it|this)\b"
+    r"|\b(?:company|stock|share|business)\b[^.?!]{0,20}"
+    r"\b(?:acha|achha|achhi|bura|kharab|thik|theek|best|worst)\b",
+    re.IGNORECASE,
+)
+
+#: Two or more subjects placed against each other.
+_COMPARISON = re.compile(
+    r"\bcompar\w*\b|\bversus\b|\bvs\.?\b"
+    r"|\b(?:better|worse|higher|lower|cheaper|stronger|weaker)\s+than\b"
+    r"|\b(?:kaun|konsa|kaunsa)\s+(?:behtar|better|best)\b"
+    r"|तुलना|\btulna\b|\bmukable\b|\bmuqable\b",
+    re.IGNORECASE,
+)
+
+
+def is_comparison(text: str) -> bool:
+    """Two subjects placed against each other, or an explicit comparison."""
+    return bool(_COMPARISON.search(text or ""))
+
+
+def is_vague_evaluative(text: str) -> bool:
+    """A judgement about the company with no identifiable supported intent."""
+    return bool(_VAGUE_EVALUATIVE.search(text or ""))

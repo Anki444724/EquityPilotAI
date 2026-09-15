@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from types import MappingProxyType
+from typing import Mapping
 
 
 class FinancialIntent(StrEnum):
@@ -236,6 +238,32 @@ _SPECIFICITY: dict[FinancialIntent, tuple[FinancialIntent, ...]] = {
         FinancialIntent.REVENUE_GROWTH,
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Part 2B: the shared vocabulary surface.
+#
+# The Question Planner (app/services/ai/planner/) needs the same intent
+# patterns this resolver matches on. It does NOT get a second copy: a copy
+# would drift, and a drifted planner would produce plans that disagree with
+# the engine that has to execute them — the one failure mode this layering
+# cannot tolerate.
+#
+# These are read-only VIEWS over the mappings above, not copies, so editing a
+# pattern here changes the resolver and the planner together. Both are exposed
+# as mapping proxies because the resolver's behaviour is the contract: the
+# planner may read the vocabulary, never rewrite it.
+#
+# Nothing about `FinancialIntentResolver.resolve()` changes. It still applies
+# the exactly-one rule on top of these same patterns, and the planner is a
+# separate, planning-only matcher that is allowed to return several intents.
+# ---------------------------------------------------------------------------
+INTENT_PATTERNS: Mapping[FinancialIntent, tuple[str, ...]] = MappingProxyType(_PATTERNS)
+
+#: The specificity overrides, exposed for the same reason.
+SPECIFICITY_OVERRIDES: Mapping[FinancialIntent, tuple[FinancialIntent, ...]] = (
+    MappingProxyType(_SPECIFICITY)
+)
 
 
 class FinancialIntentResolver:
