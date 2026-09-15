@@ -13,13 +13,16 @@ from app.domain.ai.types import EvidenceKind
 from app.models.ai import AIAnalysis, AIUsageRecord, PromptRecord
 from app.services.ai.analyst import AnalystResult, ResearchAnalyst
 from app.services.ai.context_builder import ContextBuilder
+from app.services.ai.internal_composer import InternalComposer
 from app.services.ai.memory import memory_store
+from app.services.ai.planner import QuestionPlanner
 from app.services.ai.prompt_builder import PromptBuilder
 from app.services.ai.prompt_library import (
     BUILTIN_PROMPTS, OutputStyle, PromptTemplate,
 )
 from app.services.ai.providers.router import ProviderRouter
 from app.services.analysis_service import AnalysisService
+from app.services.company_service import CompanyService
 from app.services.documents.service import DocumentService
 from app.services.forecast.service import ForecastService
 from app.services.scoring.service import ScoringService
@@ -39,7 +42,34 @@ class AIService:
         self.router = _router
 
     # ------------------------------------------------------------- analysts
-    def analyst_for(self, analysis: AnalysisService) -> ResearchAnalyst:
+    def analyst_for(
+        self, analysis: AnalysisService, *, enable_composition: bool = False,
+    ) -> ResearchAnalyst:
+        """An analyst bound to one company's grounding.
+
+        `enable_composition` is the Part 2C opt-in. It is **off by default**,
+        so every existing caller — the blogger publisher, the report
+        orchestrator, the post-filing writer, the analysis endpoints, the
+        streaming endpoint, the batch runner and the maintenance scripts —
+        gets exactly the analyst it got before this flag existed: no planner
+        is constructed, no plan is produced, and a multi-intent question
+        takes the provider path it has always taken.
+
+        When it *is* requested, the analyst is handed the planner and the
+        composer at construction time — built once per analyst rather than
+        once per question — and the analyst becomes able to answer a
+        multi-intent question deterministically from the context's existing
+        evidence. Only the authenticated, non-streaming chat endpoint opts
+        in; see `api/v1/ai.py`.
+
+        The planner is given the platform's one company resolver,
+        ``CompanyService.named_in`` — the same call the chat endpoint already
+        uses to decide which company a question is about. No second company
+        resolution architecture is introduced, and the planner never
+        retargets the answer: the company bound to `analysis` stays
+        authoritative, and the analyst refuses to compose unless the plan's
+        company can be shown to be that one.
+        """
         builder = ContextBuilder(
             analysis,
             ForecastService(self.db),
@@ -49,7 +79,16 @@ class AIService:
             # computed engines, and `document_search` becomes a real retrieval.
             DocumentService(self.db),
         )
-        return ResearchAnalyst(builder, self.router, PromptBuilder())
+        if not enable_composition:
+            return ResearchAnalyst(builder, self.router, PromptBuilder())
+
+        return ResearchAnalyst(
+            builder, self.router, PromptBuilder(),
+            planner=QuestionPlanner(
+                company_resolver=CompanyService(self.db).named_in,
+            ),
+            composer=InternalComposer(),
+        )
 
     # ------------------------------------------------------- prompt library
     def seed_builtin_prompts(self) -> int:

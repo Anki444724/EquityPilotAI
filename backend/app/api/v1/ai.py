@@ -521,7 +521,19 @@ async def chat(
     memory.set_company(analysis.company.id, analysis.company.ticker,
                        analysis.company.name)
 
-    analyst = service.analyst_for(analysis)
+    # Part 2C composition is opted into HERE and nowhere else: this is the
+    # authenticated, non-streaming, single-question chat endpoint, which is
+    # the only caller whose questions are one user's own and whose answer can
+    # be composed from this company's already-grounded context. Every other
+    # caller of `analyst_for` — the analyse endpoint, the report and
+    # research-report builders, the streaming endpoint, the batch runner, the
+    # blogger publisher and the post-filing writer — keeps the default, so a
+    # multi-intent question there is served by the provider path exactly as
+    # before. Opting in changes no route on its own: the analyst still
+    # answers single-intent questions with the existing deterministic engines
+    # and declines composition whenever the question restricts its sources,
+    # carries a context override, or names a company this one is not.
+    analyst = service.analyst_for(analysis, enable_composition=True)
     try:
         # An explicit parameter wins; otherwise the question is parsed, so a
         # restriction expressed in prose is enforced just as strictly.

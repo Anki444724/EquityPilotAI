@@ -413,37 +413,63 @@ class TestDeterministicPathRegression:
 
 
 # ===========================================================================
-class TestShadowMode:
-    """Keep the planner pure while allowing its Part 2C composition consumer.
+class TestWiredConsumers:
+    """The planner is consumed by Part 2C, and by nothing else.
 
-    The planner remains a planning-only package. The internal composition
-    layer is the single production boundary permitted to consume its plans.
-    Other production modules must not import the planner directly.
+    Part 2B shipped the planner in shadow mode: nothing in the answer path
+    called it. Part 2C ends that — the analyst plans a question the existing
+    resolver declined, and the composition layer joins the result — so the
+    set of permitted consumers is now explicit rather than empty. The rule
+    the old shadow-mode test encoded still holds and is what this class
+    pins: *these* modules may import the planner, and no others. A new
+    production module importing it is a wiring change that must be made
+    deliberately, not a line that slips in.
     """
 
-    def test_analyst_does_not_import_the_planner(self):
-        source = (APP / "services" / "ai" / "analyst.py").read_text()
-        assert "question_planner" not in source
-        assert "QuestionPlanner" not in source
+    #: The composition boundary the planner was always destined for.
+    COMPOSITION_LAYER = APP / "services" / "ai" / "internal_composer.py"
+    #: The composition root: builds the planner for an analyst on request.
+    SERVICE = APP / "services" / "ai" / "service.py"
+    #: The single execution call site.
+    ANALYST = APP / "services" / "ai" / "analyst.py"
 
-    def test_analyst_still_uses_the_existing_resolver(self):
-        source = (APP / "services" / "ai" / "analyst.py").read_text()
-        assert "FinancialIntentResolver" in source
+    PERMITTED = {COMPOSITION_LAYER, SERVICE, ANALYST}
 
-    def test_no_production_module_outside_the_planner_imports_it(self):
+    def test_only_the_permitted_modules_import_the_planner(self):
         offenders = []
-        composition_layer = APP / "services" / "ai" / "internal_composer.py"
         for path in python_files(APP):
-            if PLANNER in path.parents:
+            if PLANNER in path.parents or path.name == "__init__.py":
                 continue
-            if path.name in {"__init__.py"}:
-                continue
-            if path == composition_layer:
+            if path in self.PERMITTED:
                 continue
             source = path.read_text()
             if "services.ai.planner" in source or "services . ai . planner" in source:
                 offenders.append(str(path.relative_to(APP)))
         assert offenders == []
+
+    def test_the_analyst_still_uses_the_existing_resolver(self):
+        source = self.ANALYST.read_text()
+        assert "FinancialIntentResolver" in source
+
+    def test_the_analyst_reaches_the_planner_only_through_composition(self):
+        """The analyst owns exactly one composition entry point."""
+        source = self.ANALYST.read_text()
+        assert "QuestionPlanner" in source
+        assert source.count("from app.services.ai.planner import") == 1
+        # One definition, one call site.
+        assert source.count("def _compose(") == 1
+        assert source.count("self._compose(") == 1
+
+    def test_source_resolver_path_still_precedes_composition(self):
+        """Order in the analyst: resolver answer, else composer."""
+        source = self.ANALYST.read_text()
+        resolver_call = source.index("FinancialIntentResolver().resolve(")
+        composition_call = source.index("composed = self._compose(")
+        assert resolver_call < composition_call
+        # And both sit inside the same guard block, so the composition gate
+        # inherits the chat / non-empty / no-override / unrestricted checks.
+        guard = source.index("and context_override is None")
+        assert guard < resolver_call
 
     def test_context_builder_was_not_touched_for_the_planner(self):
         source = (APP / "services" / "ai" / "context_builder.py").read_text()
@@ -453,3 +479,123 @@ class TestShadowMode:
         for name in ("financial_answer_engine.py", "investment_answer_engine.py"):
             source = (APP / "services" / "ai" / name).read_text()
             assert "planner" not in source.lower()
+
+    # ------------------------------------------------------- forbidden edges
+    def test_the_planner_does_not_import_the_analyst(self):
+        """No cycle: the analyst depends on the planner, never the reverse."""
+        for path in python_files(PLANNER):
+            imported = imports_of(path.read_text())
+            assert not {
+                name for name in imported if "analyst" in name.lower()
+            }, path.name
+
+    def test_the_composer_does_not_import_a_provider_or_a_retriever(self):
+        """Checked on the code, not the prose that promises it."""
+        imported = imports_of(self.COMPOSITION_LAYER.read_text())
+        offenders = {
+            name for name in imported
+            if any(bad in name.lower()
+                   for bad in ("provider", "retrieval", "rag", "httpx", "requests"))
+        }
+        assert offenders == set()
+
+    def test_the_composer_calls_no_provider_and_no_retrieval(self):
+        code = code_text(self.COMPOSITION_LAYER.read_text())
+        for token in ("ProviderRouter", "router.complete", "httpx", "requests",
+                      "document_service", ".search(", "retrieve", "embed"):
+            assert token not in code, token
+
+    def test_the_planner_takes_the_resolver_as_an_interface(self):
+        """One company-resolution architecture: a callable, not a service.
+
+        The planner is typed against ``Callable[[str], Sequence[...]]`` and
+        the production wiring passes ``CompanyService.named_in`` — the same
+        resolver the chat endpoint already uses. The planner never gets a
+        session, a repository or a second way to look a company up.
+        """
+        source = (PLANNER / "question_planner.py").read_text()
+        assert "CompanyResolver = Callable[[str], Sequence[CompanyLike]]" in source
+        for token in ("CompanyService", "Session", "session"):
+            assert token not in code_text(source), token
+
+        wiring = self.SERVICE.read_text()
+        assert "company_resolver=CompanyService(self.db).named_in" in wiring
+
+    def test_the_planner_is_not_constructed_anywhere_else_in_production(self):
+        constructions = []
+        for path in python_files(APP):
+            if PLANNER in path.parents:
+                continue
+            source = path.read_text()
+            if "QuestionPlanner(" in source:
+                constructions.append(str(path.relative_to(APP)))
+        # Exactly one line of production code builds a planner: the analyst
+        # factory in `service.py`. The analyst receives it already built.
+        assert constructions == ["services/ai/service.py"]
+        assert self.SERVICE.read_text().count("QuestionPlanner(") == 1
+
+
+# ===========================================================================
+class TestPart2CCallSites:
+    """Exactly one production call site for each Part 2C entry point."""
+
+    def test_compose_answer_has_one_production_call_site(self):
+        call_sites = []
+        for path in python_files(APP):
+            source = path.read_text()
+            if ".compose_answer(" not in source:
+                continue
+            call_sites.append(str(path.relative_to(APP)))
+        assert call_sites == ["services/ai/analyst.py"]
+
+    def test_the_flag_is_opted_into_by_exactly_one_endpoint(self):
+        api = (APP / "api" / "v1" / "ai.py").read_text()
+        assert api.count("enable_composition=True") == 1
+        # …and it is the chat endpoint that carries it.
+        chat = api.index("async def chat(")
+        stream = api.index("async def chat_stream(")
+        flag = api.index("enable_composition=True")
+        assert chat < flag < stream
+        # Streaming, reporting and the context dump keep the default.
+        for name in ("chat_stream", "report", "context", "analyse"):
+            start = api.index(f"def {name}(")
+            end = api.find("\n@router", start)
+            body = api[start:end if end != -1 else len(api)]
+            assert "enable_composition" not in body, name
+
+    def test_other_entry_points_never_opt_in(self):
+        """Service-level callers keep the default by not passing the flag."""
+        allowed = {
+            "api/v1/ai.py",           # the chat endpoint
+            "services/ai/service.py",  # the composition root and its default
+        }
+        offenders = []
+        for path in python_files(APP):
+            source = path.read_text()
+            if "enable_composition" not in source:
+                continue
+            relative = str(path.relative_to(APP))
+            if relative not in allowed:
+                offenders.append(relative)
+        assert offenders == []
+
+    def test_streaming_and_batch_do_not_reference_the_composition_layer(self):
+        source = (APP / "services" / "ai" / "analyst.py").read_text()
+        for name in ("stream_chat", "run_many"):
+            body = source[source.index(f"async def {name}("):]
+            end = body.find("\n    async def ", 1)
+            body = body[:end if end != -1 else len(body)]
+            assert "composer" not in body and "planner" not in body, name
+            assert "_compose(" not in body, name
+
+    def test_the_composition_layer_is_the_only_multi_engine_call_site(self):
+        """No second orchestration loop: engines are called by the composer."""
+        offenders = []
+        for path in python_files(APP):
+            if path.name in {"analyst.py", "internal_composer.py"}:
+                continue
+            source = path.read_text()
+            if ("FinancialAnswerEngine()" in source
+                    or "InvestmentAnswerEngine()" in source):
+                offenders.append(str(path.relative_to(APP)))
+        assert offenders == []
