@@ -33,7 +33,11 @@ from app.services.ai.financial_answer_engine import (
 from app.services.ai.financial_intent import INVESTMENT_INTENTS, FinancialIntentResolver
 from app.services.ai.investment_answer_engine import InvestmentAnswerEngine
 from app.services.ai.guardrails import GuardrailReport, check, enforce
+from app.services.ai.internal_composer import ComposedAnswer, InternalComposer
 from app.services.ai.memory import ConversationMemory
+from app.services.ai.planner import (
+    EntityStatus, ExecutionRoute, QuestionPlan, QuestionPlanner,
+)
 from app.services.ai.prompt_builder import BuiltPrompt, PromptBuilder
 from app.services.ai.prompt_library import (
     BUILTIN_PROMPTS, Capability, OutputStyle, PromptTemplate, get_prompt,
@@ -85,6 +89,93 @@ class AnalystResult:
         return bool(self.citation_audit and self.citation_audit.is_supported)
 
 
+#: Sentence terminator shaved off a stored company name before comparison.
+_NAME_NOISE = "."
+
+
+def _normalise_identity(value: str | None) -> str:
+    """A company identifier reduced to the form identity is compared in.
+
+    Case, surrounding whitespace and a trailing period are typography rather
+    than identity, so they are the only things removed. In particular two
+    names that differ by a word — "Reliance Industries" and "Reliance
+    Industries Ltd" — are deliberately NOT conflated here: this predicate
+    decides whether an answer may be composed at all, so a false positive is
+    a wrong-company answer, which is the one outcome the whole check exists
+    to prevent.
+    """
+    return " ".join((value or "").casefold().split()).rstrip(_NAME_NOISE)
+
+
+def _company_identity_is_safe(
+    plan: QuestionPlan, context: GroundedContext,
+) -> tuple[bool, str]:
+    """Whether ``plan``'s subject may be answered from ``context``.
+
+    The context is authoritative. It was bound to exactly one company by
+    ``AnalysisService`` before this analyst existed, every citation in it
+    belongs to that company, and the planner can neither change nor widen
+    that binding — an ``EntityResolution`` is a claim about the *question*,
+    never a re-binding of the evidence. This predicate is the single place
+    the two are compared, and it is what makes "the answer was composed from
+    the right company's data" structural rather than hopeful.
+
+    Four cases, each fail-closed:
+
+    * ``RESOLVED`` / ``CONTEXT_ONLY`` — the plan names a subject, so that
+      subject must be the bound company, matched on company id, ticker or
+      normalised name. Anything else is a mismatch and composition is
+      refused: the planner may not retarget an answer onto a company the
+      context does not carry.
+    * ``AMBIGUOUS`` — the question named several companies and the planner
+      deliberately did not choose. Composition is refused rather than
+      resolved by guessing, because the guess is invisible in the output.
+    * ``UNRESOLVED`` — nothing in the question identified a company. The
+      bound company remains the subject, which is the rule the existing
+      single-intent path has always applied: the resolver plays no part in
+      company identity there either. A resolver *failure* lands here too,
+      and is the reason it cannot retarget an answer — it reports that it
+      identified nobody, and an identification of nobody cannot substitute
+      a different company for the one the endpoint was scoped to.
+    * a context carrying no company at all — nothing to validate against, so
+      there is nothing safe to answer from.
+    """
+    # A context that does not identify a company cannot be validated, so it
+    # cannot be composed from. This is the "grounded context exists" gate.
+    if not (context.company_id or context.ticker):
+        return False, "the grounded context does not identify a company"
+
+    entity = plan.entity
+
+    if entity.status is EntityStatus.AMBIGUOUS:
+        return False, (
+            "the question names more than one company and the planner does "
+            "not choose between them"
+        )
+
+    if entity.status is EntityStatus.UNRESOLVED:
+        return True, (
+            "no company was identified in the question; the company bound to "
+            "this analysis is authoritative"
+        )
+
+    for planned, bound, label in (
+        (entity.company_id, context.company_id, "company id"),
+        (entity.ticker, context.ticker, "ticker"),
+        (entity.name, context.name, "company name"),
+    ):
+        if not (planned and bound):
+            continue
+        if _normalise_identity(planned) == _normalise_identity(bound):
+            return True, f"the plan's company matches the bound context by {label}"
+
+    return False, (
+        "the plan's company does not match the company bound to this "
+        f"analysis ({entity.ticker or entity.name or entity.company_id!r} "
+        f"vs {context.ticker or context.name or context.company_id!r})"
+    )
+
+
 class ResearchAnalyst:
     """Runs grounded analyses and conversation."""
 
@@ -93,10 +184,30 @@ class ResearchAnalyst:
         builder: ContextBuilder,
         router: ProviderRouter | None = None,
         prompt_builder: PromptBuilder | None = None,
+        *,
+        planner: QuestionPlanner | None = None,
+        composer: InternalComposer | None = None,
     ) -> None:
+        """Build an analyst over one company's grounded context.
+
+        ``planner`` and ``composer`` are the Part 2C collaborators, injected
+        rather than constructed here so that composition is an explicit
+        choice at the composition root (``AIService.analyst_for``) and so a
+        test can supply either without a database. They are built once per
+        analyst, not once per question.
+
+        **Both being absent is the default and means composition does not
+        exist for this analyst**: the multi-intent path below is never
+        entered, no plan is computed, and the behaviour is exactly what it
+        was before Part 2C. That default is what keeps the blogger, report,
+        analysis, streaming and batch paths untouched — none of them opts
+        in.
+        """
         self.builder = builder
         self.router = router or ProviderRouter()
         self.prompts = prompt_builder or PromptBuilder()
+        self.planner = planner
+        self.composer = composer
         self._context: GroundedContext | None = None
 
     def context(self, *, refresh: bool = False) -> GroundedContext:
@@ -251,6 +362,41 @@ class ResearchAnalyst:
                     capability, answer, context,
                     (time.perf_counter() - started) * 1000, memory, question,
                     language=language,
+                )
+
+            # --- Part 2C: multi-intent internal composition -----------------
+            #
+            # Reached only when the resolver above declined, and that
+            # ordering is the regression protection: a question with exactly
+            # one supported intent never arrives here, because it has already
+            # been answered by the engine that has always answered it, through
+            # the same funnel. What is left is the multi-intent question —
+            # two or more recognised intents, which the resolver refuses to
+            # answer partially — which is precisely what the planner can plan
+            # and the composer can join from the context's existing evidence.
+            #
+            # This is provider-free and retrieval-free by construction:
+            # `_compose` neither retrieves nor calls a router, the answer is
+            # rendered by the two existing deterministic engines, and the
+            # result is handed to `_deterministic` — so the citation audit,
+            # the guardrails, the annotation, the memory write and the
+            # language rendering are the same code that verifies every other
+            # answer.
+            #
+            # `_compose` returns None for every question this layer is not
+            # entitled to answer (no planner/composer injected, a single or
+            # unrecognised route, a company that cannot be shown to be this
+            # analyst's company, a composer that declined or raised), and the
+            # existing retrieval/provider path below then serves the whole
+            # question unchanged. No partial answer can escape: the composed
+            # text exists only if the composer produced all of it.
+            composition_started = time.perf_counter()
+            composed = self._compose(question, context, directive)
+            if composed is not None:
+                return await self._deterministic(
+                    capability, composed, context,
+                    (time.perf_counter() - composition_started) * 1000,
+                    memory, question, language=language,
                 )
 
         retrieved = self._retrieve(retrieval_query, capability) if retrieve else []
@@ -560,7 +706,7 @@ class ResearchAnalyst:
     async def _deterministic(
         self,
         capability: str,
-        answer: DeterministicAnswer,
+        answer: DeterministicAnswer | ComposedAnswer,
         context: GroundedContext,
         elapsed_ms: float,
         memory: ConversationMemory | None,
@@ -577,6 +723,15 @@ class ResearchAnalyst:
         no prompt, no tokens, no cost — and no invented
         ``CompletionResponse`` that would smuggle an estimated prompt-token
         count into the ledger. Latency is measured for real.
+
+        Two provider-free answer shapes reach this funnel and nothing else
+        about them differs once they arrive: a single-intent
+        ``DeterministicAnswer`` from one engine, and the multi-intent
+        ``ComposedAnswer`` the composer built from those same engines. Both
+        carry canonical English content and the evidence they used; the
+        ``citations`` handed to the audit are the context's own, exactly as
+        for the single-intent case, so the composed answer is verified
+        against the same evidence block its sentences were drawn from.
         """
         return await self._verify_and_record(
             capability, context, elapsed_ms, memory, question,
@@ -593,6 +748,82 @@ class ResearchAnalyst:
             fell_back_from=None,
             language=language,
         )
+
+    def _compose(
+        self,
+        question: str,
+        context: GroundedContext,
+        directive: SourceDirective,
+    ) -> ComposedAnswer | None:
+        """A provider-free answer to a multi-intent question, or ``None``.
+
+        ``None`` is the fail-closed answer to every condition that is not
+        satisfied — no planner or composer injected, the planner raised, the
+        plan is not a composition plan, the plan's company cannot be shown to
+        be this analyst's company, the composer raised, or the composer
+        declined. In each case the caller continues into the existing
+        retrieval/provider path with the whole question, so a question this
+        layer is not entitled to answer is answered by the layer that always
+        could, and a question it *is* entitled to answer is never answered
+        partially.
+
+        Planning and composition are wrapped because neither may cost a user
+        their answer: an internal step that fails falls back, and it says so
+        in the log rather than silently.
+        """
+        planner, composer = self.planner, self.composer
+        if planner is None or composer is None:
+            # Composition was not opted into for this analyst.
+            return None
+
+        try:
+            plan = planner.plan(question, source=directive)
+        except Exception:  # noqa: BLE001 — planning must never break a chat
+            log.exception("question planning failed", question=question[:160])
+            return None
+
+        if (
+            plan.execution_route is not ExecutionRoute.COMPOSITION_REQUIRED
+            or len(plan.intents) < 2
+        ):
+            # The single-intent deterministic routes were handled above and
+            # the remaining routes (SOURCE_ROUTER, DECLINE, INTERNAL_REASONING)
+            # belong to other layers; none of them is intercepted here.
+            return None
+
+        safe, reason = _company_identity_is_safe(plan, context)
+        if not safe:
+            log.info(
+                "composition declined", question=question[:160],
+                reason=reason, entity_status=plan.entity.status.value,
+                bound_company=context.ticker,
+            )
+            return None
+
+        try:
+            answer = composer.compose_answer(plan, context)
+        except Exception:  # noqa: BLE001 — fail closed, never partially
+            log.exception(
+                "internal composition failed", question=question[:160],
+                intents=list(plan.intent_values),
+            )
+            return None
+
+        if answer is None:
+            log.info(
+                "internal composition produced no answer",
+                question=question[:160], intents=list(plan.intent_values),
+            )
+            return None
+
+        log.info(
+            "deterministic composed answer",
+            intents=[intent.value for intent in answer.intents],
+            question=question[:160], identity=reason,
+            used_evidence=[c.key for c in answer.used_citations],
+            missing_evidence=list(answer.missing),
+        )
+        return answer
 
     async def _verify_and_record(
         self,
