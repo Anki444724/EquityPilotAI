@@ -414,16 +414,21 @@ class TestDeterministicPathRegression:
 
 # ===========================================================================
 class TestWiredConsumers:
-    """The planner is consumed by Part 2C, and by nothing else.
+    """The planner is consumed by the internal reasoning layers, and by nothing else.
 
     Part 2B shipped the planner in shadow mode: nothing in the answer path
     called it. Part 2C ends that — the analyst plans a question the existing
     resolver declined, and the composition layer joins the result — so the
-    set of permitted consumers is now explicit rather than empty. The rule
-    the old shadow-mode test encoded still holds and is what this class
-    pins: *these* modules may import the planner, and no others. A new
+    set of permitted consumers became explicit rather than empty. Part 2D
+    adds exactly one more, deliberately: the internal open-ended engine
+    reads the plan's ``execution_route``, ``query_type`` and
+    ``entity`` to decide whether it may answer at all.
+
+    The rule the old shadow-mode test encoded still holds and is what this
+    class pins: *these* modules may import the planner, and no others. A new
     production module importing it is a wiring change that must be made
-    deliberately, not a line that slips in.
+    deliberately, not a line that slips in — and it must be added here by
+    name, with a reason.
     """
 
     #: The composition boundary the planner was always destined for.
@@ -432,8 +437,12 @@ class TestWiredConsumers:
     SERVICE = APP / "services" / "ai" / "service.py"
     #: The single execution call site.
     ANALYST = APP / "services" / "ai" / "analyst.py"
+    #: Part 2D. Consumes a plan the analyst already computed; it never
+    #: builds one, so no question is planned twice and the two internal
+    #: layers cannot disagree about what was asked.
+    OPEN_ENDED_LAYER = APP / "services" / "ai" / "internal_open_ended.py"
 
-    PERMITTED = {COMPOSITION_LAYER, SERVICE, ANALYST}
+    PERMITTED = {COMPOSITION_LAYER, SERVICE, ANALYST, OPEN_ENDED_LAYER}
 
     def test_only_the_permitted_modules_import_the_planner(self):
         offenders = []
