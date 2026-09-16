@@ -213,18 +213,30 @@ class ProviderRouter:
         # to an error when no key is present.
         if settings.AI_MOCK_MODE:
             out.append(mock.DEFAULTS)
-        for module in PROVIDER_MODULES:
-            base = module.DEFAULTS
-            # A vendor module may declare deployment-supplied fields (model,
-            # attribution headers). Merged here rather than read inside the
-            # module so the router remains the only place a registry row is
-            # assembled, and the API key never leaves this function.
-            overrides = {}
-            if hasattr(module, "overrides"):
-                overrides = module.overrides(settings)
-            out.append(replace(
-                base, api_key=keys.get(base.name), **overrides,
-            ))
+        # Phase 2E A1 — reversible external-provider isolation. When the flag
+        # is false this loop never runs, so Gemini, OpenAI, Claude and
+        # OpenRouter are not registered at all: a provider absent from the
+        # registry has no chain entry, and no `preferred` value can resurrect
+        # a row that was never assembled. Gating here — the single place
+        # registry rows are built — leaves retry, backoff, caching, the
+        # ledger, FALLBACK_ORDER and complete()/stream() semantics exactly as
+        # they were. The offline provider above stays governed by
+        # AI_MOCK_MODE alone, exactly as before. `getattr` with a True
+        # default keeps any settings object that predates this flag behaving
+        # precisely as it did before the flag existed.
+        if getattr(settings, "AI_EXTERNAL_PROVIDERS_ENABLED", True):
+            for module in PROVIDER_MODULES:
+                base = module.DEFAULTS
+                # A vendor module may declare deployment-supplied fields (model,
+                # attribution headers). Merged here rather than read inside the
+                # module so the router remains the only place a registry row is
+                # assembled, and the API key never leaves this function.
+                overrides = {}
+                if hasattr(module, "overrides"):
+                    overrides = module.overrides(settings)
+                out.append(replace(
+                    base, api_key=keys.get(base.name), **overrides,
+                ))
         return out
 
     def build(self, config: ProviderConfig) -> LLMProvider:
