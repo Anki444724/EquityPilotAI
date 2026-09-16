@@ -229,6 +229,19 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS: int = 2000
     #: Enables a deterministic offline provider for demos and tests.
     AI_MOCK_MODE: bool = True
+    #: Phase 2E A1 — reversible external-provider isolation. When False the
+    #: provider registry is assembled WITHOUT the external vendors (Gemini,
+    #: OpenAI, Claude, OpenRouter), so nothing routed through ProviderRouter
+    #: can reach an external AI provider: completions degrade to the
+    #: deterministic offline provider (while AI_MOCK_MODE is true) or fail
+    #: closed with NoProviderConfigured. Default True preserves the existing
+    #: registry and fallback order exactly. The flag gates REGISTRATION only:
+    #: provider modules, FALLBACK_ORDER, retry/backoff, caching and cost
+    #: accounting are untouched, and credentials stay configured, so flipping
+    #: it back to true restores the previous behaviour with no other change.
+    #: Embeddings, reranking and translation keep their own provider switches
+    #: until later Phase 2E steps retire them.
+    AI_EXTERNAL_PROVIDERS_ENABLED: bool = True
 
     # --- Angel One SmartAPI (broker) ---------------------------------
     # The platform's SmartAPI application key, from Angel One's developer
