@@ -14,6 +14,7 @@ from app.models.ai import AIAnalysis, AIUsageRecord, PromptRecord
 from app.services.ai.analyst import AnalystResult, ResearchAnalyst
 from app.services.ai.context_builder import ContextBuilder
 from app.services.ai.internal_composer import InternalComposer
+from app.services.ai.internal_open_ended import InternalOpenEndedEngine
 from app.services.ai.memory import memory_store
 from app.services.ai.planner import QuestionPlanner
 from app.services.ai.prompt_builder import PromptBuilder
@@ -55,12 +56,19 @@ class AIService:
         is constructed, no plan is produced, and a multi-intent question
         takes the provider path it has always taken.
 
-        When it *is* requested, the analyst is handed the planner and the
-        composer at construction time — built once per analyst rather than
-        once per question — and the analyst becomes able to answer a
-        multi-intent question deterministically from the context's existing
-        evidence. Only the authenticated, non-streaming chat endpoint opts
-        in; see `api/v1/ai.py`.
+        When it *is* requested, the analyst is handed the planner, the
+        composer and the Part 2D internal open-ended engine at construction
+        time — built once per analyst rather than once per question — and
+        the analyst becomes able to answer a multi-intent question, a
+        comparison or an open-ended question deterministically from the
+        context's existing evidence. Only the authenticated, non-streaming
+        chat endpoint opts in; see `api/v1/ai.py`.
+
+        The three are injected together and are not separately switchable.
+        They share one planner and one plan per question, and the opt-in is
+        a single decision about whether this caller may use the internal
+        reasoning layers at all — three flags would allow a configuration
+        in which a plan is computed and then thrown away.
 
         The planner is given the platform's one company resolver,
         ``CompanyService.named_in`` — the same call the chat endpoint already
@@ -88,6 +96,7 @@ class AIService:
                 company_resolver=CompanyService(self.db).named_in,
             ),
             composer=InternalComposer(),
+            open_ended=InternalOpenEndedEngine(),
         )
 
     # ------------------------------------------------------- prompt library

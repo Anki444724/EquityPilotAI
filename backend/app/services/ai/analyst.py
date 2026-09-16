@@ -34,6 +34,9 @@ from app.services.ai.financial_intent import INVESTMENT_INTENTS, FinancialIntent
 from app.services.ai.investment_answer_engine import InvestmentAnswerEngine
 from app.services.ai.guardrails import GuardrailReport, check, enforce
 from app.services.ai.internal_composer import ComposedAnswer, InternalComposer
+from app.services.ai.internal_open_ended import (
+    InternalAnswer, InternalOpenEndedEngine,
+)
 from app.services.ai.memory import ConversationMemory
 from app.services.ai.planner import (
     EntityStatus, ExecutionRoute, QuestionPlan, QuestionPlanner,
@@ -187,6 +190,7 @@ class ResearchAnalyst:
         *,
         planner: QuestionPlanner | None = None,
         composer: InternalComposer | None = None,
+        open_ended: InternalOpenEndedEngine | None = None,
     ) -> None:
         """Build an analyst over one company's grounded context.
 
@@ -196,8 +200,15 @@ class ResearchAnalyst:
         test can supply either without a database. They are built once per
         analyst, not once per question.
 
-        **Both being absent is the default and means composition does not
-        exist for this analyst**: the multi-intent path below is never
+        ``open_ended`` is the Part 2D internal open-ended engine. It is
+        injected on the same terms and shares the planner: one plan is
+        computed per question and offered first to the composer and then,
+        only if the composer declines, to this engine. Planning twice would
+        cost a company-resolution pass and a language-normalisation pass for
+        nothing, and two plans for one question could disagree.
+
+        **All three being absent is the default and means composition does
+        not exist for this analyst**: the internal paths below are never
         entered, no plan is computed, and the behaviour is exactly what it
         was before Part 2C. That default is what keeps the blogger, report,
         analysis, streaming and batch paths untouched — none of them opts
@@ -208,6 +219,7 @@ class ResearchAnalyst:
         self.prompts = prompt_builder or PromptBuilder()
         self.planner = planner
         self.composer = composer
+        self.open_ended = open_ended
         self._context: GroundedContext | None = None
 
     def context(self, *, refresh: bool = False) -> GroundedContext:
@@ -364,40 +376,57 @@ class ResearchAnalyst:
                     language=language,
                 )
 
-            # --- Part 2C: multi-intent internal composition -----------------
+            # --- Part 2C / Part 2D: the internal reasoning layers --------
             #
             # Reached only when the resolver above declined, and that
             # ordering is the regression protection: a question with exactly
             # one supported intent never arrives here, because it has already
             # been answered by the engine that has always answered it, through
-            # the same funnel. What is left is the multi-intent question —
-            # two or more recognised intents, which the resolver refuses to
-            # answer partially — which is precisely what the planner can plan
-            # and the composer can join from the context's existing evidence.
+            # the same funnel. What is left is the question the deterministic
+            # engines are structurally unable to serve — two or more
+            # recognised intents, or a shape the planner routes to internal
+            # reasoning (a comparison, or a genuinely open-ended question).
             #
-            # This is provider-free and retrieval-free by construction:
-            # `_compose` neither retrieves nor calls a router, the answer is
-            # rendered by the two existing deterministic engines, and the
-            # result is handed to `_deterministic` — so the citation audit,
-            # the guardrails, the annotation, the memory write and the
-            # language rendering are the same code that verifies every other
-            # answer.
+            # One plan is computed and offered to the layers in precedence
+            # order: the Part 2C composer, which joins several intents, and
+            # then the Part 2D internal open-ended engine, which answers a
+            # comparison or an open-ended question from the same evidence.
+            # Planning once rather than once per layer matters: a plan is a
+            # company-resolution pass and a language-normalisation pass, and
+            # two plans for one question could disagree about what was asked.
             #
-            # `_compose` returns None for every question this layer is not
-            # entitled to answer (no planner/composer injected, a single or
-            # unrecognised route, a company that cannot be shown to be this
-            # analyst's company, a composer that declined or raised), and the
-            # existing retrieval/provider path below then serves the whole
-            # question unchanged. No partial answer can escape: the composed
-            # text exists only if the composer produced all of it.
-            composition_started = time.perf_counter()
-            composed = self._compose(question, context, directive)
-            if composed is not None:
-                return await self._deterministic(
-                    capability, composed, context,
-                    (time.perf_counter() - composition_started) * 1000,
-                    memory, question, language=language,
-                )
+            # Both layers are provider-free and retrieval-free by
+            # construction: neither retrieves nor calls a router, both render
+            # from the context's existing citations, and both hand their
+            # result to `_deterministic` — so the citation audit, the
+            # guardrails, the annotation, the memory write and the language
+            # rendering are the same code that verifies every other answer.
+            #
+            # Both return None for every question they are not entitled to
+            # answer (no collaborators injected, an unrecognised route, a
+            # company that cannot be shown to be this analyst's company, an
+            # engine that declined or raised), and the existing
+            # retrieval/provider path below then serves the whole question
+            # unchanged. No partial answer can escape: the internal text
+            # exists only if the layer produced all of it.
+            internal_started = time.perf_counter()
+            plan = self._plan(question, directive)
+            if plan is not None:
+                composed = self._compose(plan, context)
+                if composed is not None:
+                    return await self._deterministic(
+                        capability, composed, context,
+                        (time.perf_counter() - internal_started) * 1000,
+                        memory, question, language=language,
+                    )
+                internal = self._open_ended(plan, context)
+                if internal is not None:
+                    return await self._deterministic(
+                        capability, internal, context,
+                        (time.perf_counter() - internal_started) * 1000,
+                        memory, question, language=language,
+                        extra_citations=internal.derived_citations,
+                    )
 
         retrieved = self._retrieve(retrieval_query, capability) if retrieve else []
         if retrieved:
@@ -706,13 +735,14 @@ class ResearchAnalyst:
     async def _deterministic(
         self,
         capability: str,
-        answer: DeterministicAnswer | ComposedAnswer,
+        answer: DeterministicAnswer | ComposedAnswer | InternalAnswer,
         context: GroundedContext,
         elapsed_ms: float,
         memory: ConversationMemory | None,
         question: str,
         *,
         language: "Language | None" = None,
+        extra_citations: tuple[Citation, ...] = (),
     ) -> AnalystResult:
         """Finalise a provider-free answer through the same funnel.
 
@@ -724,19 +754,30 @@ class ResearchAnalyst:
         ``CompletionResponse`` that would smuggle an estimated prompt-token
         count into the ledger. Latency is measured for real.
 
-        Two provider-free answer shapes reach this funnel and nothing else
-        about them differs once they arrive: a single-intent
-        ``DeterministicAnswer`` from one engine, and the multi-intent
-        ``ComposedAnswer`` the composer built from those same engines. Both
-        carry canonical English content and the evidence they used; the
-        ``citations`` handed to the audit are the context's own, exactly as
-        for the single-intent case, so the composed answer is verified
-        against the same evidence block its sentences were drawn from.
+        Three provider-free answer shapes reach this funnel and nothing
+        else about them differs once they arrive: a single-intent
+        ``DeterministicAnswer`` from one engine, the multi-intent
+        ``ComposedAnswer`` the composer built from those same engines, and
+        the Part 2D ``InternalAnswer``. All three carry canonical English
+        content and the evidence they used; the ``citations`` handed to the
+        audit are the context's own, exactly as for the single-intent case,
+        so the answer is verified against the same evidence block its
+        sentences were drawn from.
+
+        ``extra_citations`` is the one addition, and only the Part 2D
+        internal path uses it. A figure that layer *derived* from real
+        citations — a difference, a multiple — is not in the context, so
+        without it the audit would correctly report a number the evidence
+        does not contain. Publishing the derived figure as a ``Citation``
+        and handing it here keeps the audit honest in both directions: the
+        figure resolves, and it resolves to an arithmetic step whose inputs
+        are cited beside it. Nothing else is widened; the answer is still
+        verified against the context it was built from.
         """
         return await self._verify_and_record(
             capability, context, elapsed_ms, memory, question,
             raw_content=answer.content,
-            citations=context.citations,
+            citations=[*context.citations, *extra_citations],
             provider="deterministic",
             model="none",
             prompt_key=capability,
@@ -749,37 +790,51 @@ class ResearchAnalyst:
             language=language,
         )
 
+    def _plan(
+        self, question: str, directive: SourceDirective,
+    ) -> QuestionPlan | None:
+        """The plan for this question, or ``None`` if planning is unavailable.
+
+        The single place the internal layers are planned from, so one
+        question yields exactly one plan. ``None`` is returned when no
+        planner was injected — composition was not opted into — and when
+        planning raised, because planning must never cost a user their
+        answer: an internal step that fails falls back, and says so in the
+        log rather than silently.
+        """
+        planner = self.planner
+        if planner is None:
+            return None
+        try:
+            return planner.plan(question, source=directive)
+        except Exception:  # noqa: BLE001 - planning must never break a chat
+            log.exception("question planning failed", question=question[:160])
+            return None
+
     def _compose(
         self,
-        question: str,
+        plan: QuestionPlan,
         context: GroundedContext,
-        directive: SourceDirective,
     ) -> ComposedAnswer | None:
         """A provider-free answer to a multi-intent question, or ``None``.
 
         ``None`` is the fail-closed answer to every condition that is not
-        satisfied — no planner or composer injected, the planner raised, the
-        plan is not a composition plan, the plan's company cannot be shown to
-        be this analyst's company, the composer raised, or the composer
-        declined. In each case the caller continues into the existing
-        retrieval/provider path with the whole question, so a question this
-        layer is not entitled to answer is answered by the layer that always
-        could, and a question it *is* entitled to answer is never answered
-        partially.
+        satisfied - no composer injected, the plan is not a composition
+        plan, the plan's company cannot be shown to be this analyst's
+        company, the composer raised, or the composer declined. In each case
+        the caller continues to the next internal layer and then into the
+        existing retrieval/provider path with the whole question, so a
+        question this layer is not entitled to answer is answered by the
+        layer that always could, and a question it *is* entitled to answer
+        is never answered partially.
 
-        Planning and composition are wrapped because neither may cost a user
-        their answer: an internal step that fails falls back, and it says so
-        in the log rather than silently.
+        Composition is wrapped because it may not cost a user their answer:
+        an internal step that fails falls back, and it says so in the log
+        rather than silently.
         """
-        planner, composer = self.planner, self.composer
-        if planner is None or composer is None:
+        composer = self.composer
+        if composer is None:
             # Composition was not opted into for this analyst.
-            return None
-
-        try:
-            plan = planner.plan(question, source=directive)
-        except Exception:  # noqa: BLE001 — planning must never break a chat
-            log.exception("question planning failed", question=question[:160])
             return None
 
         if (
@@ -794,7 +849,8 @@ class ResearchAnalyst:
         safe, reason = _company_identity_is_safe(plan, context)
         if not safe:
             log.info(
-                "composition declined", question=question[:160],
+                "composition declined",
+                question=plan.original_question[:160],
                 reason=reason, entity_status=plan.entity.status.value,
                 bound_company=context.ticker,
             )
@@ -802,9 +858,10 @@ class ResearchAnalyst:
 
         try:
             answer = composer.compose_answer(plan, context)
-        except Exception:  # noqa: BLE001 — fail closed, never partially
+        except Exception:  # noqa: BLE001 - fail closed, never partially
             log.exception(
-                "internal composition failed", question=question[:160],
+                "internal composition failed",
+                question=plan.original_question[:160],
                 intents=list(plan.intent_values),
             )
             return None
@@ -812,15 +869,102 @@ class ResearchAnalyst:
         if answer is None:
             log.info(
                 "internal composition produced no answer",
-                question=question[:160], intents=list(plan.intent_values),
+                question=plan.original_question[:160],
+                intents=list(plan.intent_values),
             )
             return None
 
         log.info(
             "deterministic composed answer",
             intents=[intent.value for intent in answer.intents],
-            question=question[:160], identity=reason,
+            question=plan.original_question[:160], identity=reason,
             used_evidence=[c.key for c in answer.used_citations],
+            missing_evidence=list(answer.missing),
+        )
+        return answer
+
+    def _open_ended(
+        self,
+        plan: QuestionPlan,
+        context: GroundedContext,
+    ) -> InternalAnswer | None:
+        """A provider-free answer to an open-ended question, or ``None``.
+
+        Part 2D. Consulted only after the composer declined, so it can never
+        intercept a question an existing route owns: the resolver has
+        already answered every single-intent question, and the composer has
+        already joined every multi-intent one. What reaches this layer is
+        the ``INTERNAL_REASONING`` route - a comparison, or a genuinely
+        open-ended question - which the engine itself re-checks before it
+        answers anything.
+
+        ``None`` is the fail-closed answer to every condition that is not
+        satisfied: no engine injected, a company that cannot be shown to be
+        this analyst's company, an engine that raised, or an engine that
+        returned ``NOT_SUPPORTED`` - which it does for an unsupported
+        question, a missing figure, an ambiguous subject or metric,
+        conflicting evidence, and an operation it will not perform. In every
+        one of those cases the caller continues into the existing
+        retrieval/provider path with the whole question, so a refusal here
+        costs the user nothing but the deterministic answer they would not
+        have had anyway.
+
+        A refusal carries no text by construction, so there is no partial
+        internal answer to leak: ``InternalAnswer.content`` is empty unless
+        the engine produced all of it.
+        """
+        engine = self.open_ended
+        if engine is None:
+            # Part 2D was not opted into for this analyst.
+            return None
+
+        if plan.execution_route is not ExecutionRoute.INTERNAL_REASONING:
+            # Not this layer's route. Every other route keeps its existing
+            # owner, and the engine would refuse it anyway; declining here
+            # keeps the ownership rule visible at the call site.
+            return None
+
+        # The same identity gate the composer passes through. Reused rather
+        # than reimplemented: a second, subtly different identity rule would
+        # be a second way to answer about the wrong company.
+        safe, reason = _company_identity_is_safe(plan, context)
+        if not safe:
+            log.info(
+                "internal open-ended declined",
+                question=plan.original_question[:160],
+                reason=reason, entity_status=plan.entity.status.value,
+                bound_company=context.ticker,
+            )
+            return None
+
+        try:
+            answer = engine.answer(plan, context)
+        except Exception:  # noqa: BLE001 - fail closed, never partially
+            # The user's answer must not depend on an internal layer being
+            # bug-free. The failure is logged in full here and the question
+            # falls back; no internal detail reaches the response.
+            log.exception(
+                "internal open-ended execution failed",
+                question=plan.original_question[:160],
+            )
+            return None
+
+        if not answer.answered:
+            log.info(
+                "internal open-ended produced no answer",
+                question=plan.original_question[:160],
+                capability=answer.capability.value,
+                reason=answer.reason, missing_evidence=list(answer.missing),
+            )
+            return None
+
+        log.info(
+            "deterministic open-ended answer",
+            capability=answer.capability.value,
+            question=plan.original_question[:160], identity=reason,
+            operations=[o.kind.value for o in answer.operations],
+            used_evidence=[c.key for c in answer.used_citations],
+            derived_evidence=[c.key for c in answer.derived_citations],
             missing_evidence=list(answer.missing),
         )
         return answer
