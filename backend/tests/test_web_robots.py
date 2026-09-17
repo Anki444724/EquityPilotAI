@@ -157,14 +157,36 @@ class TestRulePrecedence:
         assert policy.allowed("https://w.example/investors/annual-report") is True
         assert policy.allowed("https://w.example/private") is False
 
-    def test_a_wildcard_rule_is_left_to_the_library(self):
-        """Guessing at wildcard semantics could widen the decision."""
+    def test_a_wildcard_rule_is_resolved_by_the_specification(self):
+        """``*`` is a pattern, and the longest matching pattern decides.
+
+        ``Disallow: /docs/*.pdf`` matches ``/docs/x.pdf`` across the whole
+        path, which beats the five-character ``Allow: /docs`` prefix. This
+        used to be left to the standard library — whose answer depended on the
+        interpreter, refusing the path on Python 3.13 and permitting it on
+        3.12 and earlier. Both answers cannot be the site's policy, so the
+        pattern is resolved here and both interpreters agree.
+        """
         policy, _ = _policy({
             "x.example": (
                 200, b"User-agent: *\nAllow: /docs\nDisallow: /docs/*.pdf\n",
             )
         })
-        assert policy.allowed("https://x.example/docs/x.pdf") is True
+        assert policy.allowed("https://x.example/docs/x.pdf") is False
+        assert policy.allowed("https://x.example/docs/quarterly.pdf") is False
+        # A path the pattern does not match is still covered by the allow.
+        assert policy.allowed("https://x.example/docs/guide") is True
+
+    def test_the_end_anchor_is_honoured(self):
+        """``$`` requires the pattern to reach the end of the path."""
+        policy, _ = _policy({
+            "z.example": (
+                200, b"User-agent: *\nAllow: /\nDisallow: /*.pdf$\n",
+            )
+        })
+        assert policy.allowed("https://z.example/reports/q2.pdf") is False
+        # The anchor is what keeps a query string outside the refusal.
+        assert policy.allowed("https://z.example/reports/q2.pdf?page=2") is True
 
     def test_a_named_group_replaces_the_wildcard_group(self):
         """A merged reading would let a wildcard Allow widen our named group."""
@@ -190,6 +212,139 @@ class TestRulePrecedence:
         assert precedence_decision(("/x",), ("/x",), "/x") is True
         assert precedence_decision(("/a/b",), ("/a",), "/a/b") is True
         assert precedence_decision(("/a",), ("/a/b",), "/a/b/c") is False
+
+
+# ===========================================================================
+class TestPatternMatching:
+    """The matcher itself, pinned directly rather than through a policy."""
+
+    def test_the_longest_matching_pattern_decides(self):
+        from app.services.web.robots import rules_decision
+
+        rules = ((True, "/docs"), (False, "/docs/*.pdf"))
+        assert rules_decision(rules, "/docs/x.pdf") is False
+        assert rules_decision(rules, "/docs/guide") is True
+
+    def test_the_encoded_spelling_of_a_marker_is_the_same_marker(self):
+        """Python 3.12 and earlier store ``*`` as ``%2A``; 3.13 stores ``*``.
+
+        One policy, one meaning: both spellings resolve identically, which is
+        what makes the decision independent of the interpreter that parsed it.
+        """
+        from app.services.web.robots import rules_decision
+
+        encoded = ((True, "/docs"), (False, "/docs/%2A.pdf"))
+        literal = ((True, "/docs"), (False, "/docs/*.pdf"))
+        assert rules_decision(encoded, "/docs/x.pdf") is False
+        assert rules_decision(literal, "/docs/x.pdf") is False
+        assert rules_decision(encoded, "/docs/guide") == rules_decision(
+            literal, "/docs/guide"
+        )
+
+    def test_a_path_no_rule_matches_has_no_answer_of_its_own(self):
+        from app.services.web.robots import rules_decision
+
+        assert rules_decision((), "/anything") is None
+        assert rules_decision(((False, "/a"),), "/b") is None
+        # ``Disallow:`` with an empty path forbids nothing, so it is not a rule.
+        assert rules_decision(((False, ""),), "/b") is None
+
+    def test_a_tie_permits(self):
+        from app.services.web.robots import rules_decision
+
+        assert rules_decision(((True, "/x"), (False, "/x")), "/x") is True
+
+
+# ===========================================================================
+class TestPythonVersionIndependence:
+    """One robots.txt must mean one thing on every interpreter.
+
+    CPython 3.13 answers three questions differently from 3.12 and earlier,
+    and this module depended on all three: where the wildcard group is kept
+    (``entries`` versus ``default_entry``), whether ``default_entry`` is
+    populated at all, and whether ``Entry.applies_to`` matches a ``*`` token.
+    The fixture below installs the 3.13 shape over whatever interpreter is
+    running the test — the exact combination that failed in CI — and the
+    assertions are the same decisions the 3.11 shape produces.
+    """
+
+    @pytest.fixture()
+    def thirteen_like(self, monkeypatch):
+        import urllib.robotparser as stdlib
+
+        class _ThirteenLike(stdlib.RobotFileParser):
+            """3.13's ``_add_entry``: every group in ``entries``, no default."""
+
+            def _add_entry(self, entry):  # noqa: D102
+                self.entries.append(entry)
+
+        def applies_to_313(self, useragent):  # noqa: D102
+            if useragent is None:
+                return "*" in self.useragents
+            useragent = useragent.split("/")[0].lower()
+            for agent in self.useragents:
+                if agent != "*":
+                    agent = agent.lower()
+                    if agent in useragent:
+                        return True
+            return False
+
+        monkeypatch.setattr(
+            "app.services.web.robots.RobotFileParser", _ThirteenLike,
+        )
+        monkeypatch.setattr(stdlib.Entry, "applies_to", applies_to_313)
+        return _ThirteenLike
+
+    def test_the_installed_shape_is_really_the_3_13_shape(
+        self, thirteen_like,
+    ):
+        """Guards the guard: the emulation must not quietly stop emulating."""
+        from app.services.web.robots import RobotFileParser
+
+        parser = RobotFileParser()
+        parser.parse(["User-agent: *", "Disallow: /private"])
+        assert parser.default_entry is None           # never populated on 3.13
+        assert len(parser.entries) == 1               # the group lives here
+        assert parser.entries[0].applies_to("EquityPilotAI") is False
+
+    def test_a_wildcard_only_group_is_still_selected(self, thirteen_like):
+        """The CI failure: a ``User-agent: *`` policy was dropped entirely.
+
+        Reading only ``default_entry`` found no group on 3.13, so the decision
+        fell through to the library, which resolved the site's pattern the
+        other way. The group is now read from the parsed entries, so the
+        policy applies on either interpreter.
+        """
+        policy, _ = _policy({
+            "n13.example": (
+                200, b"User-agent: *\nAllow: /docs\nDisallow: /docs/*.pdf\n",
+            )
+        })
+        assert policy.allowed("https://n13.example/docs/x.pdf") is False
+        assert policy.allowed("https://n13.example/docs/guide") is True
+
+    def test_a_simple_wildcard_only_disallow_is_still_a_refusal(
+        self, thirteen_like,
+    ):
+        policy, _ = _policy({"o13.example": (200, DISALLOW_ALL.encode())})
+        assert policy.allowed("https://o13.example/investors") is False
+
+    def test_a_named_group_still_replaces_the_wildcard_group(
+        self, thirteen_like,
+    ):
+        policy, _ = _policy({
+            "p13.example": (
+                200, b"User-agent: *\nAllow: /a/public\n\n"
+                     b"User-agent: EquityPilotAI\nDisallow: /a\n",
+            )
+        })
+        assert policy.allowed("https://p13.example/a/public/x") is False
+        assert policy.allowed("https://p13.example/a") is False
+
+    def test_a_crawl_delay_is_read_on_both_shapes(self, thirteen_like):
+        """Delays ride the same group selection, so they are pinned too."""
+        policy, _ = _policy({"q13.example": (200, CRAWL_DELAY.encode())})
+        assert policy.crawl_delay_for("https://q13.example/x") == 7.0
 
 
 # ===========================================================================

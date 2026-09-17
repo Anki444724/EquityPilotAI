@@ -64,8 +64,8 @@ ordering and permits it when the lines are swapped; on the right policy it
 refuses ``/investors`` outright, though the site went out of its way to allow
 it. Neither answer is the policy the site wrote.
 
-So plain (wildcard-free) rules are resolved here by longest match, per the
-specification, and that answer governs whenever it has something to say:
+So rules are resolved here by longest match, per the specification, and that
+answer governs whenever it has something to say:
 
 * a longer ``Disallow`` refuses a path the library would permit — closing the
   permissive deviation, which is the one that matters;
@@ -76,17 +76,28 @@ specification, and that answer governs whenever it has something to say:
   this purpose;
 * a tie permits, as the specification says.
 
-Rules containing ``*`` or ``$`` are left entirely to the library, because
-guessing at their semantics could produce a *more* permissive answer than the
-library's. Where no plain rule matches, the library's verdict stands. Group
-selection follows the specification too: a group naming this user agent
-replaces the wildcard group rather than merging with it.
+That includes the ``*`` wildcard and the trailing ``$`` anchor, evaluated by
+:func:`_match_length` rather than left to the library. Leaving them to the
+library was a bug, not a safety margin: the library's answer depends on the
+interpreter (Python 3.13 implements the specification's patterns, 3.12 and
+earlier ignore them entirely), so the same ``robots.txt`` produced two
+different decisions, and the older one was the permissive one.
+
+Group selection follows the specification too: a group naming this user agent
+replaces the wildcard group rather than merging with it. It is resolved here
+from the parsed groups, not by asking the library, because the library's own
+group lookup is version-dependent in exactly the same way — 3.13 keeps a
+wildcard group in ``entries`` and never populates ``default_entry``, 3.12 and
+earlier do the opposite, and ``Entry.applies_to`` does not match a wildcard
+token on 3.13. Where no rule in the applicable group matches the path at all,
+the library's verdict stands, as before.
 
 A DISALLOW here is never overridden by a caller. There is no "force" flag, no
 per-host exception list and no bypass header anywhere in this package.
 """
 from __future__ import annotations
 
+import re
 import time
 import urllib.error
 import urllib.request
@@ -148,66 +159,209 @@ class RobotsOutcome:
         return None if self.allowed else WebRejectionReason.ROBOTS_DISALLOWED
 
 
-def precedence_decision(
-    allow_prefixes: tuple[str, ...],
-    disallow_prefixes: tuple[str, ...],
-    path: str,
-) -> bool | None:
-    """RFC 9309 longest-match over plain rules, or ``None`` when silent.
+#: RFC 9309 §2.2.2 markers, in both spellings a rule may carry. The literal
+#: ``*`` and ``$`` are what the specification writes; the percent-encoded
+#: forms are what the older standard-library parser stores, because it unquotes
+#: the rule text and re-quotes it (``*`` becomes ``%2A``). Decoding both to the
+#: same marker is what makes one policy mean one thing on every interpreter.
+_WILDCARD_MARKER = re.compile(r"\*|%2[aA]")
+_ANCHOR_MARKER = re.compile(r"\$|%24")
 
-    ``None`` means "this reading has nothing to say about the path" — no plain
-    rule matched — and the caller then uses the library's verdict. ``True``
-    and ``False`` are the specification's answers: the longest matching
-    ``Allow`` wins, a longer ``Disallow`` beats it, and an exact tie permits.
+
+def _normalise_pattern(raw: str) -> str:
+    """A rule path with its markers in the spelling this module matches on.
+
+    RFC 9309 §2.2.2 unencodes a percent-encoded octet before comparing it, so
+    ``%2A`` *is* the wildcard and ``%24`` *is* the anchor. Both spellings are
+    therefore decoded, which also makes the two standard-library generations
+    agree: 3.13 hands over ``/docs/*.pdf``, 3.12 and earlier hand over
+    ``/docs/%2A.pdf``, and this function turns both into ``/docs/*.pdf``.
     """
-    longest_allow = max(
-        (len(prefix) for prefix in allow_prefixes if path.startswith(prefix)),
-        default=-1,
-    )
-    longest_disallow = max(
-        (len(prefix) for prefix in disallow_prefixes if path.startswith(prefix)),
-        default=-1,
-    )
+    return _ANCHOR_MARKER.sub("$", _WILDCARD_MARKER.sub("*", raw))
+
+
+def _match_length(pattern: str, path: str) -> int | None:
+    """How much of ``path`` a rule matches, or ``None`` when it does not.
+
+    The length is the quantity RFC 9309 §2.2.2 calls the *most specific
+    match*; the caller compares lengths between rules. Semantics, in full:
+
+    * a trailing ``$`` anchors the pattern to the end of the path;
+    * ``*`` matches any run of characters, including none;
+    * everything else is a literal, matched from the start of the path;
+    * an empty pattern matches nothing, because ``Disallow:`` with no path is
+      the specification's "allow all" and adds nothing to refuse.
+    """
+    pattern = _normalise_pattern(pattern)
+    if not pattern:
+        return None
+
+    anchored = pattern.endswith("$")
+    if anchored:
+        pattern = pattern[:-1]
+        if not pattern:
+            return None
+
+    if "*" not in pattern:
+        if anchored:
+            return len(pattern) if path == pattern else None
+        return len(pattern) if path.startswith(pattern) else None
+
+    expression = ".*".join(re.escape(part) for part in pattern.split("*"))
+    if anchored:
+        expression += r"\Z"
+    match = re.match(expression, path, re.DOTALL)
+    return match.end() if match else None
+
+
+def rules_decision(
+    rules: tuple[tuple[bool, str], ...], path: str,
+) -> bool | None:
+    """RFC 9309 §2.2.2 longest match over one group's rules.
+
+    ``rules`` is ``(allowance, pattern)`` in the order the file stated them,
+    which does not matter here: the longest match decides and only an exact
+    tie is left to the specification's rule that ``Allow`` wins.
+
+    Returns ``None`` when no rule matches the path, which is the one case
+    where this reading has nothing to say. The caller then falls back to the
+    library's verdict, exactly as it did before — a group that expresses no
+    opinion about a path is not a refusal.
+    """
+    longest_allow = -1
+    longest_disallow = -1
+    for allowance, pattern in rules:
+        length = _match_length(pattern, path)
+        if length is None:
+            continue
+        if allowance:
+            longest_allow = max(longest_allow, length)
+        else:
+            longest_disallow = max(longest_disallow, length)
     if longest_allow < 0 and longest_disallow < 0:
         return None
     return longest_allow >= longest_disallow
 
 
-def _plain_prefixes(
-    parser: RobotFileParser, user_agent: str,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The plain allow/disallow prefixes of the group that applies to us.
+def precedence_decision(
+    allow_prefixes: tuple[str, ...],
+    disallow_prefixes: tuple[str, ...],
+    path: str,
+) -> bool | None:
+    """The same decision for a caller that already holds bare prefixes.
 
-    Group selection is the specification's: a group that names this user agent
-    applies *instead of* the wildcard group. Merging the two would let a
-    wildcard ``Allow`` widen a named group's ``Disallow``, which is not what
-    the site wrote.
-
-    Reads the library's own parsed entries rather than re-parsing the text, so
-    path quoting and prefix matching keep exactly the semantics of the parser
-    the rest of this module uses.
+    Kept because the plain-prefix case is the one most easily read at a call
+    site and is pinned by its own tests. ``None`` means "this reading has
+    nothing to say about the path" — no rule matched — and the caller then
+    uses the library's verdict. ``True`` and ``False`` are the
+    specification's answers: the longest matching ``Allow`` wins, a longer
+    ``Disallow`` beats it, and an exact tie permits.
     """
-    named = [
-        entry for entry in (getattr(parser, "entries", ()) or ())
-        if entry.applies_to(user_agent)
-    ]
-    default_entry = getattr(parser, "default_entry", None)
-    if named:
-        groups = named
-    elif default_entry is not None and default_entry.applies_to(user_agent):
-        groups = [default_entry]
-    else:
-        groups = []
+    rules = tuple((True, prefix) for prefix in allow_prefixes) + tuple(
+        (False, prefix) for prefix in disallow_prefixes
+    )
+    return rules_decision(rules, path)
 
-    allow: list[str] = []
-    disallow: list[str] = []
+
+def _agent_token(value: str) -> str:
+    """The product token of a user-agent string, lowercased.
+
+    ``EquityPilotAI/1.0`` and ``EquityPilotAI`` are the same crawler as far as
+    a robots.txt group is concerned; the version suffix is not part of the
+    token that identifies it.
+    """
+    return str(value or "").split("/")[0].strip().lower()
+
+
+def _group_specificity(entry: object, token: str) -> int:
+    """How specifically an entry's group names this crawler (0 = not at all).
+
+    The comparison is the library's and the specification's: the group's
+    user-agent value must appear, case-insensitively, in this crawler's
+    product token. Longer values are more specific, which is how a group for
+    ``equitypilotai`` is preferred over one for ``equity``. A ``*`` names
+    nobody in particular and is scored zero — it is the fallback, not a match.
+    """
+    best = 0
+    for agent in getattr(entry, "useragents", ()) or ():
+        candidate = _agent_token(str(agent))
+        if not candidate or candidate == "*":
+            continue
+        if candidate in token:
+            best = max(best, len(candidate))
+    return best
+
+
+def _is_wildcard_group(entry: object) -> bool:
+    """Whether an entry is the ``User-agent: *`` group."""
+    return any(
+        _agent_token(str(agent)) == "*"
+        for agent in getattr(entry, "useragents", ()) or ()
+    )
+
+
+def _applicable_groups(
+    parser: RobotFileParser, user_agent: str,
+) -> tuple[object, ...]:
+    """The groups of ``robots.txt`` that apply to this crawler.
+
+    Group selection is the specification's, and is done here rather than asked
+    of the library because the library answers differently per interpreter
+    (the delay directive rides the same lookup, which is why it is read from
+    this group rather than through ``parser.crawl_delay``):
+
+    * the wildcard group lives in ``default_entry`` on Python 3.12 and earlier
+      but in ``entries`` on 3.13, and ``default_entry`` is never populated
+      there — reading only the former, as this module used to, finds no group
+      at all on a newer interpreter and drops the site's policy on the floor;
+    * ``Entry.applies_to`` returns ``False`` for a wildcard-only group from
+      3.13 onwards, so a group selection delegated to it silently selects
+      nothing.
+
+    Reading both places and matching the agent tokens here gives one answer on
+    every interpreter: the most specific named group that names us, else the
+    wildcard group, else no group at all.
+
+    Rules are taken from every group at that specificity, which matters when a
+    file states the same user-agent twice — the specification merges those,
+    and dropping one of them would drop a refusal the site wrote.
+    """
+    candidates = list(getattr(parser, "entries", ()) or ())
+    default_entry = getattr(parser, "default_entry", None)
+    if default_entry is not None and not any(
+        candidate is default_entry for candidate in candidates
+    ):
+        candidates.append(default_entry)
+
+    token = _agent_token(user_agent)
+    named = [
+        (specificity, entry)
+        for entry in candidates
+        if (specificity := _group_specificity(entry, token))
+    ]
+    if named:
+        most_specific = max(specificity for specificity, _ in named)
+        groups = [
+            entry for specificity, entry in named if specificity == most_specific
+        ]
+    else:
+        groups = [entry for entry in candidates if _is_wildcard_group(entry)]
+
+    return tuple(groups)
+
+
+def _rules_of(groups: tuple[object, ...]) -> tuple[tuple[bool, str], ...]:
+    """The ``(allowance, pattern)`` rules across the applicable groups."""
+    rules: list[tuple[bool, str]] = []
     for group in groups:
         for line in getattr(group, "rulelines", ()) or ():
-            path = str(getattr(line, "path", "") or "")
-            if not path or "*" in path or "$" in path:
+            pattern = str(getattr(line, "path", "") or "")
+            if not pattern:
+                # ``Disallow:`` with an empty path means "allow all": a line
+                # that forbids nothing, so it is not carried as a rule.
                 continue
-            (allow if getattr(line, "allowance", True) else disallow).append(path)
-    return tuple(allow), tuple(disallow)
+            rules.append((bool(getattr(line, "allowance", True)), pattern))
+    return tuple(rules)
 
 
 @dataclass(slots=True)
@@ -220,9 +374,11 @@ class _Cached:
     crawl_delay: float | None
     expires_at: float
     fetched_at: datetime
-    #: Plain rule prefixes for this agent, used for the precedence check.
-    allow_prefixes: tuple[str, ...] = ()
-    disallow_prefixes: tuple[str, ...] = ()
+    #: ``(allowance, pattern)`` for the group that applies to this agent,
+    #: resolved once at parse time so every decision on this host reads the
+    #: same rules — including the wildcard and anchor patterns the library
+    #: does not implement on older interpreters.
+    rules: tuple[tuple[bool, str], ...] = ()
 
 
 def _no_redirect_opener() -> urllib.request.OpenerDirector:
@@ -410,15 +566,15 @@ class RobotsPolicy:
                      f"({type(exc).__name__})",
             )
 
-        delay = self._crawl_delay(parser)
-        allow_prefixes, disallow_prefixes = _plain_prefixes(parser, self.user_agent)
+        groups = _applicable_groups(parser, self.user_agent)
+        delay = self._crawl_delay(groups)
+        rules = _rules_of(groups)
         return _Cached(
             parser=parser, outcome_status=RobotsStatus.ALLOWED,
             reason=f"robots.txt at {host} read and applied",
             crawl_delay=delay, expires_at=now + self.ttl_seconds,
             fetched_at=self._now(),
-            allow_prefixes=allow_prefixes,
-            disallow_prefixes=disallow_prefixes,
+            rules=rules,
         )
 
     def _unavailable(self, now: float, reason: str) -> _Cached:
@@ -428,25 +584,28 @@ class RobotsPolicy:
             expires_at=now + self.ttl_seconds, fetched_at=self._now(),
         )
 
-    def _crawl_delay(self, parser: RobotFileParser) -> float | None:
+    def _crawl_delay(self, groups: tuple[object, ...]) -> float | None:
         """The site's crawl delay, from either of the two ways it is stated.
 
         ``Crawl-delay`` is the widely-implemented non-standard directive;
         ``Request-rate`` is the other spelling. Both are read so a site using
         either is honoured, and neither is invented when absent.
+
+        Read from the groups resolved above rather than through
+        ``parser.crawl_delay`` for the same reason the rules are: the
+        library's lookup is version-dependent, and a delay that silently
+        disappears on one interpreter is the platform pacing itself faster
+        than the site asked. The first stated directive wins, in file order,
+        which is what the single lookups did.
         """
-        try:
-            delay = parser.crawl_delay(self.user_agent)
-        except Exception:  # noqa: BLE001
-            delay = None
-        if delay:
-            return float(delay)
-        try:
-            rate = parser.request_rate(self.user_agent)
-        except Exception:  # noqa: BLE001
-            rate = None
-        if rate and rate.requests:
-            return float(rate.seconds) / float(rate.requests)
+        for group in groups:
+            delay = getattr(group, "delay", None)
+            if delay:
+                return float(delay)
+        for group in groups:
+            rate = getattr(group, "req_rate", None)
+            if rate and rate.requests:
+                return float(rate.seconds) / float(rate.requests)
         return None
 
     def _decide(self, cached: _Cached, host: str, path: str) -> RobotsOutcome:
@@ -469,12 +628,10 @@ class RobotsPolicy:
                 crawl_delay=cached.crawl_delay, fetched_at=cached.fetched_at,
             )
 
-        # The library's first-match reading is superseded wherever the plain
+        # The library's reading is superseded wherever the applicable group's
         # rules have an answer under RFC 9309 precedence — see the module
         # docstring, which states both directions and why neither is a bypass.
-        precedence = precedence_decision(
-            cached.allow_prefixes, cached.disallow_prefixes, path,
-        )
+        precedence = rules_decision(cached.rules, path)
         if precedence is not None:
             return RobotsOutcome(
                 host=host, path=path, allowed=precedence,
