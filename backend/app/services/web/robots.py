@@ -351,7 +351,22 @@ def _applicable_groups(
 
 
 def _rules_of(groups: tuple[object, ...]) -> tuple[tuple[bool, str], ...]:
-    """The ``(allowance, pattern)`` rules across the applicable groups."""
+    """The ``(allowance, pattern)`` rules across the applicable groups.
+
+    The end anchor is read from whichever attribute the parser keeps it in.
+    Python 3.13's ``RuleLine`` records ``$`` in ``line.fullmatch`` and *removes
+    it from* ``line.path`` (compiling an end-anchored matcher), while 3.12 and
+    earlier leave the ``$`` in the path and have no such attribute. Reading
+    only the path — as this function used to — silently turned
+    ``Disallow: /*.pdf$`` into the unanchored ``/*.pdf`` on 3.13, which then
+    also matched a query string and refused a page the site had allowed. The
+    anchor is therefore restored when the parser reports it separately, so one
+    robots.txt means one thing on every interpreter.
+
+    A pattern that already carries the anchor — literally, or as the older
+    parser's ``%24`` — is left exactly as parsed, so the spelling is preserved
+    and no second ``$`` is appended.
+    """
     rules: list[tuple[bool, str]] = []
     for group in groups:
         for line in getattr(group, "rulelines", ()) or ():
@@ -360,6 +375,11 @@ def _rules_of(groups: tuple[object, ...]) -> tuple[tuple[bool, str], ...]:
                 # ``Disallow:`` with an empty path means "allow all": a line
                 # that forbids nothing, so it is not carried as a rule.
                 continue
+            if (
+                getattr(line, "fullmatch", False)
+                and not _normalise_pattern(pattern).endswith("$")
+            ):
+                pattern += "$"
             rules.append((bool(getattr(line, "allowance", True)), pattern))
     return tuple(rules)
 

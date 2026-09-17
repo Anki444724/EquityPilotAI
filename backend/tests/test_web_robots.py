@@ -22,6 +22,7 @@ AGENT_SPECIFIC = (
     "User-agent: EquityPilotAI\nAllow: /investors\nDisallow: /investors/private\n"
 )
 CRAWL_DELAY = "User-agent: *\nCrawl-delay: 7\nDisallow: /private\n"
+ANCHORED_PDF = "User-agent: *\nAllow: /\nDisallow: /*.pdf$\n"
 
 
 def _policy(responses, *, user_agent="EquityPilotAI", **kwargs):
@@ -259,17 +260,29 @@ class TestPatternMatching:
 class TestPythonVersionIndependence:
     """One robots.txt must mean one thing on every interpreter.
 
-    CPython 3.13 answers three questions differently from 3.12 and earlier,
-    and this module depended on all three: where the wildcard group is kept
+    CPython 3.13 answers four questions differently from 3.12 and earlier, and
+    this module depended on all four: where the wildcard group is kept
     (``entries`` versus ``default_entry``), whether ``default_entry`` is
-    populated at all, and whether ``Entry.applies_to`` matches a ``*`` token.
-    The fixture below installs the 3.13 shape over whatever interpreter is
-    running the test — the exact combination that failed in CI — and the
-    assertions are the same decisions the 3.11 shape produces.
+    populated at all, whether ``Entry.applies_to`` matches a ``*`` token, and
+    where a rule's trailing ``$`` anchor is kept (``line.fullmatch`` versus
+    ``line.path``). The fixture below installs the 3.13 shape over whatever
+    interpreter is running the test — the exact combination that failed in CI,
+    twice — and the assertions are the same decisions the 3.11 shape produces.
     """
 
     @pytest.fixture()
     def thirteen_like(self, monkeypatch):
+        """Install 3.13's group *and* rule-line shapes over this interpreter.
+
+        Both halves matter. 3.13 keeps every group in ``entries`` and never
+        populates ``default_entry``; it also moves a rule's trailing ``$`` out
+        of ``line.path`` into ``line.fullmatch``, compiling an end-anchored
+        matcher. Emulating only the first half is what let the anchor bug
+        through the first time, so the rule shape is emulated here too, and
+        ``test_the_installed_shape_is_really_the_3_13_shape`` pins both.
+        """
+        import re
+        import urllib.parse as urlparse
         import urllib.robotparser as stdlib
 
         class _ThirteenLike(stdlib.RobotFileParser):
@@ -289,10 +302,66 @@ class TestPythonVersionIndependence:
                         return True
             return False
 
+        def normalise(path):  # noqa: D103
+            return urlparse.quote(
+                urlparse.unquote(path, errors="surrogateescape"),
+                errors="surrogateescape",
+            )
+
+        def normalise_pattern(path):  # noqa: D103
+            path, separator, query = path.partition("?")
+            path = re.sub(r"[^*$]+", lambda match: normalise(match[0]), path)
+            if separator:
+                query = re.sub(r"[^=&*$]+", lambda match: normalise(match[0]), query)
+                path += "?" + query
+            return path
+
+        def translate_pattern(path):  # noqa: D103
+            parts = list(map(re.escape, path.split("*")))
+            for index in range(1, len(parts) - 1):
+                parts[index] = f"(?>.*?{parts[index]})"
+            parts[-1] = f".*{parts[-1]}"
+            return "".join(parts)
+
+        class _ThirteenRuleLine:
+            """3.13's ``RuleLine``: the anchor leaves ``path`` for ``fullmatch``."""
+
+            def __init__(self, path, allowance):
+                if path == "" and not allowance:
+                    allowance = True
+                path = re.sub(r"[*]{2,}", "*", path)
+                path = re.sub(r"[$][$*]+", "$", path)
+                path = normalise_pattern(path)
+                self.fullmatch = path.endswith("$")
+                path = path.rstrip("$")
+                if "$" in path:
+                    raise ValueError("$ not at the end of path")
+                self.matcher = None
+                if "*" in path:
+                    pattern = re.compile(translate_pattern(path), re.DOTALL)
+                    self.matcher = (
+                        pattern.fullmatch if self.fullmatch else pattern.match
+                    )
+                self.path = path
+                self.allowance = allowance
+
+            def applies_to(self, filename):  # noqa: D102
+                if self.matcher is not None:
+                    match = self.matcher(filename)
+                    if match:
+                        return match.end() + 1
+                elif self.fullmatch:
+                    if filename == self.path:
+                        return len(self.path) + 1
+                elif filename.startswith(self.path):
+                    return len(self.path) + 1
+                return 0
+
         monkeypatch.setattr(
             "app.services.web.robots.RobotFileParser", _ThirteenLike,
         )
         monkeypatch.setattr(stdlib.Entry, "applies_to", applies_to_313)
+        monkeypatch.setattr(stdlib, "RuleLine", _ThirteenRuleLine)
         return _ThirteenLike
 
     def test_the_installed_shape_is_really_the_3_13_shape(
@@ -306,6 +375,13 @@ class TestPythonVersionIndependence:
         assert parser.default_entry is None           # never populated on 3.13
         assert len(parser.entries) == 1               # the group lives here
         assert parser.entries[0].applies_to("EquityPilotAI") is False
+
+        parser = RobotFileParser()
+        parser.parse(["User-agent: *", "Disallow: /*.pdf$"])
+        line = parser.entries[0].rulelines[0]
+        assert line.path == "/*.pdf"                  # the ``$`` is gone ...
+        assert line.fullmatch is True                 # ... and recorded here
+        assert line.matcher is not None               # a compiled fullmatcher
 
     def test_a_wildcard_only_group_is_still_selected(self, thirteen_like):
         """The CI failure: a ``User-agent: *`` policy was dropped entirely.
@@ -345,6 +421,42 @@ class TestPythonVersionIndependence:
         """Delays ride the same group selection, so they are pinned too."""
         policy, _ = _policy({"q13.example": (200, CRAWL_DELAY.encode())})
         assert policy.crawl_delay_for("https://q13.example/x") == 7.0
+
+    def test_an_end_anchor_still_ends_where_the_site_put_it(
+        self, thirteen_like,
+    ):
+        """The second CI failure: the ``$`` lives in ``line.fullmatch`` on 3.13.
+
+        Reading only ``line.path`` turned ``Disallow: /*.pdf$`` into the
+        unanchored ``/*.pdf`` there, which also matches a URL that continues
+        into a query string — so a page the site allowed was refused. The
+        anchor is restored when the parser reports it separately, and the
+        query string is once again outside the refusal.
+        """
+        policy, _ = _policy({"r13.example": (200, ANCHORED_PDF.encode())})
+        assert policy.allowed("https://r13.example/reports/q2.pdf") is False
+        assert policy.allowed("https://r13.example/reports/q2.pdf?page=2") is True
+
+    def test_an_anchored_allow_is_anchored_on_both_shapes(
+        self, thirteen_like,
+    ):
+        """The other direction: a dropped anchor would *widen* an allowance.
+
+        ``Allow: /docs/index.html$`` allows exactly that one page. Losing the
+        anchor on 3.13 made it match anything starting with that path — a
+        query string included — so a longer ``Allow`` would overrule the
+        ``Disallow: /docs`` the site wrote and permit a URL it refused.
+        """
+        policy, _ = _policy({
+            "s13.example": (
+                200, b"User-agent: *\nDisallow: /docs\n"
+                     b"Allow: /docs/index.html$\n",
+            )
+        })
+        assert policy.allowed("https://s13.example/docs/index.html") is True
+        # The anchored allow does not reach the end of this URL, so the
+        # disallow is the longest match that applies.
+        assert policy.allowed("https://s13.example/docs/index.html?page=2") is False
 
 
 # ===========================================================================
