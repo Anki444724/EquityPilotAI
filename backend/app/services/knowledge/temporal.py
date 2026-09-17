@@ -424,7 +424,26 @@ class TemporalMemoryService:
     ) -> tuple[dict[str, Any], str, bool]:
         """One completion. Returns (payload, generated_by, is_fallback)."""
         from app.domain.ai.types import CompletionRequest, Message, Role
+        from app.services.ai.external_gate import (
+            ExternalProvidersDisabled, external_providers_enabled, gate_detail,
+        )
         from app.services.ai.service import _router
+
+        # Phase 2E A2. An observation is a judgement about management's track
+        # record, and a judgement nobody asked for is worse than no
+        # judgement: it lands in `yearly_observations` with `status =
+        # "current"` and is then served in the timeline as though it were
+        # analysis. Declined before the prompt is built, for the same reason
+        # as in `SummaryService._complete` — the gate governs whether the
+        # call happens.
+        #
+        # `build_company` catches this per year and records it in
+        # `run.errors`, so one disabled deployment costs a series of honest
+        # failures rather than a series of fabricated verdicts.
+        if not external_providers_enabled():
+            raise ExternalProvidersDisabled(
+                gate_detail("temporal observations")
+            )
 
         prior_block = "No prior-year observation on record."
         if prior is not None:

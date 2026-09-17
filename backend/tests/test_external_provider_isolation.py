@@ -1,7 +1,9 @@
 """Phase 2E A1 — the reversible external-provider isolation flag.
 
-`AI_EXTERNAL_PROVIDERS_ENABLED` gates the provider REGISTRY, and nothing
-else. When it is false the four external vendors (Gemini, OpenAI, Claude,
+This file tests Phase 2E A1: the provider REGISTRY gate on
+`AI_EXTERNAL_PROVIDERS_ENABLED`. The wider external-provider isolation that
+flag now provides is Phase 2E A2, asserted in its own file. When it is
+false the four external vendors (Gemini, OpenAI, Claude,
 OpenRouter) are never assembled into registry rows, so no chain, no
 `preferred` value and no code path through `ProviderRouter.complete()` or
 `stream()` can reach an external AI provider. Everything else — provider
@@ -14,9 +16,14 @@ stay imported, and setting it back to true restores exactly the registry
 that existed before. Default true preserves current behaviour precisely, and
 a settings object that predates the attribute behaves as it always did.
 
-What this file does NOT cover: embedding, reranking and translation keep
-their own provider switches until later Phase 2E steps retire them, and no
-production deployment, database or Docker behaviour is exercised here.
+What this file covers is A1's mechanism — the registry gate — rather than the
+full reach of the flag. Embedding, reranking and translation kept their own
+provider switches when A1 shipped; Phase 2E A2 brought those three paths,
+together with the knowledge layer's summaries and temporal observations, the
+LLM stages of memory enrichment and the /ai/health provider probe, under this
+same setting. They are asserted in
+`tests/test_external_provider_isolation_a2.py`. No production deployment,
+database or Docker behaviour is exercised in either file.
 """
 from __future__ import annotations
 

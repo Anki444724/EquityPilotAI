@@ -14,6 +14,13 @@ Every stage is independently guarded. A stage that fails records why and the
 pass continues, because a rate-limited summariser must not prevent the vault
 from being updated — the structural half of memory is the half that works
 without a provider.
+
+Phase 2E A2 makes that separation a deployment control as well as an accident
+of failure handling: with `AI_EXTERNAL_PROVIDERS_ENABLED=false` the three
+LLM stages are skipped with the reason recorded, and financial promotion, the
+vault build and the temporal re-link all still run. A disabled deployment
+keeps the half of memory that needs no provider, and says so per stage
+instead of quietly producing nothing.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ from app.domain.knowledge.vault import VaultSection
 from app.models.company import Company, FinancialFact
 from app.models.document import Document, DocumentFact
 from app.models.knowledge import DocumentSummary, YearlyObservation
+from app.services.ai.external_gate import external_providers_enabled, gate_detail
 
 log = structlog.get_logger(__name__)
 
@@ -52,7 +60,24 @@ class MemoryEnrichmentService:
         self.db = db
         # Set False to run only the structural stages. Used by tests and by
         # the degraded path when no provider is configured.
+        #
+        # Phase 2E A2: this is a REQUEST, not the effective decision. The
+        # deployment-wide gate is ANDed with it in `llm_enabled`, so a job
+        # payload carrying `allow_llm=true` cannot re-enable LLM work an
+        # operator switched off — while `allow_llm=False` still forces the
+        # structural-only pass it always did.
         self.allow_llm = allow_llm
+
+    @property
+    def llm_enabled(self) -> bool:
+        """Whether this pass may run LLM stages at all.
+
+        Resolved on read rather than in `__init__` so a pass reflects the
+        flag as it stands when the work happens. An enrichment job can wait
+        in the queue for minutes, and the interesting case is the one where
+        the operator flips the switch while it is waiting.
+        """
+        return bool(self.allow_llm) and external_providers_enabled()
 
     # ------------------------------------------------------------------ run
     def run(
@@ -73,10 +98,19 @@ class MemoryEnrichmentService:
         }
 
         for stage in STAGE_ORDER:
-            if stage in LLM_STAGES and not self.allow_llm:
+            if stage in LLM_STAGES and not self.llm_enabled:
+                # Two distinct reasons to skip, reported distinctly: an
+                # operator who asked for a structural-only pass and an
+                # operator who switched external providers off are debugging
+                # different things, and the stage detail is the only place
+                # either of them will look.
                 result.stages.append(StageOutcome(
                     stage=stage, skipped=True,
-                    detail="LLM stages disabled for this pass",
+                    detail=(
+                        "LLM stages disabled for this pass"
+                        if not self.allow_llm
+                        else gate_detail("memory enrichment")
+                    ),
                 ))
                 continue
 
