@@ -17,6 +17,13 @@ useful — it is grounded and cheap — but it is not analysis, and storing it
 unmarked would let template text accumulate in the permanent memory
 indistinguishable from model output. `is_fallback` exists so a later
 regeneration can find and replace exactly those rows.
+
+**A switched-off provider is a recorded failure.** Phase 2E A2 consults
+`app.services.ai.external_gate` before any completion: with
+`AI_EXTERNAL_PROVIDERS_ENABLED=false` no summary is generated at all, and the
+pass records the refusal against each kind. Permanent memory is the wrong
+place to accumulate output from a path an operator asked to disable, even
+output that is correctly labelled as a fallback.
 """
 from __future__ import annotations
 
@@ -258,7 +265,26 @@ class SummaryService:
     ) -> tuple[str, str, str, int, int, float, bool]:
         """One completion through the platform's provider chain."""
         from app.domain.ai.types import CompletionRequest, Message, Role
+        from app.services.ai.external_gate import (
+            ExternalProvidersDisabled, external_providers_enabled, gate_detail,
+        )
         from app.services.ai.service import _router
+
+        # Phase 2E A2. A permanent summary is the one output the platform
+        # writes once and then trusts for years, so it is also the one
+        # output that must never be produced by a path the operator asked to
+        # switch off. Checked BEFORE the request is assembled: the gate is
+        # about whether the call happens, not about what it would have said.
+        #
+        # Raising rather than returning empty prose is deliberate. The
+        # caller already turns a failure into `run.failed += 1` plus an
+        # error row naming the summary kind, which is the existing honest
+        # behaviour for a provider that cannot serve — and the alternative,
+        # writing template text into `document_summaries` under a
+        # `is_fallback` flag, is precisely the "marked, but still stored"
+        # accumulation this module's docstring warns against.
+        if not external_providers_enabled():
+            raise ExternalProvidersDisabled(gate_detail("permanent summaries"))
 
         # SUMMARY-001. `max_tokens` is a *reservation*, not a spend: OpenRouter
         # rejects the whole request with 402 when the ceiling exceeds the

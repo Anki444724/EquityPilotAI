@@ -37,6 +37,8 @@ from typing import ClassVar, Sequence
 
 import structlog
 
+from app.services.ai.external_gate import external_providers_enabled, gate_detail
+
 log = structlog.get_logger(__name__)
 
 _TOKEN = re.compile(r"[\w\u0900-\u097F]+", re.UNICODE)
@@ -175,11 +177,24 @@ class CrossEncoderReranker(Reranker):
 
     @property
     def available(self) -> bool:
-        return bool(self.api_key and self.endpoint)
+        # Phase 2E A2: "available" means able to serve right now, and a
+        # reranker the deployment has switched off is not — whatever key it
+        # holds. Kept in the property as well as in `rerank` so a caller
+        # that checks before calling gets the same answer as one that just
+        # calls.
+        return (
+            bool(self.api_key and self.endpoint)
+            and external_providers_enabled()
+        )
 
     def rerank(
         self, query: str, candidates: Sequence[RerankCandidate],
     ) -> list[RerankScore]:
+        # Checked separately from `available` so the two refusals stay
+        # distinguishable in a log: one is a deployment decision, the other
+        # is a missing credential, and they have different fixes.
+        if not external_providers_enabled():
+            raise RuntimeError(gate_detail("cross-encoder reranking"))
         if not self.available:
             raise RuntimeError("cross-encoder reranker is not configured")
         import json
@@ -222,6 +237,16 @@ def build_reranker(settings: object | None = None) -> Reranker:
     if settings is None:
         from app.core.config import settings as _settings
         settings = _settings
+
+    # Phase 2E A2. The legacy builder, gated for the same reason as
+    # `build_rerank_provider`: it is the second door into a cross-encoder,
+    # and a gate on only one of them is a gate on neither. Falls back to the
+    # lexical scorer this function already returns for an unconfigured
+    # deployment.
+    if not external_providers_enabled(settings):
+        log.info("cross-encoder reranking disabled by "
+                 "AI_EXTERNAL_PROVIDERS_ENABLED; using lexical-coverage")
+        return LexicalCoverageReranker()
 
     endpoint = getattr(settings, "RERANKER_ENDPOINT", None)
     model = getattr(settings, "RERANKER_MODEL", None)

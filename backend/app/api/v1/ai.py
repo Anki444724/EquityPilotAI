@@ -271,10 +271,21 @@ async def provider_health(
 
     Never returns a key, a URL with a query string, or a provider error body
     verbatim — only a status, a latency and a short reason.
+
+    Phase 2E A2: when `AI_EXTERNAL_PROVIDERS_ENABLED` is false nothing is
+    probed at all. A health check is the one endpoint that would otherwise
+    keep calling every external provider on a schedule for a deployment that
+    has deliberately switched them off — spending quota to report on a path
+    the operator asked it not to use. Such a provider is reported as
+    `disabled` rather than omitted, because an endpoint that silently stops
+    listing a provider is indistinguishable from one that lost it.
     """
     import time as _time
 
     from app.domain.ai.types import CompletionRequest, Message, RateLimitError, Role
+    from app.services.ai.external_gate import external_providers_enabled
+
+    enabled = external_providers_enabled()
 
     probe = CompletionRequest(
         messages=[Message(Role.USER, "ok")], model=None,
@@ -287,6 +298,17 @@ async def provider_health(
             results.append({
                 "provider": config.name, "status": "ready",
                 "detail": "deterministic offline provider", "latency_ms": 0.0,
+            })
+            continue
+
+        if not enabled:
+            results.append({
+                "provider": config.name, "status": "disabled",
+                "detail": (
+                    "external AI providers are disabled "
+                    "(AI_EXTERNAL_PROVIDERS_ENABLED=false); not probed"
+                ),
+                "latency_ms": 0.0,
             })
             continue
 
@@ -312,6 +334,10 @@ async def provider_health(
         "providers": results,
         "degraded": not live,
         "serving": healthy[0]["provider"] if healthy else None,
+        # Phase 2E A2. A caller cannot otherwise tell "every provider is
+        # down" from "external providers are switched off", and the two need
+        # opposite responses: one is an incident, the other is a decision.
+        "external_providers_enabled": enabled,
     }
 
 
