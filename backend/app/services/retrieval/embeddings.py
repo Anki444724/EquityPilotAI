@@ -49,6 +49,8 @@ from typing import ClassVar, Sequence
 
 import structlog
 
+from app.services.ai.external_gate import external_providers_enabled, gate_detail
+
 log = structlog.get_logger(__name__)
 
 
@@ -266,6 +268,15 @@ class _HTTPEmbeddingProvider(SemanticEmbeddingProvider):
         return batches
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        # Phase 2E A2. `build_semantic_embedder` already returns None when
+        # the gate is closed, so this is the second lock rather than the
+        # first: an instance constructed directly — a backfill script, a
+        # benchmark, a test — must not be able to reach the network either.
+        # Raising is the honest outcome. The engine catches it and degrades
+        # to the lexical signal, which is exactly what happens today when a
+        # provider returns 402, so no new failure path is introduced.
+        if not external_providers_enabled():
+            raise RuntimeError(gate_detail(f"{self.name} embeddings"))
         if not self.available:
             raise RuntimeError(f"{self.name} requires an API key")
         out: list[list[float]] = []
@@ -350,10 +361,25 @@ def build_semantic_embedder(
     decides what to do without semantics, and a silent downgrade to a
     lexical-only index that still calls itself semantic is exactly the kind of
     quiet degradation this platform refuses.
+
+    Phase 2E A2 also returns None when `AI_EXTERNAL_PROVIDERS_ENABLED` is
+    false — same value, same contract, different reason. Every consumer
+    already handles None (the retrieval engine reports `available is False`
+    and serves lexical-only results; the backfill service reports
+    `skipped` with a reason), so a disabled deployment degrades along a path
+    that is already written and already tested rather than along a new one.
+    Returning None instead of a stub embedder is the point: a stub would
+    have to invent vectors, and a vector that was never computed is the one
+    thing this module cannot honestly produce.
     """
     if settings is None:
         from app.core.config import settings as _settings
         settings = _settings
+
+    if not external_providers_enabled(settings):
+        log.info("semantic embeddings disabled by AI_EXTERNAL_PROVIDERS_ENABLED;"
+                 " retrieval degrades to lexical")
+        return None
 
     ordered = list(PROVIDER_ORDER)
     if preferred:

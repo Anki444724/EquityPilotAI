@@ -235,12 +235,22 @@ class Settings(BaseSettings):
     #: can reach an external AI provider: completions degrade to the
     #: deterministic offline provider (while AI_MOCK_MODE is true) or fail
     #: closed with NoProviderConfigured. Default True preserves the existing
-    #: registry and fallback order exactly. The flag gates REGISTRATION only:
-    #: provider modules, FALLBACK_ORDER, retry/backoff, caching and cost
-    #: accounting are untouched, and credentials stay configured, so flipping
-    #: it back to true restores the previous behaviour with no other change.
-    #: Embeddings, reranking and translation keep their own provider switches
-    #: until later Phase 2E steps retire them.
+    #: registry and fallback order exactly. Inside the router the flag gates
+    #: REGISTRATION only: provider modules, FALLBACK_ORDER, retry/backoff,
+    #: caching and cost accounting are untouched, and credentials stay
+    #: configured, so flipping it back to true restores the previous
+    #: behaviour with no other change.
+    #:
+    #: Since Phase 2E A2 this is the platform's single master switch for
+    #: external AI providers, not merely the LLM completion registry.
+    #: Embedding and reranker selection, translation, the knowledge layer's
+    #: summaries and temporal observations, the LLM stages of memory
+    #: enrichment and the /ai/health provider probe all consult this one
+    #: setting before making any external call. The provider-specific
+    #: settings (EMBEDDING_PROVIDER, RERANK_PROVIDER, RERANKER_*,
+    #: TRANSLATION_PROVIDER) remain configuration details that say WHICH
+    #: provider a path prefers while external providers are permitted; none
+    #: of them can re-open a path this flag has closed.
     AI_EXTERNAL_PROVIDERS_ENABLED: bool = True
 
     # --- Angel One SmartAPI (broker) ---------------------------------

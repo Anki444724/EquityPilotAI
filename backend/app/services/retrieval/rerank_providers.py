@@ -38,6 +38,7 @@ from typing import Any, ClassVar, Sequence
 
 import structlog
 
+from app.services.ai.external_gate import external_providers_enabled, gate_detail
 from app.services.retrieval.rerank import (
     LexicalCoverageReranker, RerankCandidate, Reranker, RerankScore,
 )
@@ -85,6 +86,14 @@ class _HTTPReranker(Reranker):
     def rerank(
         self, query: str, candidates: Sequence[RerankCandidate],
     ) -> list[RerankScore]:
+        # Phase 2E A2. `build_rerank_provider` returns the lexical reranker
+        # when the gate is closed, so an instance only reaches here if it was
+        # constructed directly. Raising rather than returning empty scores
+        # matters: an empty list would be read as "the provider saw nothing
+        # relevant" and the caller would reorder on nothing, silently
+        # discarding the fused ranking.
+        if not external_providers_enabled():
+            raise RuntimeError(gate_detail(f"{self.name} reranking"))
         if not self.available:
             raise RuntimeError(f"{self.name} reranker is not configured")
         if time.monotonic() < self._tripped_until:
@@ -236,6 +245,14 @@ class LocalCrossEncoderReranker(Reranker):
     def rerank(
         self, query: str, candidates: Sequence[RerankCandidate],
     ) -> list[RerankScore]:
+        # Phase 2E A2. Gated even though inference is local, because loading
+        # the model is not: `CrossEncoder(...)` fetches roughly 1.3 GB of
+        # weights from Hugging Face on first use, which is an external
+        # network call with a credential-free endpoint and no circuit
+        # breaker. Refused before `_load()` so a disabled deployment never
+        # triggers that download.
+        if not external_providers_enabled():
+            raise RuntimeError(gate_detail("local cross-encoder reranking"))
         if not candidates:
             return []
         model = self._load()
@@ -267,6 +284,19 @@ def build_rerank_provider(settings: object | None = None) -> Reranker:
     if settings is None:
         from app.core.config import settings as _settings
         settings = _settings
+
+    # Phase 2E A2. Ahead of RERANK_PROVIDER on purpose: an operator who
+    # switched external providers off has overridden whatever this
+    # deployment's rerank setting says, and honouring the narrower setting
+    # would make the isolation flag depend on the order someone happened to
+    # write two variables in. The lexical reranker is the same fallback this
+    # function already returns for an unset, unknown or unavailable
+    # provider, so retrieval keeps its coverage signal and loses only the
+    # cross-encoder's judgement — no new degradation path.
+    if not external_providers_enabled(settings):
+        log.info("rerank providers disabled by AI_EXTERNAL_PROVIDERS_ENABLED;"
+                 " using the lexical-coverage reranker")
+        return LexicalCoverageReranker()
 
     name = (getattr(settings, "RERANK_PROVIDER", None)
             or os.environ.get("RERANK_PROVIDER") or "").strip().lower()

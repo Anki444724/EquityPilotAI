@@ -17,7 +17,11 @@ though it were Hindi.
 :class:`LLMTranslator` — the production path. Reuses the existing
 :class:`ProviderRouter`, so it inherits the routing, caching, fallback and cost
 accounting the AI layer already has, and needs no new credentials, no new
-rate-limit budget and no new failure mode.
+rate-limit budget and no new failure mode. Phase 2E A2 consults
+`app.services.ai.external_gate` before it reaches for that router: with
+`AI_EXTERNAL_PROVIDERS_ENABLED=false` it makes no call at all and hands the
+text to :class:`GlossaryTranslator`, so the deterministic fallback is reached
+by configuration and not only by an exhausted free tier.
 
 :class:`GlossaryTranslator` — a deterministic, offline renderer. It cannot
 produce fluent prose and does not claim to; it applies the glossary and a small
@@ -47,6 +51,7 @@ from app.domain.language.protect import (
     Protection, protect, restore, verify_preserved,
 )
 from app.domain.language.types import Language, spec_for
+from app.services.ai.external_gate import external_providers_enabled
 
 log = structlog.get_logger(__name__)
 
@@ -211,6 +216,33 @@ class LLMTranslator:
             )
 
         started = time.perf_counter()
+
+        # Phase 2E A2. Consulted before TRANS-001 because it is the stronger
+        # condition: `_offline_only` asks whether the reachable provider can
+        # translate, this asks whether an external provider may be used at
+        # all. With the gate closed there is no round trip to make and no
+        # quota to spend — the glossary renders what it can and says so.
+        #
+        # `translated` stays False in that result, which is the honesty this
+        # module is built around: a caller can tell "this is Hindi" from
+        # "this is English with Hindi terminology because no model was
+        # called". Returning glossary output rather than raising is the right
+        # call here and the wrong one for summaries — a translation is
+        # computed per response and discarded, so a partial rendering is a
+        # service, where a stored summary is a permanent record.
+        if not external_providers_enabled():
+            log.info("external providers disabled; using the glossary",
+                     language=language.value)
+            result = await GlossaryTranslator().translate(
+                text, language, entities=entities,
+            )
+            result.detail = (
+                "External AI providers are disabled "
+                "(AI_EXTERNAL_PROVIDERS_ENABLED=false), so no language model "
+                "was called. " + result.detail
+            )
+            result.latency_ms = (time.perf_counter() - started) * 1000
+            return result
 
         # TRANS-001. Observed in production: with the LLM quota exhausted the
         # router falls through to the OFFLINE provider, which is a
