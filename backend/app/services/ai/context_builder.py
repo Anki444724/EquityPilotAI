@@ -15,6 +15,7 @@ guardrail layer distinguish a reported fact from a forecast downstream.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any
 
 import structlog
@@ -65,6 +66,20 @@ class GroundedContext:
     #: renders, so a consumer that interprets them cannot disagree with the
     #: evidence block. ``None`` when temporal memory was not read at all.
     credibility: dict[str, Any] | None = None
+    #: Document ids whose pages came from the web-evidence path. Kept on the
+    #: context so a source restriction can tell a passage retrieved from a
+    #: fetched page apart from a passage retrieved from an upload: retrieval
+    #: mints both as ``EvidenceKind.DOCUMENT`` (it sees chunks, not their
+    #: provenance), so without this the only place the distinction exists is
+    #: here, before the prompt is built.
+    web_document_ids: frozenset[int] = frozenset()
+    #: Whether `web_document_ids` is the complete answer for this company.
+    #: ``False`` means the web pages could not be enumerated — a database
+    #: error, or a context built without a document service — and a
+    #: documents-only restriction must then withhold document passages rather
+    #: than risk presenting a fetched page as an upload. Fail closed: a scope
+    #: control that admits material it could not classify is not a control.
+    web_ids_complete: bool = False
 
     def add(self, citation: Citation) -> None:
         if citation.value is not None:
@@ -99,8 +114,56 @@ class GroundedContext:
         `documents` is cleared alongside the citations for anything but a
         document scope, since those excerpts are document evidence too.
         """
-        allowed = [c for c in self.citations if c.kind in kinds]
-        keep_docs = EvidenceKind.DOCUMENT in kinds
+        withheld = 0
+        allowed: list[Citation] = []
+        #: A documents-only restriction must not be satisfiable by a passage
+        #: whose document the platform fetched from the web. Retrieval labels
+        #: every passage DOCUMENT — it has no reason to know where the bytes
+        #: came from — so the exclusion is applied here, at the one point that
+        #: still knows.
+        documents_only = (
+            EvidenceKind.DOCUMENT in kinds and EvidenceKind.WEB not in kinds
+        )
+        for citation in self.citations:
+            if citation.kind not in kinds:
+                continue
+            if documents_only and citation.kind is EvidenceKind.DOCUMENT:
+                if citation.web is not None:
+                    withheld += 1
+                    continue
+                if citation.document_id is not None:
+                    # A passage, and therefore possibly a fetched page:
+                    # retrieval sees chunks, not provenance. Withheld when it
+                    # is known to be web, or when it cannot be classified at
+                    # all. A citation without a document id is a document
+                    # *fact*, which `_add_documents` never draws from a
+                    # fetched page, so it is untouched by this rule.
+                    if (
+                        citation.document_id in self.web_document_ids
+                        or not self.web_ids_complete
+                    ):
+                        withheld += 1
+                        continue
+            allowed.append(citation)
+
+        keep_docs = EvidenceKind.DOCUMENT in kinds and (
+            not documents_only or self.web_ids_complete
+        )
+        extra_gaps: list[str] = []
+        if withheld:
+            extra_gaps.append(
+                f"{withheld} passage(s) from pages the platform fetched from "
+                "the web were excluded: this question was scoped to uploaded "
+                "documents."
+            )
+        elif documents_only and not self.web_ids_complete and self.documents:
+            keep_docs = False
+            extra_gaps.append(
+                "Document passages were withheld: the platform could not "
+                "verify which of this company's documents were uploaded "
+                "rather than fetched, and this question was scoped to "
+                "uploaded documents."
+            )
         return replace(
             self,
             citations=allowed,
@@ -112,6 +175,7 @@ class GroundedContext:
                     f"{len(self.citations) - len(allowed)} evidence item(s) "
                     "outside the requested source were excluded."
                 ]),
+                *extra_gaps,
             ],
         )
 
@@ -151,12 +215,20 @@ class GroundedContext:
             EvidenceKind.FORECAST.value: 3,
             EvidenceKind.MARKET.value: 4,
             EvidenceKind.DOCUMENT.value: 9,      # RAG — the fallback tier
+            # Fetched pages, listed after RAG because a page the platform
+            # fetched is weaker evidence than a document the company lodged:
+            # an uploaded filing always outranks the company's own website.
+            # Listed explicitly rather than left to the fallback above: an
+            # unlisted kind silently inherits a position, so a new kind added
+            # without an entry would render somewhere nobody chose.
+            EvidenceKind.WEB.value: 10,
         }
         ordered = sorted(grouped.items(), key=lambda kv: order.get(kv[0], 5))
 
         blocks: list[str] = []
         has_knowledge = EvidenceKind.KNOWLEDGE.value in grouped
         has_documents = EvidenceKind.DOCUMENT.value in grouped
+        has_web = EvidenceKind.WEB.value in grouped
         if has_knowledge and has_documents:
             blocks.append(
                 "EVIDENCE PRECEDENCE — the KNOWLEDGE block is the platform's "
@@ -166,6 +238,20 @@ class GroundedContext:
                 "DOCUMENT block is unstructured text retrieved for this "
                 "question only; use it to fill what memory does not yet "
                 "cover, and prefer memory where the two overlap."
+            )
+        if has_web:
+            # Said explicitly because the failure mode is silent: a model
+            # handed a company's own marketing page alongside its filings
+            # will quote whichever reads better unless told which is which.
+            blocks.append(
+                "WEB block: pages this platform fetched from sources pinned "
+                "to this company (its website, its verified investor-"
+                "relations page, exchange and regulator hosts). They are "
+                "weaker evidence than uploaded filings and than the "
+                "KNOWLEDGE block, and each line states where it came from, "
+                "when it was published and when it was retrieved. Cite them "
+                "for what the company has said publicly, never as the "
+                "audited figure itself."
             )
         for kind, items in ordered:
             blocks.append(f"--- {kind.upper()} ---")
@@ -197,6 +283,87 @@ _DOCUMENT_UNITS: dict[str, str] = {
     "score": "", "index": "", "yes_no": "", "text": "", "units": "",
     "pct_of_revenue": "% of revenue", "unknown": "",
 }
+
+
+def _as_datetime(value: Any) -> Any:
+    """Coerce a stored timestamp to ``datetime``, or ``None``.
+
+    Rows read back through the ORM are already datetimes; a value restored
+    from JSON provenance is an ISO string. Both occur, and an unparseable one
+    is treated as absent rather than raising inside a prompt build.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _web_source_class(value: Any) -> Any:
+    """The stored ``source_class`` as a :class:`WebSourceClass`.
+
+    An unknown or missing value becomes ``UNKNOWN`` — the lowest class — so a
+    row written by a newer build cannot be ranked as a first-party source by a
+    failed lookup.
+    """
+    from app.domain.web.types import WebSourceClass
+
+    try:
+        return WebSourceClass(str(value or "").strip().lower())
+    except ValueError:
+        return WebSourceClass.UNKNOWN
+
+
+def _web_provenance(document: Any) -> Any:
+    """Rebuild a :class:`WebProvenance` from a stored document row.
+
+    Reads the ``web`` block written at ingest time and falls back to the
+    document's own columns. Returns ``None`` when there is no URL at all: a
+    web citation without a URL is unverifiable, and an unverifiable citation
+    is not evidence.
+    """
+    from app.domain.ai.types import WebProvenance
+
+    metadata = getattr(document, "doc_metadata", None) or {}
+    web_meta = metadata.get("web") if isinstance(metadata, dict) else None
+    if not isinstance(web_meta, dict):
+        web_meta = {}
+
+    url = (
+        web_meta.get("source_url") or web_meta.get("url")
+        or getattr(document, "source_url", None)
+    )
+    if not url:
+        return None
+
+    retrieved_at = _as_datetime(
+        web_meta.get("retrieved_at")
+        or getattr(document, "retrieved_at", None)
+        or getattr(document, "processed_at", None)
+        or getattr(document, "created_at", None)
+    )
+    if retrieved_at is None:
+        # No retrieval time is a provenance gap the citation has to admit:
+        # the field is not optional because "when did the platform read this"
+        # is exactly the question a reader asks of a web citation.
+        return None
+
+    return WebProvenance(
+        url=str(url),
+        title=str(web_meta.get("title") or getattr(document, "title", "") or ""),
+        canonical_url=str(web_meta.get("canonical_url") or ""),
+        published_at=_as_datetime(
+            web_meta.get("published_at")
+            or getattr(document, "published_at", None)
+        ),
+        retrieved_at=retrieved_at,
+        content_hash=str(
+            web_meta.get("content_hash") or getattr(document, "content_hash", "") or ""
+        ),
+    )
 
 
 class ContextBuilder:
@@ -260,6 +427,11 @@ class ContextBuilder:
             # question re-deriving the same conclusions from raw text.
             self._add_knowledge(context)
             self._add_documents(context)
+            # Fetched pages are evidence too, but they are not uploads, and
+            # the two must not be merged: `_add_documents` excludes them so
+            # that a documents-only scope cannot be satisfied by a page the
+            # platform fetched (see `restricted_to`).
+            self._add_web(context)
 
         return context
 
@@ -494,14 +666,31 @@ class ContextBuilder:
         # "completed" is the post-redesign terminal status; "ready" is the
         # pre-migration spelling, still present in databases upgraded in
         # place. Both mean the document is fully indexed and citable.
-        ready = [d for d in documents if d.status in _INDEXED_STATUSES]
+        # Pages the platform fetched are excluded from this whole path — the
+        # facts and the excerpts both — and are served by `_add_web` instead.
+        # They are documents in the database, not documents the company
+        # uploaded, and letting them into this block would put a fetched page
+        # behind a citation the platform labels "uploaded".
+        web_ids = self._web_document_ids(documents)
+        context.web_document_ids = web_ids
+        context.web_ids_complete = True
+
+        uploaded = [d for d in documents if d.id not in web_ids]
+        ready = [d for d in uploaded if d.status in _INDEXED_STATUSES]
         if not ready:
-            context.unavailable.append(
-                "Uploaded filings, transcripts and rating reports "
-                "(no documents have been ingested for this company)"
-            )
+            if not uploaded:
+                context.unavailable.append(
+                    "Uploaded filings, transcripts and rating reports "
+                    "(no documents have been ingested for this company)"
+                )
+            else:
+                context.unavailable.append(
+                    "Uploaded filings, transcripts and rating reports "
+                    "(none of this company's documents finished indexing)"
+                )
             return
 
+        facts = [f for f in facts if f.document_id not in web_ids]
         titles = {d.id: (d.title or d.filename) for d in documents}
 
         # Keep the most confident fact per field so the evidence block is not
@@ -538,6 +727,139 @@ class ContextBuilder:
                 f"{document.fact_count} extracted fields, "
                 f"{document.entity_count} entities, "
                 f"coverage {document.coverage:.0%}",
+            ))
+
+    #: Fetched pages cited in one prompt. Smaller than the document excerpt
+    #: cap on purpose: web evidence is supporting colour, and a handful of
+    #: lines is enough to carry what the company has said publicly without
+    #: crowding the block the model is supposed to answer from.
+    MAX_WEB_EXCERPTS = 6
+
+    @staticmethod
+    def _web_document_ids(documents: list[Any]) -> frozenset[int]:
+        """Ids of documents that came from the web-evidence path.
+
+        ``doc_type`` is the discriminator rather than the presence of
+        ``source_url``: a page is a web page because the ingest path declared
+        it one, and a row with a stray URL must not be reclassified as fetched
+        evidence on that basis alone.
+        """
+        from app.domain.documents.types import DocumentType
+
+        return frozenset(
+            d.id for d in documents
+            if (d.doc_type or "") == DocumentType.WEB_PAGE.value
+        )
+
+    def _add_web(self, context: GroundedContext) -> None:
+        """Harvest evidence from pages the platform fetched (Part 3 Phase 1).
+
+        Separate from `_add_documents` because the provenance is different in
+        the way that matters: an uploaded filing is what the company lodged, a
+        fetched page is what the platform read. Each citation carries the URL,
+        the class of host it came from, and both timestamps, so a reader can
+        open the page and check it — and so the model is told which of its
+        evidence is a filing and which is a web page.
+
+        Only indexed pages are cited, following the same rule the document
+        path uses: a page still being chunked has no verified text to quote.
+        The gap is recorded instead, because "we fetched it and it is not
+        ready" is a state a reader should be able to see.
+        """
+        if self.document_service is None:
+            return
+
+        from app.domain.documents.types import DocumentType
+        from app.domain.ai.types import WebProvenance
+        from app.domain.web.types import source_class_label
+        from app.services.web.quality import web_authority
+
+        company = self.analysis.company
+        try:
+            documents = self.document_service.list_documents(
+                company.id, include_superseded=False,
+            )
+        except Exception:  # pragma: no cover - the AI layer must never 500
+            log.exception("web evidence unavailable", company_id=company.id)
+            context.unavailable.append(
+                "Fetched web pages could not be read (platform error, not an "
+                "absence of pages)"
+            )
+            return
+
+        pages = [
+            d for d in documents
+            if (d.doc_type or "") == DocumentType.WEB_PAGE.value
+        ]
+        if not pages:
+            # No gap line: a company with no fetched pages is the normal case,
+            # and saying so on every prompt would train the reader — and the
+            # model — to ignore the UNAVAILABLE block.
+            return
+
+        ready = [d for d in pages if d.status in _INDEXED_STATUSES]
+        if not ready:
+            context.unavailable.append(
+                f"{len(pages)} fetched web page(s) are still being indexed "
+                "and are not yet citable"
+            )
+            return
+
+        # Same weight the ingest path assigned, so the order here cannot
+        # disagree with the quality ranking — one notion of "this page counts
+        # for more", used in both places.
+        ranked = sorted(
+            ready,
+            key=lambda d: (
+                -web_authority(
+                    _web_source_class(getattr(d, "source_class", None)),
+                    published_at=_as_datetime(
+                        getattr(d, "published_at", None)
+                    ),
+                ),
+                -(d.retrieved_at.timestamp() if getattr(d, "retrieved_at", None)
+                  else 0.0),
+                -d.id,
+            ),
+        )[: self.MAX_WEB_EXCERPTS]
+
+        for document in ranked:
+            provenance = _web_provenance(document)
+            if provenance is None:
+                continue
+            label_class = source_class_label(
+                getattr(document, "source_class", None)
+            )
+            title = provenance.title or document.filename
+            retrieved = provenance.retrieved_at
+            # The host is stated the same way the ingest-side citation states
+            # it, so the line the model reads identifies the page it came
+            # from. Two pages on one site differ by title, and a title is
+            # something the page chooses; the host is not.
+            from urllib.parse import urlsplit
+
+            host = (urlsplit(provenance.url).hostname or "").lower()
+            source = f"{title} — {label_class}"
+            if host:
+                source += f" ({host})"
+            if provenance.published_at:
+                source += f", published {provenance.published_at:%d %b %Y}"
+            source += f", retrieved {retrieved:%d %b %Y}" if retrieved else ""
+            preview = ""
+            metadata = getattr(document, "doc_metadata", None) or {}
+            web_meta = metadata.get("web") if isinstance(metadata, dict) else None
+            if isinstance(web_meta, dict):
+                preview = str(web_meta.get("preview") or "")
+            context.add(Citation(
+                key=provenance.citation_key(),
+                label=f"[{label_class}] {title}",
+                kind=EvidenceKind.WEB,
+                value=preview or source,
+                unit="",
+                source=source,
+                document_id=document.id,
+                confidence=None,
+                web=provenance,
             ))
 
     def _add_statements(self, context: GroundedContext) -> None:

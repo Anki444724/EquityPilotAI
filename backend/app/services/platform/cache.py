@@ -56,6 +56,11 @@ class Namespace(StrEnum):
     #: database remains the source of truth; this is a read-through plus a
     #: short-lived anti-replay marker.
     BROKER_STATE = "broker_state"
+    #: Web-evidence lookups: which pinned pages a company already has
+    #: ingested, keyed by company and URL. Its own namespace so web ingestion
+    #: invalidates web entries only — a fetched page must not drop every
+    #: retrieval result in the platform, which is what sharing RAG would do.
+    WEB = "web"
 
 
 #: Default lifetime per namespace, in seconds.
@@ -81,6 +86,12 @@ DEFAULT_TTLS: dict[Namespace, int] = {
     # its single use is a replay vector, and the session snapshot must not
     # shadow the database long after a disconnect.
     Namespace.BROKER_STATE: 300,
+    # Web evidence: a page's presence and provenance change only when this
+    # platform fetches it again, and the web service invalidates this
+    # namespace explicitly on ingest. Short enough that a page deleted
+    # out-of-band stops being reported within minutes, long enough that a
+    # repeated citation of the same page is one lookup, not one per answer.
+    Namespace.WEB: 900,
 }
 
 

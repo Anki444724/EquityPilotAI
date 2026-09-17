@@ -120,6 +120,18 @@ class Document(Base):
     uploaded_by: Mapped[str | None] = mapped_column(String(64))
     doc_metadata: Mapped[dict | None] = mapped_column(JSON)
 
+    # --- web evidence provenance ----------------------------------------
+    # These four are populated only when the document came from the pinned
+    # web-evidence path (``doc_type='web_page'``); uploads leave them null.
+    # ``retrieved_at`` is when this platform fetched the page and is never
+    # derived from ``published_at`` — a 2019 report fetched today was
+    # retrieved today. Nullable rather than defaulted: an upload has no URL
+    # and a page that states no publication date has no publication date.
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    source_class: Mapped[str | None] = mapped_column(String(32))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     pages: Mapped[list["DocumentPage"]] = relationship(
         back_populates="document", cascade="all, delete-orphan",
     )
@@ -142,6 +154,10 @@ class Document(Base):
     __table_args__ = (
         Index("ix_document_company_type", "company_id", "doc_type"),
         Index("ix_document_company_status", "company_id", "status"),
+        # URL lookup and the web dedup probe. Not unique: the same URL is
+        # legitimately re-ingested as a new version when a page changes.
+        Index("ix_document_company_url", "company_id", "source_url"),
+        Index("ix_document_source_class", "source_class"),
         # The same bytes for the same company are one document, not two.
         UniqueConstraint("company_id", "content_hash", name="uq_document_company_hash"),
     )
