@@ -11,8 +11,32 @@ model's recollection. A response without citations is treated as unsupported.
 """
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
+from urllib.parse import urlsplit
+
+#: Characters permitted inside a citation-key body. The marker pattern the
+#: citation engine enforces admits ``[a-z0-9_.]`` only, so a key is minted
+#: from a reduced alphabet rather than assembled from a hostname that may
+#: contain hyphens or unicode.
+_KEY_UNSAFE = re.compile(r"[^a-z0-9]")
+
+
+def mint_web_citation_key(url: str) -> str:
+    """The one implementation of web citation-key minting.
+
+    Single implementation on purpose: the key is what the model writes into a
+    response and what the audit resolves back to evidence, so two minting
+    rules would mean keys that parse for one path and are reported as invented
+    for another. Derived from the canonical URL — stable when the same page is
+    re-fetched, and different for two pages on the same host.
+    """
+    host = (urlsplit(url or "").hostname or "").lower()
+    digest = hashlib.sha256((url or "").encode("utf-8")).hexdigest()[:8]
+    return f"web_{_KEY_UNSAFE.sub('', host)[:24]}_{digest}"
 
 
 class PayloadShape(StrEnum):
@@ -42,6 +66,12 @@ class EvidenceKind(StrEnum):
     VALUATION = "valuation"        # DCF / relative output
     SCORING = "scoring"            # institutional score
     DOCUMENT = "document"          # uploaded filing or transcript
+    #: A page the platform fetched from a pinned host (Part 3 Phase 1). Its
+    #: own kind rather than DOCUMENT because the provenance differs in a way
+    #: that matters to a reader: a filing is something the company lodged, a
+    #: fetched page is something the platform read. Ranking it under DOCUMENT
+    #: keeps it out of every scope and prompt block that means "uploaded".
+    WEB = "web"
     #: A durable assertion from the Knowledge Vault, or a stored AI summary.
     #: Distinct from DOCUMENT because it is knowledge the platform has already
     #: distilled and versioned rather than a raw passage — it is read first,
@@ -70,6 +100,51 @@ class Message:
 
 
 @dataclass(frozen=True, slots=True)
+class WebProvenance:
+    """Where a fetched page came from, carried on the citation itself.
+
+    A web citation has to be checkable by the reader, which means the URL and
+    the retrieval time travel with it. Without them the citation is an
+    assertion that a page once said something, with no way to verify it and no
+    way to tell whether *this platform* fetched it or a model recalled it.
+
+    Deliberately not a second citation type: it is a field on
+    :class:`Citation`, so the audit funnel, the marker parser and the citation
+    engine keep working on one shape (see the Part 3 audit, finding on
+    ``DocumentCitation2``).
+
+    ``published_at`` is ``None`` whenever the page did not genuinely state a
+    date. It is never inferred from ``retrieved_at``: a page fetched today may
+    be five years old, and conflating the two would let any page look current.
+    """
+
+    url: str
+    retrieved_at: "datetime"
+    title: str = ""
+    published_at: "datetime | None" = None
+    canonical_url: str = ""
+    content_hash: str = ""
+
+    def citation_key(self) -> str:
+        """The citation key for this page, stable across re-fetch and re-ingest."""
+        return mint_web_citation_key(self.canonical_url or self.url)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "url": self.url,
+            "title": self.title,
+            "published_at": (
+                self.published_at.isoformat() if self.published_at else None
+            ),
+            "retrieved_at": (
+                self.retrieved_at.isoformat() if self.retrieved_at else None
+            ),
+            "canonical_url": self.canonical_url,
+            "content_hash": self.content_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Citation:
     """A single piece of evidence backing a claim."""
 
@@ -95,6 +170,12 @@ class Citation:
     #: The verbatim passage, kept separate from `value` so truncation for the
     #: prompt never silently shortens what the UI shows as the quotation.
     snippet: str | None = None
+
+    # --- web provenance (EvidenceKind.WEB only) -------------------------
+    #: Set when the evidence is a page the platform fetched. A field rather
+    #: than a subclass so every existing consumer — the marker parser, the
+    #: verifier, the report renderer — keeps seeing one citation shape.
+    web: WebProvenance | None = None
 
     @property
     def marker(self) -> str:

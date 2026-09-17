@@ -40,6 +40,15 @@ class SourceScope(StrEnum):
 #: evidence is never placed in front of the model — rather than asking the
 #: model politely to ignore it, which is not a control.
 SCOPE_KINDS: dict[SourceScope, frozenset[EvidenceKind]] = {
+    #: ``EvidenceKind.WEB`` is deliberately absent, and this is the decision
+    #: rather than an omission: "uploaded documents only" means documents that
+    #: were *uploaded*. A page the platform fetched is not one, so a question
+    #: asking for the uploaded report must not be answered from a fetched page
+    #: that happens to be about the company — including its own website.
+    #: ``HYBRID`` admits web evidence automatically, because it is computed as
+    #: ``frozenset(EvidenceKind)`` and the kinds are filtered *before* the
+    #: prompt is built, so this stays a control and not a convention. The
+    #: assertion below fails loudly if a later edit widens this scope.
     SourceScope.UPLOADED_DOCUMENTS_ONLY: frozenset({EvidenceKind.DOCUMENT}),
     SourceScope.FINANCIAL_DATABASE_ONLY: frozenset({
         EvidenceKind.STATEMENT, EvidenceKind.RATIO,
@@ -48,6 +57,17 @@ SCOPE_KINDS: dict[SourceScope, frozenset[EvidenceKind]] = {
     SourceScope.MARKET_DATA_ONLY: frozenset({EvidenceKind.MARKET}),
     SourceScope.HYBRID: frozenset(EvidenceKind),
 }
+
+#: Web evidence is never upload evidence. Asserted rather than commented, so
+#: an edit that adds ``EvidenceKind.WEB`` to the uploaded-documents scope —
+#: the one change that would let a fetched page answer "summarise the uploaded
+#: report" — fails at import instead of in production.
+assert EvidenceKind.WEB not in SCOPE_KINDS[SourceScope.UPLOADED_DOCUMENTS_ONLY], (
+    "web evidence must not satisfy a request scoped to uploaded documents"
+)
+assert EvidenceKind.WEB in SCOPE_KINDS[SourceScope.HYBRID], (
+    "hybrid answers must be able to cite fetched pages"
+)
 
 #: Default refusal per scope, used when the caller supplies no exact wording.
 SCOPE_REFUSALS: dict[SourceScope, str] = {

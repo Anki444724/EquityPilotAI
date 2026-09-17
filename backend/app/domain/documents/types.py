@@ -45,6 +45,13 @@ class DocumentType(StrEnum):
     ESG_REPORT = "esg_report"
     EXCHANGE_FILING = "exchange_filing"
     RESEARCH_NOTE = "research_note"
+    #: A page fetched from the pinned web-evidence allowlist and ingested as
+    #: evidence. Added for that path rather than reusing EXCHANGE_FILING or
+    #: RESEARCH_NOTE, both of which would misdescribe where the text came
+    #: from: a fetched page is neither a filing a company lodged nor a note a
+    #: human wrote. It ranks at the bottom of ``SOURCE_AUTHORITY``'s fallback
+    #: tier, so a real filing always supersedes it.
+    WEB_PAGE = "web_page"
     OTHER = "other"
 
 
@@ -67,6 +74,7 @@ DOCUMENT_TYPE_LABELS: dict[str, str] = {
     DocumentType.ESG_REPORT.value: "ESG Report",
     DocumentType.EXCHANGE_FILING.value: "Exchange Filing",
     DocumentType.RESEARCH_NOTE.value: "Research Note",
+    DocumentType.WEB_PAGE.value: "Web Page",
     DocumentType.OTHER.value: "Document",
 }
 
