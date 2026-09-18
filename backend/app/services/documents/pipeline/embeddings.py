@@ -27,6 +27,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Sequence
 
+from app.services.ai.external_gate import (
+    ExternalProvidersDisabled, external_providers_enabled, gate_detail,
+)
+
 _TOKEN = re.compile(r"[a-z0-9₹%]+")
 
 
@@ -261,6 +265,22 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         return bool(self.api_key)
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        # Phase 2E. `build_embedder` already declines to construct this
+        # provider when the gate is closed, so this is the second lock rather
+        # than the first: an instance built directly — an ingest script, a
+        # backfill, a test — must not reach the network either.
+        #
+        # First statement, ahead of the API-key check and ahead of the
+        # deferred `import httpx`. Both orderings carry weight. A gate placed
+        # after `available` would report a missing OPENAI_API_KEY on a
+        # deployment that deliberately switched external providers off,
+        # sending an operator hunting for a credential that is meant to be
+        # unused. And a gate placed after the import would load the HTTP
+        # client on a deployment that has said it will not call one.
+        if not external_providers_enabled():
+            raise ExternalProvidersDisabled(
+                gate_detail(f"{self.name} embeddings")
+            )
         if not self.available:
             raise RuntimeError("OpenAI embeddings require OPENAI_API_KEY")
         import httpx
@@ -304,8 +324,19 @@ def build_embedder(
 
     Falling back rather than failing is deliberate: an unconfigured key must
     degrade indexing quality, not prevent a user from uploading a document.
+
+    Phase 2E extends that same fallback to a closed
+    `AI_EXTERNAL_PROVIDERS_ENABLED` gate, read through the shared helper
+    rather than off the settings object. A deployment that has switched
+    external AI providers off gets the local hashed embedder and its
+    ingestion keeps working; it does not get `None`, because unlike
+    `build_semantic_embedder` on the retrieval side this builder has no
+    None-tolerant contract to hand one back through. Naming a provider still
+    cannot re-open a path the gate has closed.
     """
     if provider == OpenAIEmbeddingProvider.name and api_key:
+        if not external_providers_enabled():
+            return HashingEmbeddingProvider()
         return OpenAIEmbeddingProvider(api_key)
     return HashingEmbeddingProvider()
 
