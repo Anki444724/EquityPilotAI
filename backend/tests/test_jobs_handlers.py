@@ -33,6 +33,7 @@ from app.services.platform.jobs.handlers import (
     handle_ir_discovery,
     handle_memory_enrichment,
     handle_financials_backfill,
+    handle_web_evidence_crawl,
 )
 
 @pytest.fixture
@@ -497,3 +498,231 @@ def test_handle_memory_enrichment(mock_service, mock_db):
         mock_targets.return_value = ["comp-2"]
         res = handle_memory_enrichment(mock_db, {})
         assert res["companies"] == 1
+
+
+# ===========================================================================
+# Bounded web-evidence crawl (Part 3 Phase 3)
+# ===========================================================================
+_WEB_HOST = "www.acme.example"
+
+
+def _web_ref(url, *, document_id=None):
+    from datetime import datetime, timezone
+
+    from app.domain.web.types import (
+        WebContentClass, WebDocumentRef, WebSourceClass,
+    )
+
+    return WebDocumentRef(
+        url=url, canonical_url=url, host=_WEB_HOST,
+        source_class=WebSourceClass.COMPANY_WEBSITE,
+        content_class=WebContentClass.HTML, title="Investors",
+        retrieved_at=datetime(2026, 9, 19, tzinfo=timezone.utc),
+        document_id=document_id,
+    )
+
+
+def _fake_company(company_id, ticker, website):
+    company = MagicMock()
+    company.id = company_id
+    company.ticker = ticker
+    company.website = website
+    return company
+
+
+def test_web_evidence_crawl_is_registered_everywhere():
+    """JOB-001 guard: a kind missing from any registry raises on enqueue."""
+    from app.domain.platform.jobs import (
+        DEFAULT_PRIORITY, JOB_LABELS, RETRY_POLICIES, SCHEDULES,
+        JobPriority, JobKind,
+    )
+
+    kind = JobKind.WEB_EVIDENCE_CRAWL
+    assert kind.value == "web_evidence_crawl"
+    assert JOB_LABELS[kind]
+    assert DEFAULT_PRIORITY[kind] is JobPriority.BACKGROUND
+    policy = RETRY_POLICIES[kind]
+    assert policy.max_attempts >= 1 and policy.base_seconds >= 300
+    assert handler_for(kind) is handle_web_evidence_crawl
+    # Job-triggered only: deliberately absent from the standing schedule, so
+    # a deployment crawls only when it opts in and enqueues the job.
+    assert all(spec.kind is not kind for spec in SCHEDULES)
+
+
+def test_handle_web_evidence_crawl_disabled_flag_is_a_noop(monkeypatch, mock_db):
+    """Off by default, and off means *nothing happens*: the handler returns
+    before one database call, service build or socket."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "WEB_EVIDENCE_ENABLED", False)
+    res = handle_web_evidence_crawl(mock_db, {"company_ids": ["c1"]})
+    assert res == {"skipped": True, "reason": "web evidence crawl is disabled"}
+    mock_db.get.assert_not_called()
+    mock_db.scalars.assert_not_called()
+    mock_db.execute.assert_not_called()
+
+
+@patch("app.services.web.discovery.WebCrawlerDiscovery")
+@patch("app.services.web.service.WebSearchService")
+def test_handle_web_evidence_crawl_delegates_through_the_existing_services(
+    mock_service_cls, mock_crawler_cls, monkeypatch, mock_db,
+):
+    """Registration/payload shape: seeds come only from the company record,
+    accepted URLs reach WebSearchService deduplicated and in crawl order, and
+    the result carries the documented keys."""
+    from app.core.config import settings
+    from app.domain.web.types import WebSourceClass, WebSearchResult
+    from app.services.web.discovery import CrawlReport
+
+    monkeypatch.setattr(settings, "WEB_EVIDENCE_ENABLED", True)
+    company = _fake_company("c1", "ACME", f"https://{_WEB_HOST}")
+    mock_db.get.return_value = company
+
+    service = mock_service_cls.return_value
+    service._crawl_state.return_value = None
+    service._pinned_hosts.return_value = {_WEB_HOST: WebSourceClass.COMPANY_WEBSITE}
+    service._fetcher_for.return_value = object()
+    service._ir_is_verified.return_value = False
+
+    page_url = f"https://{_WEB_HOST}/investors"
+    report = CrawlReport(
+        seed_url=f"https://{_WEB_HOST}", host=_WEB_HOST, company_id="c1",
+        # The same URL twice in the report proves the dedup between crawl
+        # and search; order is the crawl's acceptance order.
+        pages=(_web_ref(page_url), _web_ref(f"{page_url}#top")),
+        pages_fetched=1, sitemap_status="unavailable",
+    )
+    crawler = mock_crawler_cls.return_value
+    crawler.crawl.return_value = report
+
+    captured = {}
+
+    def fake_search(query):
+        captured["query"] = query
+        return WebSearchResult(
+            company_id=query.company_id, query=query.query,
+            documents=(_web_ref(page_url, document_id=42),),
+        )
+
+    service.search.side_effect = fake_search
+
+    res = handle_web_evidence_crawl(mock_db, {"company_ids": ["c1"]})
+
+    assert res["companies"] == 1
+    assert res["dry_run"] is False
+    assert res["max_pages"] == 8
+    entry = res["results"][0]
+    assert entry["company_id"] == "c1"
+    assert entry["ticker"] == "ACME"
+    assert entry["seeds"] == [f"https://{_WEB_HOST}"]
+    assert entry["pages_fetched"] == 1
+    assert entry["pages_accepted"] == 1
+    assert entry["urls_submitted"] == 1
+    assert entry["documents"] == 1
+    assert entry["document_ids"] == [42]
+    assert entry["refusals_total"] == 0
+    assert entry["refusals"] == []
+    assert entry["refusals_recorded"] == 0
+    assert entry["dry_run"] is False
+
+    query = captured["query"]
+    assert query.company_id == "c1"
+    assert query.candidate_urls == (page_url,)
+    assert query.persist is True
+    assert query.max_urls == 1 and query.limit == 1
+
+    # The crawler was built on the company's own pinned fetcher, and the
+    # seed was bounded by the job contract: sitemap on, no query URLs.
+    mock_crawler_cls.assert_called_once_with(fetcher=service._fetcher_for.return_value)
+    (seed,), _kwargs = crawler.crawl.call_args
+    assert seed.max_pages == 8
+    assert seed.max_query_urls == 0
+    assert seed.include_sitemap is True
+    assert seed.same_host_only is True and seed.respect_robots is True
+
+
+@patch("app.services.web.discovery.WebCrawlerDiscovery")
+@patch("app.services.web.service.WebSearchService")
+def test_handle_web_evidence_crawl_supports_dry_run_and_clamps_budget(
+    mock_service_cls, mock_crawler_cls, monkeypatch, mock_db,
+):
+    """dry_run maps onto persist=False, and a payload cannot raise the
+    8-page seed budget the phase was audited at."""
+    from app.core.config import settings
+    from app.domain.web.types import WebSourceClass, WebSearchResult
+    from app.services.web.discovery import CrawlReport
+
+    monkeypatch.setattr(settings, "WEB_EVIDENCE_ENABLED", True)
+    mock_db.get.return_value = _fake_company("c1", "ACME", f"https://{_WEB_HOST}")
+
+    service = mock_service_cls.return_value
+    service._crawl_state.return_value = None
+    service._pinned_hosts.return_value = {_WEB_HOST: WebSourceClass.COMPANY_WEBSITE}
+    service._ir_is_verified.return_value = False
+
+    page_url = f"https://{_WEB_HOST}/investors"
+    mock_crawler_cls.return_value.crawl.return_value = CrawlReport(
+        seed_url=f"https://{_WEB_HOST}", host=_WEB_HOST, company_id="c1",
+        pages=(_web_ref(page_url),), pages_fetched=1,
+    )
+    captured = {}
+
+    def fake_search(query):
+        captured["query"] = query
+        return WebSearchResult(
+            company_id=query.company_id, query=query.query,
+            documents=(_web_ref(page_url),),
+        )
+
+    service.search.side_effect = fake_search
+
+    res = handle_web_evidence_crawl(
+        mock_db, {"company_ids": ["c1"], "dry_run": True, "max_pages": 99},
+    )
+
+    assert captured["query"].persist is False
+    assert res["dry_run"] is True
+    assert res["max_pages"] == 8  # clamped, never the payload's 99
+    (seed,), _kwargs = mock_crawler_cls.return_value.crawl.call_args
+    assert seed.max_pages == 8
+
+
+@patch("app.services.web.discovery.WebCrawlerDiscovery")
+@patch("app.services.web.service.WebSearchService")
+def test_handle_web_evidence_crawl_isolates_failures_per_company(
+    mock_service_cls, mock_crawler_cls, monkeypatch, mock_db,
+):
+    """One company's crawl raising must not take the sweep down with it."""
+    from app.core.config import settings
+    from app.domain.web.types import WebSourceClass, WebSearchResult
+    from app.services.web.discovery import CrawlReport
+
+    monkeypatch.setattr(settings, "WEB_EVIDENCE_ENABLED", True)
+    first = _fake_company("c1", "ACME", f"https://{_WEB_HOST}")
+    second = _fake_company("c2", "BROKEN", f"https://{_WEB_HOST}")
+    mock_db.get.side_effect = [first, second]
+
+    service = mock_service_cls.return_value
+    service._crawl_state.return_value = None
+    service._pinned_hosts.return_value = {_WEB_HOST: WebSourceClass.COMPANY_WEBSITE}
+    service._ir_is_verified.return_value = False
+    service.search.side_effect = lambda query: WebSearchResult(
+        company_id=query.company_id, query=query.query,
+    )
+    page_url = f"https://{_WEB_HOST}/investors"
+    report = CrawlReport(
+        seed_url=f"https://{_WEB_HOST}", host=_WEB_HOST, company_id="c1",
+        pages=(_web_ref(page_url),), pages_fetched=1,
+    )
+    mock_crawler_cls.return_value.crawl.side_effect = [
+        report, RuntimeError("site exploded"),
+    ]
+
+    res = handle_web_evidence_crawl(mock_db, {"company_ids": ["c1", "c2"]})
+
+    assert res["companies"] == 2
+    assert res["results"][0]["ticker"] == "ACME"
+    assert "error" not in res["results"][0]
+    assert res["results"][1]["company_id"] == "c2"
+    assert res["results"][1]["error"] == "site exploded"
+    mock_db.rollback.assert_called()

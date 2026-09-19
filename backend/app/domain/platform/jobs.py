@@ -83,6 +83,18 @@ class JobKind(StrEnum):
     #: itself — that is the document worker's job, reached through
     #: `DocumentIngestionService.accept()` exactly as an upload is.
     BLOGGER_SYNC = "blogger_sync"
+    #: Bounded crawl of a company's own pinned origins for web evidence.
+    #:
+    #: Part 3 Phase 3: the *job-triggered* producer for the web evidence
+    #: layer. It runs only when enqueued — never on a request path, and it is
+    #: deliberately not on the standing schedule, so a deployment opts in by
+    #: enabling the feature and enqueueing the job rather than being silently
+    #: crawled-for by default. The handler crawls only hosts the platform
+    #: already pins for the company (its website and its *verified* IR URL)
+    #: with the existing `WebCrawlerDiscovery`, and feeds accepted pages into
+    #: the existing `WebSearchService` ingestion path; it owns no crawler,
+    #: fetcher, or persistence of its own.
+    WEB_EVIDENCE_CRAWL = "web_evidence_crawl"
 
 
 JOB_LABELS: dict[JobKind, str] = {
@@ -105,6 +117,7 @@ JOB_LABELS: dict[JobKind, str] = {
     JobKind.AI_SCORE_REFRESH: "AI score refresh",
     JobKind.FINANCIALS_BACKFILL: "Financials backfill",
     JobKind.BLOGGER_SYNC: "Blogger post sync",
+    JobKind.WEB_EVIDENCE_CRAWL: "Web evidence crawl",
 }
 
 
@@ -197,6 +210,11 @@ DEFAULT_PRIORITY: dict[JobKind, JobPriority] = {
     # the post on the blog can read it there. It must never sit ahead of a
     # user's report or an upload in the queue.
     JobKind.BLOGGER_SYNC: JobPriority.BACKGROUND,
+    # The same class of work as the filing crawl: unattended collection off
+    # the request path. Its pages become searchable when the existing
+    # document worker finishes them, so nothing interactive is waiting on
+    # the crawl itself.
+    JobKind.WEB_EVIDENCE_CRAWL: JobPriority.BACKGROUND,
 }
 
 
@@ -286,6 +304,13 @@ RETRY_POLICIES: dict[JobKind, RetryPolicy] = {
     # construction — every run recomputes what changed from the feed itself —
     # so a run cut short loses nothing that the next one does not pick up.
     JobKind.BLOGGER_SYNC: RetryPolicy(max_attempts=2, base_seconds=300),
+    # Two attempts with a long first backoff, for the filing crawl's reason:
+    # the usual failure is the pinned site being slow or throttling us, and
+    # an immediate retry lands in the same throttle. The job is resumable by
+    # construction — seeds are recomputed from the company rows and the
+    # ingestion path skips unchanged pages by content hash — so a truncated
+    # run loses nothing the next one does not pick up.
+    JobKind.WEB_EVIDENCE_CRAWL: RetryPolicy(max_attempts=2, base_seconds=900),
 }
 
 

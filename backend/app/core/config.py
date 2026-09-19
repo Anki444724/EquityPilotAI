@@ -326,6 +326,17 @@ class Settings(BaseSettings):
     #: therefore bounds the generation and returns a retryable error instead.
     BLOGGER_CHAT_TIMEOUT_SECONDS: float = 45.0
 
+    # --- Web evidence crawl (Part 3) -----------------------------------------
+    # Master switch for `JobKind.WEB_EVIDENCE_CRAWL`: the job-triggered,
+    # bounded crawl of a company's own pinned origins (its website and its
+    # *verified* investor-relations URL), ingesting accepted pages through the
+    # existing WebSearchService as ordinary WEB_PAGE documents. Off by
+    # default: while this is false the job handler returns before touching
+    # the database, a service or a socket, so a deployment that has not opted
+    # in pays zero cost — and no request path can ever reach the crawler,
+    # because none imports it.
+    WEB_EVIDENCE_ENABLED: bool = False
+
     # --- cors --------------------------------------------------------
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
