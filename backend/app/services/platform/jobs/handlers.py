@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -779,6 +779,294 @@ def handle_blogger_sync(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     return sync_now(db, payload)
 
 
+# ===========================================================================
+# Bounded web-evidence crawl (Part 3 Phase 3)
+# ===========================================================================
+#: Hard cap on one seed's page budget. The Phase-2 crawler's own ceiling is
+#: 64 pages; the job deliberately runs tighter — eight per seed, sitemap probe
+#: included — so a payload cannot name a crawl this phase never audited.
+_WEB_EVIDENCE_MAX_PAGES = 8
+
+#: Cap on the refusal records one company report carries back. Refusals are
+#: diagnostics, and a hostile or broken site could produce hundreds; the job
+#: records the first fifty and preserves the true total so the truncation is
+#: visible rather than silent.
+_WEB_REFUSAL_RECORD_CAP = 50
+
+
+def handle_web_evidence_crawl(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Crawl a company's pinned origins and ingest accepted pages, as a job.
+
+    Part 3 Phase 3 wires the Part-3 discovery layer to the only producer the
+    platform allows it to have: a background job. The handler composes two
+    existing services and adds nothing of its own:
+
+    * the bounded :class:`~app.services.web.discovery.WebCrawlerDiscovery`
+      walks each seed — the company's ``website`` and its **verified** IR URL
+      only — inside that company's own pinned allowlist, and
+    * the crawled page URLs are handed, in crawl order and deduplicated, to the
+      existing :class:`~app.services.web.service.WebSearchService`, so
+      persistence, citation, cache and poisoning controls stay exactly where
+      Phases 1 and 2 put them.
+
+    The crawler persists nothing by contract, so accepted pages are fetched a
+    second time by the search service; the second fetch is what lets the
+    existing content-hash skip make a re-run of this job a no-op. The budget
+    that bounds the whole thing stays bounded: ≤ 2 seeds × ≤ 8 pages fetched,
+    then at most those same URLs re-fetched — pinned-host, robots-checked and
+    paced by the one fetcher, as before.
+
+    The kill switch is checked first, ahead of any database or service work:
+    while ``WEB_EVIDENCE_ENABLED`` is false this returns a skip and nothing
+    else, so an opted-out deployment runs no query and opens no socket. Like
+    the Blogger sync, disabled is reported rather than failed: the kind is
+    registered in code, and dead-lettering a healthy disabled system nightly
+    would hide real failures.
+
+    ``dry_run: true`` runs the full crawl and search with ``persist=False`` —
+    the read-only pass an operator wants before enabling ingestion — and
+    persists zero documents. Failures are isolated per company: one bad seed,
+    one bad site or one bad record lands in that company's result and the
+    sweep continues, the same discipline the memory-enrichment sweep follows.
+    """
+
+    if not settings.WEB_EVIDENCE_ENABLED:
+        return {"skipped": True, "reason": "web evidence crawl is disabled"}
+
+    from app.models.company import Company
+    from app.models.filing_collection import CompanyCrawlState
+    from app.services.web.service import WebSearchService
+
+    persist = not bool(payload.get("dry_run", False))
+    try:
+        max_pages = int(payload.get("max_pages", _WEB_EVIDENCE_MAX_PAGES))
+    except (TypeError, ValueError):
+        max_pages = _WEB_EVIDENCE_MAX_PAGES
+    # The job's hard budget, named once: a payload may only tighten it.
+    max_pages = min(max(1, max_pages), _WEB_EVIDENCE_MAX_PAGES)
+
+    service = WebSearchService(db)
+
+    company_ids = payload.get("company_ids") or []
+    if company_ids:
+        companies = [
+            company for company in (db.get(Company, str(cid)) for cid in company_ids)
+            if company is not None
+        ]
+    else:
+        limit = int(payload.get("limit", 20))
+        companies = list(db.scalars(
+            select(Company)
+            .outerjoin(
+                CompanyCrawlState,
+                CompanyCrawlState.company_id == Company.id,
+            )
+            .where(
+                Company.listing_status == "active",
+                # Only a company with something to seed from is worth a slot:
+                # its own website, or an IR record the verifier stamped.
+                or_(
+                    Company.website.isnot(None),
+                    CompanyCrawlState.ir_url.isnot(None),
+                ),
+            )
+            .order_by(Company.ticker)
+            .limit(limit)
+        ))
+
+    results: list[dict[str, Any]] = []
+    for company in companies:
+        try:
+            results.append(_web_evidence_crawl_company(
+                db, service, company,
+                max_pages=max_pages, persist=persist,
+            ))
+        except Exception as exc:  # noqa: BLE001 — one company must not stop the sweep
+            db.rollback()
+            log.warning(
+                "web evidence crawl failed",
+                company_id=getattr(company, "id", None), error=str(exc)[:200],
+            )
+            results.append({
+                "company_id": getattr(company, "id", None),
+                "ticker": getattr(company, "ticker", None),
+                "error": str(exc)[:200],
+            })
+
+    return {
+        "companies": len(results),
+        "results": results,
+        "dry_run": not persist,
+        "max_pages": max_pages,
+    }
+
+
+def _web_evidence_crawl_company(
+    db: Session,
+    service: Any,  # WebSearchService — imported lazily by the handler
+    company: Any,
+    *,
+    max_pages: int,
+    persist: bool,
+) -> dict[str, Any]:
+    """One company's seeds → bounded crawl → the existing ingestion path.
+
+    The allowlist, the fetcher and the pinning are the service's own — read
+    from that company's records per run, never from instance state — so "the
+    company's own website and its verified IR page, and nothing else" stays
+    true of the job exactly as it is true of a search.
+    """
+    seeds, website_host, ir_host = _web_evidence_seeds(service, company)
+    result: dict[str, Any] = {
+        "company_id": getattr(company, "id", None),
+        "ticker": getattr(company, "ticker", None),
+        "seeds": list(seeds),
+        "dry_run": not persist,
+    }
+    if not seeds:
+        # A company with neither seed is not a failure — it simply has
+        # nothing the contract allows this job to crawl.
+        result.update({
+            "skipped": True,
+            "reason": "no website or verified IR URL to seed from",
+        })
+        return result
+
+    state = service._crawl_state(company.id)
+    pinned = service._pinned_hosts(company, state)
+    crawler = _make_web_crawler(service, pinned)
+
+    accepted: list[str] = []
+    seen: set[str] = set()
+    pages_fetched = 0
+    truncated = False
+    refusals_total = 0
+    refusal_details: list[dict[str, Any]] = []
+
+    from app.services.web.discovery import seed_from_url
+    from app.services.web.extract import canonicalize_url
+
+    for seed_url in seeds:
+        # Every bound the Phase-2 contract audits is named here rather than
+        # taken from the payload: pages capped by the job's own budget, query
+        # URLs forbidden, sitemap on, hosts stated for classification only.
+        seed = seed_from_url(
+            seed_url,
+            company_id=str(company.id),
+            max_pages=max_pages,
+            max_query_urls=0,
+            include_sitemap=True,
+            company_hosts=(website_host,) if website_host else (),
+            ir_hosts=(ir_host,) if ir_host else (),
+        )
+        report = crawler.crawl(seed)
+        pages_fetched += report.pages_fetched
+        truncated = truncated or report.truncated
+        refusals_total += len(report.refusals)
+        for refusal in report.refusals:
+            refusal_details.append(refusal.as_dict())
+        for page in report.pages:
+            canonical = canonicalize_url(page.url)
+            if not canonical or canonical in seen:
+                continue
+            seen.add(canonical)
+            accepted.append(page.url)
+
+    documents: list[Any] = []
+    if accepted:
+        from app.domain.web.types import WebSearchQuery
+
+        # The existing ingestion path, fed exactly what the crawl accepted —
+        # order preserved, duplicates already gone, every URL still on a host
+        # the service itself pinned for this company. `max_urls` and `limit`
+        # are sized to the bounded set the crawl produced, so reporting loses
+        # nothing the crawl accepted.
+        outcome = service.search(
+            WebSearchQuery(
+                company_id=company.id,
+                query="web evidence crawl",
+                candidate_urls=tuple(accepted),
+                limit=max(1, len(accepted)),
+                max_urls=max(1, len(accepted)),
+                persist=persist,
+            )
+        )
+        documents = list(outcome.documents)
+        refusals_total += len(outcome.rejected)
+        details = dict(outcome.details)
+        for url, reason in outcome.rejected:
+            refusal_details.append({
+                "url": url,
+                "reason": getattr(reason, "value", str(reason)),
+                "detail": details.get(url, ""),
+                "source": "search",
+            })
+
+    result.update({
+        "pages_fetched": pages_fetched,
+        "pages_accepted": len(accepted),
+        "urls_submitted": len(accepted),
+        "documents": len(documents),
+        "document_ids": [
+            d.document_id for d in documents if d.document_id is not None
+        ],
+        "truncated": truncated,
+        "refusals_total": refusals_total,
+        "refusals": refusal_details[:_WEB_REFUSAL_RECORD_CAP],
+        "refusals_recorded": min(len(refusal_details), _WEB_REFUSAL_RECORD_CAP),
+    })
+    return result
+
+
+def _web_evidence_seeds(service: Any, company: Any) -> tuple[list[str], str, str]:
+    """(seed URLs in crawl order, website host, verified IR host).
+
+    Only two origins may ever seed this job: the company's website as the
+    row records it, and the IR URL only once discovery's own confidence marks
+    it verified — an unverified guess must not steer a crawl, exactly as it
+    must not be classified as confirmed evidence. Order is stable (website,
+    then IR) and duplicates fold, so the report shows the crawl's real entry
+    points.
+    """
+    from urllib.parse import urlsplit
+
+    from app.services.web.extract import canonicalize_url
+
+    state = service._crawl_state(company.id)
+    website = (getattr(company, "website", None) or "").strip()
+    website_host = (urlsplit(website).hostname or "").lower() if website else ""
+    ir_url = (getattr(state, "ir_url", None) or "").strip()
+    ir_host = ""
+    if ir_url and service._ir_is_verified(state):
+        ir_host = (urlsplit(ir_url).hostname or "").lower()
+
+    seeds: list[str] = []
+    seen: set[str] = set()
+    for raw in (website, ir_url if ir_host else ""):
+        if not raw:
+            continue
+        canonical = canonicalize_url(raw)
+        if not canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        seeds.append(raw)
+    return seeds, website_host, ir_host
+
+
+def _make_web_crawler(service: Any, pinned: dict[str, Any]) -> Any:
+    """The existing crawler, riding the company's own pinned fetcher.
+
+    One import site for the discovery layer in the whole production tree —
+    ``tests/test_web_crawler_reuse_contracts.py`` asserts that. The fetcher
+    is the service's per-company one, so the crawler inherits the pinned
+    allowlist, robots, politeness and safety controls rather than
+    re-deciding any of them.
+    """
+    from app.services.web.discovery import WebCrawlerDiscovery
+
+    return WebCrawlerDiscovery(fetcher=service._fetcher_for(pinned))
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.REPORT_GENERATION: handle_report_generation,
     JobKind.DOCUMENT_PROCESSING: handle_document_processing,
@@ -799,6 +1087,7 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.AI_SCORE_REFRESH: handle_ai_score_refresh,
     JobKind.FINANCIALS_BACKFILL: handle_financials_backfill,
     JobKind.BLOGGER_SYNC: handle_blogger_sync,
+    JobKind.WEB_EVIDENCE_CRAWL: handle_web_evidence_crawl,
 }
 
 

@@ -376,23 +376,26 @@ class TestClosedVocabularies:
         assert not ({r.value for r in CrawlRejectionReason}
                     & {r.value for r in WebRejectionReason})
 
-    def test_no_production_module_imports_the_crawler_yet(self):
-        """Additive by construction: discovery is reachable only through tests.
+    def test_the_crawler_is_reachable_only_from_the_jobs_layer(self):
+        """Part 3 Phase 3 wired it — into exactly one production module.
 
-        Wiring it into the request path is a later, separately-reviewed
-        change — if it is ever wired, this test tells the author they changed
-        the contract deliberately.
+        The bounded crawler's only producer is the background job that the
+        phase added: `services/platform/jobs/handlers.py`. It must never
+        appear in a request path, an AI service or a provider — if a later
+        change imports it anywhere else, this test names the offence.
         """
         app_root = Path(discovery.__file__).resolve().parent.parent.parent
         importable = {Path(discovery.__file__).resolve().name}
-        offenders = []
+        referencing = []
         for path in app_root.rglob("*.py"):
             if path.resolve().name in importable:
                 continue
             text = path.read_text(encoding="utf-8")
             if "web.discovery" in text or "web import discovery" in text:
-                offenders.append(str(path.relative_to(app_root)))
-        assert offenders == []
+                referencing.append(str(path.relative_to(app_root)))
+        # Exact set, both directions: jobs/handlers.py must be the importer
+        # (the wiring is deliberate, not vestigial), and nothing else may be.
+        assert referencing == ["services/platform/jobs/handlers.py"]
 
 
 class TestDataclassContracts:
