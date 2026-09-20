@@ -15,6 +15,7 @@ from app.services.ai.analyst import AnalystResult, ResearchAnalyst
 from app.services.ai.context_builder import ContextBuilder
 from app.services.ai.internal_composer import InternalComposer
 from app.services.ai.internal_open_ended import InternalOpenEndedEngine
+from app.services.ai.internal_web_research import InternalWebResearchEngine
 from app.services.ai.memory import memory_store
 from app.services.ai.planner import QuestionPlanner
 from app.services.ai.prompt_builder import PromptBuilder
@@ -64,11 +65,18 @@ class AIService:
         context's existing evidence. Only the authenticated, non-streaming
         chat endpoint opts in; see `api/v1/ai.py`.
 
-        The three are injected together and are not separately switchable.
-        They share one planner and one plan per question, and the opt-in is
-        a single decision about whether this caller may use the internal
-        reasoning layers at all — three flags would allow a configuration
-        in which a plan is computed and then thrown away.
+        The collaborators are injected together and are not separately
+        switchable. They share one planner and one plan per question, and
+        the opt-in is a single decision about whether this caller may use
+        the internal reasoning layers at all — separate flags would allow a
+        configuration in which a plan is computed and then thrown away.
+
+        Part 3 Phase 4D adds the internal web research engine to the same
+        opt-in: for a ``WEB_RESEARCH`` plan it searches the platform's own
+        stored web pages over this session, lets the bounded discovery
+        layer fetch the company's verified origins when the sufficiency
+        policy requires (behind ``WEB_EVIDENCE_ENABLED``), and composes a
+        cited answer from the pages — never from a provider.
 
         The planner is given the platform's one company resolver,
         ``CompanyService.named_in`` — the same call the chat endpoint already
@@ -97,6 +105,7 @@ class AIService:
             ),
             composer=InternalComposer(),
             open_ended=InternalOpenEndedEngine(),
+            web_research=InternalWebResearchEngine.for_session(self.db),
         )
 
     # ------------------------------------------------------- prompt library

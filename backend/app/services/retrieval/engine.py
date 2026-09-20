@@ -171,23 +171,42 @@ class HybridRetrievalEngine:
         top_k: int = 10,
         document_ids: Sequence[int] | None = None,
         rerank: bool = True,
+        doc_types: Sequence[str] | None = None,
     ) -> list[RetrievalResult]:
+        """Retrieve the passages most relevant to ``query``.
+
+        ``doc_types`` (Part 3 Phase 4B) restricts every signal to documents
+        of the given ``Document.doc_type`` values — the self-owned web index
+        passes ``("web_page",)`` so a web search can never surface a filing
+        as a web page. ``None``, the default, is the unrestricted behaviour
+        every existing caller relies on: no clause is added and the SQL is
+        byte-for-byte what it was before the parameter existed.
+        """
         started = time.perf_counter()
         cleaned = " ".join((query or "").split())
         if not cleaned:
+            return []
+
+        scoped_types = tuple(t for t in (doc_types or ()) if t)
+        if doc_types is not None and not scoped_types:
+            # An explicit empty scope admits nothing. Returning [] here is
+            # honest; widening to the whole corpus would silently answer a
+            # web-only question from filings.
             return []
 
         intent = parse_intent(cleaned)
         rankings: dict[RetrievalSignal, list[int]] = {}
         raw_scores: dict[int, dict[str, float]] = {}
 
-        semantic = self._semantic(cleaned, company_id, document_ids)
+        semantic = self._semantic(cleaned, company_id, document_ids,
+                                  doc_types=scoped_types)
         if semantic:
             rankings[RetrievalSignal.SEMANTIC] = [c for c, _ in semantic]
             for chunk_id, score in semantic:
                 raw_scores.setdefault(chunk_id, {})["semantic"] = score
 
-        lexical = self._lexical(cleaned, company_id, document_ids)
+        lexical = self._lexical(cleaned, company_id, document_ids,
+                                doc_types=scoped_types)
         if lexical:
             rankings[RetrievalSignal.LEXICAL] = [c for c, _ in lexical]
             for chunk_id, score in lexical:
@@ -206,14 +225,16 @@ class HybridRetrievalEngine:
             )
 
         if intent.has_metadata:
-            metadata = self._metadata(intent, company_id, document_ids)
+            metadata = self._metadata(intent, company_id, document_ids,
+                                      doc_types=scoped_types)
             if metadata:
                 rankings[RetrievalSignal.METADATA] = [c for c, _ in metadata]
                 for chunk_id, score in metadata:
                     raw_scores.setdefault(chunk_id, {})["metadata"] = score
 
         if intent.wants_recent:
-            temporal = self._temporal(company_id, document_ids)
+            temporal = self._temporal(company_id, document_ids,
+                                      doc_types=scoped_types)
             if temporal:
                 rankings[RetrievalSignal.TEMPORAL] = [c for c, _ in temporal]
                 for chunk_id, score in temporal:
@@ -287,10 +308,28 @@ class HybridRetrievalEngine:
                   ms=round((time.perf_counter() - started) * 1000, 1))
         return final
 
+    # ------------------------------------------------------- doc-type scope
+    @staticmethod
+    def _scope_doc_types(
+        where: list[str], params: dict[str, Any],
+        doc_types: Sequence[str] | None,
+    ) -> None:
+        """Append the Phase 4B document-type clause when a scope was given.
+
+        One helper for all four signals, so the scope cannot be applied to
+        the lexical signal and forgotten on the semantic one — the class of
+        omission RETR-003 was. The parameter name is distinct from the
+        metadata signal's ``:types`` so the two never collide in one query.
+        """
+        if doc_types:
+            where.append("d.doc_type = ANY(:scope_doc_types)")
+            params["scope_doc_types"] = list(doc_types)
+
     # -------------------------------------------------------- 1. semantic
     def _semantic(
         self, query: str, company_id: str | None,
         document_ids: Sequence[int] | None,
+        *, doc_types: Sequence[str] | None = None,
     ) -> list[tuple[int, float]]:
         if self.embedder is None:
             return []
@@ -309,6 +348,7 @@ class HybridRetrievalEngine:
         if document_ids:
             where.append("c.document_id = ANY(:doc_ids)")
             params["doc_ids"] = list(document_ids)
+        self._scope_doc_types(where, params, doc_types)
 
         sql = text(f"""
             SELECT c.id, 1 - (c.embedding_v2 <=> CAST(:vec AS vector)) AS similarity
@@ -328,6 +368,7 @@ class HybridRetrievalEngine:
     def _lexical(
         self, query: str, company_id: str | None,
         document_ids: Sequence[int] | None,
+        *, doc_types: Sequence[str] | None = None,
     ) -> list[tuple[int, float]]:
         # RETR-001. Postgres has no OR-by-default query parser.
         # `plainto_tsquery` AND-joins every term, and so does
@@ -366,6 +407,7 @@ class HybridRetrievalEngine:
         if document_ids:
             where.append("c.document_id = ANY(:doc_ids)")
             params["doc_ids"] = list(document_ids)
+        self._scope_doc_types(where, params, doc_types)
         sql = text(f"""
             SELECT c.id, ts_rank_cd(c.text_search, {tsquery}) AS rank
             FROM document_chunks c
@@ -384,6 +426,7 @@ class HybridRetrievalEngine:
     def _metadata(
         self, intent: QueryIntent, company_id: str | None,
         document_ids: Sequence[int] | None,
+        *, doc_types: Sequence[str] | None = None,
     ) -> list[tuple[int, float]]:
         where: list[str] = []
         params: dict[str, Any] = {"limit": CANDIDATE_POOL}
@@ -401,6 +444,7 @@ class HybridRetrievalEngine:
         if document_ids:
             where.append("c.document_id = ANY(:doc_ids)")
             params["doc_ids"] = list(document_ids)
+        self._scope_doc_types(where, params, doc_types)
 
         sql = text(f"""
             SELECT c.id
@@ -418,6 +462,7 @@ class HybridRetrievalEngine:
     # -------------------------------------------------------- 4. temporal
     def _temporal(
         self, company_id: str | None, document_ids: Sequence[int] | None,
+        *, doc_types: Sequence[str] | None = None,
     ) -> list[tuple[int, float]]:
         where = ["d.status = 'completed'"]
         params: dict[str, Any] = {"limit": CANDIDATE_POOL}
@@ -427,6 +472,7 @@ class HybridRetrievalEngine:
         if document_ids:
             where.append("c.document_id = ANY(:doc_ids)")
             params["doc_ids"] = list(document_ids)
+        self._scope_doc_types(where, params, doc_types)
 
         sql = text(f"""
             SELECT c.id

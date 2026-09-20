@@ -37,6 +37,9 @@ from app.services.ai.internal_composer import ComposedAnswer, InternalComposer
 from app.services.ai.internal_open_ended import (
     InternalAnswer, InternalOpenEndedEngine,
 )
+from app.services.ai.internal_web_research import (
+    InternalWebResearchEngine, WebResearchAnswer,
+)
 from app.services.ai.memory import ConversationMemory
 from app.services.ai.planner import (
     EntityStatus, ExecutionRoute, QuestionPlan, QuestionPlanner,
@@ -191,6 +194,7 @@ class ResearchAnalyst:
         planner: QuestionPlanner | None = None,
         composer: InternalComposer | None = None,
         open_ended: InternalOpenEndedEngine | None = None,
+        web_research: InternalWebResearchEngine | None = None,
     ) -> None:
         """Build an analyst over one company's grounded context.
 
@@ -207,7 +211,14 @@ class ResearchAnalyst:
         cost a company-resolution pass and a language-normalisation pass for
         nothing, and two plans for one question could disagree.
 
-        **All three being absent is the default and means composition does
+        ``web_research`` is the Part 3 Phase 4D internal web research
+        engine. Injected on the same terms and consulted last of the
+        internal layers, for the ``WEB_RESEARCH`` route only: it answers a
+        question about a current development from the platform's own web
+        evidence (the stored-page index, then bounded discovery of the
+        company's verified origins) and never from a provider.
+
+        **All of them being absent is the default and means composition does
         not exist for this analyst**: the internal paths below are never
         entered, no plan is computed, and the behaviour is exactly what it
         was before Part 2C. That default is what keeps the blogger, report,
@@ -220,6 +231,7 @@ class ResearchAnalyst:
         self.planner = planner
         self.composer = composer
         self.open_ended = open_ended
+        self.web_research = web_research
         self._context: GroundedContext | None = None
 
     def context(self, *, refresh: bool = False) -> GroundedContext:
@@ -426,6 +438,25 @@ class ResearchAnalyst:
                         (time.perf_counter() - internal_started) * 1000,
                         memory, question, language=language,
                         extra_citations=internal.derived_citations,
+                    )
+
+                # --- Part 3 Phase 4D: internal web research ---------------
+                #
+                # Last of the internal layers and only for the WEB_RESEARCH
+                # route, so it cannot intercept a question any earlier layer
+                # owns. The engine's verified web citations are ADDED to the
+                # context (`with_citations` copies; nothing already held is
+                # replaced or dropped) so the audit below can resolve every
+                # marker the answer carries against the page it came from.
+                # An honest evidence gap is an answer too: it goes through
+                # the same funnel, and it never falls through to a provider.
+                web = self._web_research(plan, context)
+                if web is not None:
+                    return await self._deterministic(
+                        capability, web,
+                        context.with_citations(list(web.web_citations)),
+                        (time.perf_counter() - internal_started) * 1000,
+                        memory, question, language=language,
                     )
 
         retrieved = self._retrieve(retrieval_query, capability) if retrieve else []
@@ -735,7 +766,7 @@ class ResearchAnalyst:
     async def _deterministic(
         self,
         capability: str,
-        answer: DeterministicAnswer | ComposedAnswer | InternalAnswer,
+        answer: DeterministicAnswer | ComposedAnswer | InternalAnswer | WebResearchAnswer,
         context: GroundedContext,
         elapsed_ms: float,
         memory: ConversationMemory | None,
@@ -763,6 +794,12 @@ class ResearchAnalyst:
         audit are the context's own, exactly as for the single-intent case,
         so the answer is verified against the same evidence block its
         sentences were drawn from.
+
+        The Part 3 Phase 4D ``WebResearchAnswer`` is the fourth shape. It
+        arrives with a context that already carries its verified web
+        citations (added by ``with_citations`` at the call site), so the
+        audit resolves its markers against the fetched pages exactly as it
+        resolves a retrieved passage.
 
         ``extra_citations`` is the one addition, and only the Part 2D
         internal path uses it. A figure that layer *derived* from real
@@ -965,6 +1002,77 @@ class ResearchAnalyst:
             operations=[o.kind.value for o in answer.operations],
             used_evidence=[c.key for c in answer.used_citations],
             derived_evidence=[c.key for c in answer.derived_citations],
+            missing_evidence=list(answer.missing),
+        )
+        return answer
+
+    def _web_research(
+        self,
+        plan: QuestionPlan,
+        context: GroundedContext,
+    ) -> WebResearchAnswer | None:
+        """A provider-free answer from the platform's web evidence, or ``None``.
+
+        Part 3 Phase 4D. Consulted only after the composer and the internal
+        open-ended engine declined, and only for the ``WEB_RESEARCH`` route
+        — a question about a current development that no deterministic
+        engine owns. The same identity gate as the other internal layers
+        applies: the plan's company must be this analyst's company, or
+        unresolved, in which case the bound company is authoritative and the
+        engine scopes its search to it.
+
+        ``None`` — and the existing retrieval/provider path — for every
+        condition under which this layer is not entitled to run: no engine
+        injected, another route, a company that cannot be shown to be this
+        one, an engine that raised, or an engine that reports the question
+        is not applicable (no query could be formed). What is **not**
+        ``None`` is an honest evidence gap: if the local corpus and the
+        bounded discovery produced nothing usable, the engine says so and
+        that statement is the answer. A web-research question never falls
+        through to a provider on the strength of an evidence gap — that
+        would be the second AI pipeline this design refuses to build.
+        """
+        engine = self.web_research
+        if engine is None:
+            return None
+
+        if plan.execution_route is not ExecutionRoute.WEB_RESEARCH:
+            return None
+
+        safe, reason = _company_identity_is_safe(plan, context)
+        if not safe:
+            log.info(
+                "internal web research declined",
+                question=plan.original_question[:160],
+                reason=reason, entity_status=plan.entity.status.value,
+                bound_company=context.ticker,
+            )
+            return None
+
+        try:
+            answer = engine.research(plan, context)
+        except Exception:  # noqa: BLE001 - fail closed, never partially
+            log.exception(
+                "internal web research failed",
+                question=plan.original_question[:160],
+            )
+            return None
+
+        if answer is None or not answer.applicable:
+            log.info(
+                "internal web research not applicable",
+                question=plan.original_question[:160],
+                reason=getattr(answer, "reason", ""),
+            )
+            return None
+
+        log.info(
+            "internal web research answer",
+            status=answer.status.value, answered=answer.answered,
+            question=plan.original_question[:160], identity=reason,
+            queries=list(answer.queries),
+            used_evidence=[c.key for c in answer.used_citations],
+            discovery=answer.discovery_status,
             missing_evidence=list(answer.missing),
         )
         return answer

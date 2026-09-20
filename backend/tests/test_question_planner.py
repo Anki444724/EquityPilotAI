@@ -640,3 +640,177 @@ class TestPlannerProducesNoAnswer:
             planner.plan("Reliance ki financial quality aur growth kaisi hai?").as_dict()
         )
         assert "financial_quality" in blob and "growth_quality" in blob
+
+
+# ===========================================================================
+class TestWebResearchRouting:
+    """Part 3 Phase 4A — a current development is routed to web research.
+
+    The route exists so a question the canonical store cannot answer (news,
+    an order win, an expansion, a deal) is named for what it is, instead of
+    being folded into "open-ended" and reasoned about from financials that
+    do not contain the answer. The planner only *names* the route: nothing
+    here fetches, searches or ranks.
+    """
+
+    @pytest.fixture()
+    def jsw(self):
+        universe = (FakeCompany("c-jsw", "JSWSTEEL", "JSW Steel Limited"),)
+
+        def resolve(text: str):
+            lowered = (text or "").lower()
+            return [c for c in universe if "jsw" in lowered]
+
+        return QuestionPlanner(company_resolver=resolve)
+
+    # --- the four pinned behaviours -----------------------------------
+    def test_arithmetic_question_stays_internal_reasoning(self, jsw):
+        plan = jsw.plan("₹500 se ₹650 kitna percent increase hai?")
+        assert plan.query_type is QueryType.OPEN_ENDED
+        assert plan.execution_route is ExecutionRoute.INTERNAL_REASONING
+
+    def test_expansion_status_is_web_research(self, jsw):
+        plan = jsw.plan("JSW Steel expansion status kya hai?")
+        assert plan.query_type is QueryType.WEB_RESEARCH
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH
+        assert plan.entity.status is EntityStatus.RESOLVED
+        assert plan.entity.ticker == "JSWSTEEL"
+
+    def test_latest_order_is_web_research(self, jsw):
+        plan = jsw.plan("JSW Steel ka latest order kya hai?")
+        assert plan.query_type is QueryType.WEB_RESEARCH
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH
+
+    def test_latest_news_without_a_company_is_web_research(self, jsw):
+        plan = jsw.plan("latest news kya hai?")
+        assert plan.query_type is QueryType.WEB_RESEARCH
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH
+        assert plan.entity.status is EntityStatus.UNRESOLVED
+
+    # --- three languages ----------------------------------------------
+    @pytest.mark.parametrize("question", [
+        "What is the latest news on JSW Steel?",
+        "Has JSW Steel announced any acquisition recently?",
+        "JSW Steel ne kaunsa naya order jeeta?",
+        "JSW Steel ka expansion kab tak complete hoga?",
+        "JSW स्टील की ताज़ा खबर क्या है?",
+        "JSW स्टील का विस्तार कब पूरा होगा?",
+        "JSW स्टील ने कौन सा अधिग्रहण किया?",
+    ])
+    def test_web_research_in_english_hindi_and_hinglish(self, jsw, question):
+        plan = jsw.plan(question)
+        assert plan.query_type is QueryType.WEB_RESEARCH, question
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH, question
+
+    # --- what outranks it ---------------------------------------------
+    @pytest.mark.parametrize("question,intent", [
+        ("JSW Steel ki latest P/E kya hai?", "pe"),
+        ("What is the current market price of JSW Steel?", "market_price"),
+        ("JSW Steel ka latest ROE kya hai?", "roe"),
+        ("Should I buy JSW Steel today?", "recommendation"),
+        ("Recent revenue growth of JSW Steel?", "revenue_growth"),
+    ])
+    def test_a_supported_intent_stays_deterministic(self, jsw, question, intent):
+        """A recency word beside a supported intent is that intent."""
+        plan = jsw.plan(question)
+        assert intents_of(plan) == [intent]
+        assert plan.query_type is QueryType.DETERMINISTIC
+        assert plan.is_executable
+
+    def test_two_intents_with_a_recency_word_still_compose(self, jsw):
+        plan = jsw.plan("JSW Steel ki latest financial quality aur growth kaisi hai?")
+        assert plan.query_type is QueryType.MULTI_INTENT
+        assert plan.execution_route is ExecutionRoute.COMPOSITION_REQUIRED
+
+    def test_a_financial_figure_with_a_recency_word_is_still_unsupported(self, jsw):
+        """A level figure is declined, never looked up on the web instead."""
+        plan = jsw.plan("JSW Steel ka latest revenue kya hai?")
+        assert plan.query_type is QueryType.UNSUPPORTED
+        assert plan.execution_route is ExecutionRoute.DECLINE
+
+    def test_a_comparison_with_a_development_is_still_a_comparison(self):
+        plan = QuestionPlanner().plan(
+            "Compare JSW Steel and Tata Steel expansion plans"
+        )
+        assert plan.query_type is QueryType.COMPARISON
+        assert plan.execution_route is ExecutionRoute.INTERNAL_REASONING
+
+    def test_a_source_restriction_still_outranks_web_research(self, jsw):
+        plan = jsw.plan("From the uploaded documents only, what is the latest news?")
+        assert plan.query_type is QueryType.SOURCE_DIRECTED
+        assert plan.execution_route is ExecutionRoute.SOURCE_ROUTER
+
+    # --- what it must not capture -------------------------------------
+    @pytest.mark.parametrize("question", [
+        "What is the order book?",             # defined term, Part 2D
+        "Tell me about the company",
+        "What is the sector?",
+        "Who are the promoters?",
+        "Compare revenue and pat",
+        "Reliance ke baare me vistar se batao", # "in detail", not expansion
+        "रिलायंस के बारे में विस्तार से बताओ",
+        "Can you expand on that?",
+        "What does the company deal in?",
+    ])
+    def test_open_ended_questions_are_not_captured(self, planner, question):
+        plan = planner.plan(question)
+        assert plan.query_type is not QueryType.WEB_RESEARCH, question
+        assert plan.execution_route is ExecutionRoute.INTERNAL_REASONING
+
+    def test_a_vague_evaluation_is_still_ambiguous(self, planner):
+        plan = planner.plan("Good company hai?")
+        assert plan.query_type is QueryType.AMBIGUOUS
+
+    # --- the plan's own account of itself -----------------------------
+    def test_web_research_is_not_executable_by_a_deterministic_engine(self, jsw):
+        plan = jsw.plan("JSW Steel ka latest order kya hai?")
+        assert not plan.is_executable
+        assert plan.intents == ()
+        assert plan.required_evidence == ()
+
+    def test_confidence_reflects_whether_a_subject_was_named(self, jsw):
+        scoped = jsw.plan("JSW Steel ka latest order kya hai?")
+        topic = jsw.plan("latest news kya hai?")
+        assert scoped.confidence is Confidence.MEDIUM
+        assert topic.confidence is Confidence.LOW
+
+    def test_the_plan_says_web_evidence_is_missing(self, jsw):
+        plan = jsw.plan("JSW Steel ka latest order kya hai?")
+        assert any(m.startswith("web_evidence:") for m in plan.missing_requirements)
+        assert any("no page is fetched" in n for n in plan.notes)
+
+    def test_an_unscoped_search_is_recorded_as_ambiguity(self, jsw):
+        plan = jsw.plan("latest news kya hai?")
+        assert any("topic search" in a for a in plan.ambiguity)
+        assert any(m.startswith("entity:") for m in plan.missing_requirements)
+
+    def test_pinned_company_scopes_the_research(self, memory):
+        planner = QuestionPlanner(company_resolver=make_resolver("RELIANCE"),
+                                  memory=memory)
+        plan = planner.plan("latest news kya hai?")
+        assert plan.query_type is QueryType.WEB_RESEARCH
+        assert plan.entity.status is EntityStatus.CONTEXT_ONLY
+        assert plan.entity.ticker == "RELIANCE"
+        assert plan.confidence is Confidence.MEDIUM
+
+    def test_serialises_with_the_new_values(self, jsw):
+        import json
+        blob = json.loads(json.dumps(
+            jsw.plan("JSW Steel ka latest order kya hai?").as_dict()
+        ))
+        assert blob["query_type"] == "web_research"
+        assert blob["execution_route"] == "web_research"
+
+    def test_same_plan_regardless_of_declared_language(self, jsw):
+        from app.domain.language.types import Language
+        question = "JSW Steel ka latest order kya hai?"
+        detected = jsw.plan(question)
+        forced = jsw.plan(question, language=Language.HINDI)
+        assert (detected.query_type, detected.execution_route) == (
+            forced.query_type, forced.execution_route,
+        )
+
+    def test_is_deterministic(self, jsw):
+        first = jsw.plan("JSW Steel expansion status kya hai?").as_dict()
+        second = jsw.plan("JSW Steel expansion status kya hai?").as_dict()
+        assert first == second
