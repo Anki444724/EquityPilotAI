@@ -45,12 +45,12 @@ from .types import (
     Confidence, EntityResolution, EntityStatus, EvidenceRequirement,
     ExecutionRoute, IntentFamily, IntentMatch, QueryType, QuestionPlan,
 )
-from .vocabulary import INTENT_VOCABULARY, IntentSpec
+from .vocabulary import INTENT_VOCABULARY, IntentSpec, is_web_research
 
 __all__ = [
     "Confidence", "CompanyLike", "CompanyResolver", "EntityResolution",
     "EntityStatus", "EvidenceRequirement", "ExecutionRoute", "INTENT_VOCABULARY",
     "IntentFamily", "IntentMatch", "IntentMatcher", "IntentSpec", "QueryType",
     "QuestionPlan", "QuestionPlanner", "REQUIRED_EVIDENCE", "evidence_for",
-    "evidence_for_all",
+    "evidence_for_all", "is_web_research",
 ]

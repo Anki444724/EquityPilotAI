@@ -608,3 +608,131 @@ class TestPart2CCallSites:
                     or "InvestmentAnswerEngine()" in source):
                 offenders.append(str(path.relative_to(APP)))
         assert offenders == []
+
+
+# ===========================================================================
+class TestWebResearchIsPlanningOnly:
+    """Part 3 Phase 4A — the route is named by the planner and owned by no one.
+
+    Adding ``WEB_RESEARCH`` must not turn the planner into a web client, and
+    must not change what any existing layer does with a plan. These pins
+    prove both: the package still reaches no network, fetch or crawl module,
+    and every existing owner (resolver, composer, open-ended engine, analyst)
+    treats the new route exactly as it treats a route it does not own.
+    """
+
+    WEB_MODULES = (
+        "app.services.web", "app.services.retrieval", "app.services.documents",
+        "httpx", "requests", "urllib.request", "aiohttp", "socket",
+    )
+
+    def test_planner_imports_no_web_fetch_or_crawl_module(self):
+        imported = all_planner_imports()
+        offenders = {
+            name for name in imported
+            if any(name == bad or name.startswith(f"{bad}.") for bad in self.WEB_MODULES)
+        }
+        assert offenders == set()
+
+    def test_planner_code_names_no_web_component(self):
+        for token in ("WebFetcher", "WebSearchService", "WebCrawler",
+                      "WebCrawlerDiscovery", "SelfOwnedWebIndex", "urlopen",
+                      "httpx", "AsyncClient", "fetch_page", "crawl("):
+            assert token not in PLANNER_CODE, token
+
+    def test_importing_the_planner_loads_no_web_module(self):
+        """A subprocess, so a prior import elsewhere cannot mask the answer."""
+        code = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "import app.services.ai.planner\n"
+            "loaded = sorted(m for m in sys.modules if m.startswith("
+            "('app.services.web', 'app.services.retrieval', 'httpx')))\n"
+            "print(loaded)\n"
+            "assert not loaded, loaded\n"
+        ) % str(APP.parent)
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_is_web_research_is_a_pure_text_predicate(self):
+        from app.services.ai.planner import is_web_research
+        assert is_web_research("JSW Steel ka latest order kya hai?") is True
+        assert is_web_research("What is the order book?") is False
+        assert is_web_research("") is False
+        assert is_web_research(None) is False  # type: ignore[arg-type]
+        # Same input, same answer — there is no state to drift.
+        assert is_web_research("latest news") == is_web_research("latest news")
+
+    def test_web_research_plan_reaches_no_network(self, monkeypatch):
+        """Planning a web-research question opens no socket."""
+        import socket
+
+        def refuse(*_a, **_k):
+            raise AssertionError("the planner opened a socket")
+
+        monkeypatch.setattr(socket, "create_connection", refuse)
+        monkeypatch.setattr(socket.socket, "connect", refuse)
+        plan = QuestionPlanner().plan("JSW Steel ka latest order kya hai?")
+        assert plan.execution_route.value == "web_research"
+
+    def test_web_research_is_not_executable(self):
+        from app.services.ai.planner import ExecutionRoute
+        plan = QuestionPlanner().plan("JSW Steel ka latest order kya hai?")
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH
+        assert plan.is_executable is False
+
+    def test_the_resolver_still_declines_a_web_research_question(self):
+        """The production execution gate is unchanged: no intent, no answer."""
+        for question in ("JSW Steel ka latest order kya hai?",
+                         "latest news kya hai?",
+                         "JSW Steel expansion status kya hai?"):
+            assert FinancialIntentResolver().resolve(question) is None, question
+
+    def test_the_composer_does_not_own_the_route(self):
+        from app.services.ai.internal_composer import (
+            CompositionStatus, InternalComposer,
+        )
+        plan = QuestionPlanner().plan("JSW Steel ka latest order kya hai?")
+        decision = InternalComposer().compose(plan)
+        assert decision.status is CompositionStatus.NOT_COMPOSABLE
+
+    def test_the_open_ended_engine_does_not_own_the_route(self):
+        from app.services.ai.internal_open_ended import (
+            InternalAnswerStatus, InternalOpenEndedEngine,
+            OpenEndedCapability,
+        )
+        from tests.test_internal_open_ended import _slim_context
+
+        plan = QuestionPlanner().plan("JSW Steel ka latest order kya hai?")
+        answer = InternalOpenEndedEngine().answer(plan, _slim_context())
+        assert answer.status is InternalAnswerStatus.NOT_SUPPORTED
+        assert answer.capability is OpenEndedCapability.UNSUPPORTED_OPEN_ENDED
+        assert answer.content == ""
+
+    def test_the_analyst_runtime_routing_is_untouched(self):
+        """Phase 4A is planner-only. Dispatching the route is a later phase."""
+        source = (APP / "services" / "ai" / "analyst.py").read_text()
+        assert "WEB_RESEARCH" not in source
+        assert "web_research" not in source
+
+    def test_no_layer_outside_the_planner_dispatches_on_the_route_yet(self):
+        offenders = []
+        for path in python_files(APP):
+            if PLANNER in path.parents:
+                continue
+            if "ExecutionRoute.WEB_RESEARCH" in path.read_text():
+                offenders.append(str(path.relative_to(APP)))
+        assert offenders == []
+
+    def test_route_and_type_are_new_members_not_renames(self):
+        from app.services.ai.planner import ExecutionRoute, QueryType
+        assert {r.value for r in ExecutionRoute} >= {
+            "deterministic_financial", "deterministic_investment",
+            "composition_required", "source_router", "internal_reasoning",
+            "decline", "web_research",
+        }
+        assert {q.value for q in QueryType} >= {
+            "deterministic", "multi_intent", "comparison", "source_directed",
+            "unsupported", "open_ended", "ambiguous", "web_research",
+        }

@@ -49,7 +49,7 @@ from .types import (
     Confidence, EntityResolution, EntityStatus, ExecutionRoute, IntentFamily,
     QuestionPlan, QueryType,
 )
-from .vocabulary import is_comparison, is_vague_evaluative
+from .vocabulary import is_comparison, is_vague_evaluative, is_web_research
 
 
 #: Anything the platform could treat as a company mention. Duck-typed on
@@ -344,6 +344,17 @@ class QuestionPlanner:
             return _Classification(QueryType.UNSUPPORTED,
                                    ExecutionRoute.DECLINE)
 
+        # Part 3 Phase 4A. Last of the positive shapes on purpose: a
+        # recency word beside a supported intent was matched as that intent
+        # above, and a financial figure with a recency word is still a
+        # figure the platform declines rather than one it would look up on
+        # the web. Only a current development with no figure and no verdict
+        # behind it reaches this line. Tested against the raw question — see
+        # ``is_web_research`` for why the normalisation is not consulted.
+        if is_web_research(original):
+            return _Classification(QueryType.WEB_RESEARCH,
+                                   ExecutionRoute.WEB_RESEARCH)
+
         return _Classification(QueryType.OPEN_ENDED,
                                ExecutionRoute.INTERNAL_REASONING)
 
@@ -367,6 +378,11 @@ class QuestionPlanner:
             return Confidence.MEDIUM
         if query_type is QueryType.DETERMINISTIC:
             return Confidence.HIGH if entity.is_usable else Confidence.MEDIUM
+        if query_type is QueryType.WEB_RESEARCH:
+            # The shape is recognised; the evidence is not yet in hand. A
+            # named subject makes the research scoped, an unnamed one makes
+            # it a topic search — weaker, and recorded as such.
+            return Confidence.MEDIUM if entity.is_usable else Confidence.LOW
         # Multi-intent: every intent is recognised, but nothing today can
         # compose them, so the plan is a description rather than a schedule.
         return Confidence.MEDIUM if entity.is_usable else Confidence.LOW
@@ -435,6 +451,17 @@ class QuestionPlanner:
                 "no comparison is produced"
             )
 
+        if classification.query_type is QueryType.WEB_RESEARCH:
+            missing.append(
+                "web_evidence: validated evidence from the platform's own "
+                "stored web corpus is required; a plan carries none"
+            )
+            if not entity.is_usable:
+                ambiguity.append(
+                    "No company was resolved; web research would be a topic "
+                    "search rather than a company-scoped one."
+                )
+
         for req in evidence:
             if not req.published:
                 missing.append(
@@ -491,6 +518,13 @@ class QuestionPlanner:
             notes.append(
                 "Comparison detected. No comparison is fabricated: the "
                 "deterministic engines are single-company."
+            )
+
+        if classification.query_type is QueryType.WEB_RESEARCH:
+            notes.append(
+                "Web research detected. The planner names the route only: "
+                "no page is fetched, no search query is generated and no "
+                "source is ranked here."
             )
 
         if intents and entity.status is EntityStatus.UNRESOLVED:

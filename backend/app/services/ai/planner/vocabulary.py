@@ -338,3 +338,108 @@ def is_comparison(text: str) -> bool:
 def is_vague_evaluative(text: str) -> bool:
     """A judgement about the company with no identifiable supported intent."""
     return bool(_VAGUE_EVALUATIVE.search(text or ""))
+
+
+# ---------------------------------------------------------------------------
+# Web research (Part 3 Phase 4A)
+#
+# Not an intent either. A question about a *current development* — news, an
+# order win, an expansion, a deal, an appointment — asks for something the
+# canonical financial store does not hold and no deterministic engine
+# computes. The planner names that shape so the self-owned web research path
+# can be dispatched on it later; it fetches nothing and generates no query.
+#
+# Two kinds of signal, either of which is sufficient once every binding
+# route (source restriction, comparison, supported intents, vague
+# evaluation, unsupported financial figure) has been ruled out:
+#
+# * **recency** — "latest", "recent", "today", "aaj", "abhi", "taaza",
+#   "update", "news". A recency word next to a supported intent never
+#   reaches this check, because the intent is matched first.
+# * **development** — a corporate event noun: expansion, acquisition,
+#   merger, contract, launch, plant, project, appointment, resignation.
+#
+# Matched against the RAW question only, never the planning normalisation.
+# The normaliser maps "vistar se batao" (tell me in detail) to "expansion",
+# which is the right reading for retrieval and the wrong one here; the raw
+# words carry the distinction and the aliases below cover Hindi directly.
+#
+# "order" is deliberately NOT a bare signal. "What is the order book?" is a
+# definitional question the internal open-ended engine already owns, and an
+# order becomes a development only when qualified ("latest order", "new
+# order", "order win", "bagged an order").
+# ---------------------------------------------------------------------------
+
+#: Latin-script signals, matched on word boundaries.
+_WEB_RESEARCH = re.compile(
+    # recency
+    r"\b(?:latest|recent|recently|newest|today|todays|this\s+week|"
+    r"aaj|aajkal|abhi|taaza|taaja|taza|haal\s+(?:hi|ki|me|mein)|"
+    r"haal-?filhaal|update|updates|updated|news|headlines?|khabar|khabre+n|"
+    r"khabrein|samachar|kya\s+chal\s+raha|kya\s+ho\s+raha|kya\s+hua|"
+    r"kya\s+hui|what\s+happened|what\s+is\s+happening|whats\s+happening|"
+    r"what's\s+happening|going\s+on)\b"
+    # developments
+    r"|\b(?:expansions?|expanding|expanded|expand|capacity\s+addition|"
+    r"acquisitions?|acquired|acquires?|acquiring|takeovers?|mergers?|"
+    r"merged|merging|demergers?|joint\s+ventures?|jv|partnerships?|"
+    r"tie-?ups?|agreements?|mou|mous|contracts?|deals?|"
+    r"announcements?|announced|announces?|launch|launches|launched|"
+    r"launching|plants?|projects?|commissioned|commissioning|"
+    r"appointments?|appointed|resigns?|resigned|resignation|"
+    r"stepped\s+down|steps\s+down|stake\s+sale|stake\s+buy|buy\s*-?\s*backs?|"
+    r"bonus\s+issue|stock\s+split|rights\s+issue|ipo|delisting|"
+    r"approvals?|regulatory\s+action|penalt(?:y|ies)|lawsuits?|litigation|"
+    r"(?:workers?|labou?r|employees?)\s+strikes?|shutdowns?|layoffs?|"
+    r"order\s+wins?|new\s+orders?|fresh\s+orders?|orders?\s+worth|"
+    r"bag(?:s|ged)\s+(?:an?\s+|new\s+|the\s+|fresh\s+)?(?:orders?|contracts?|projects?)|"
+    r"won\s+(?:an?\s+|new\s+)?orders?|naya\s+order|naye\s+orders?|"
+    r"order\s+mila|vistar|adhigrahan|vilay|sauda|samjhauta|ghoshna|elaan|"
+    r"ailaan|niyukti|istifa|manzoori|pariyojana)\b",
+    re.IGNORECASE,
+)
+
+#: Devanagari signals. Literal substrings, for the same reason the intent
+#: aliases are: a matra is a combining mark, so ``\\b`` is unreliable.
+_WEB_RESEARCH_ALIASES: tuple[str, ...] = (
+    # recency
+    "ताज़ा", "ताजा", "नवीनतम", "हालिया", "हाल ही", "हाल की", "हाल में", "आज",
+    "अभी", "अपडेट", "खबर", "ख़बर", "समाचार", "न्यूज़", "न्यूज",
+    "क्या चल रहा", "क्या हो रहा", "क्या हुआ",
+    # developments
+    "विस्तार", "अधिग्रहण", "विलय", "सौदा", "समझौता", "घोषणा", "ऐलान",
+    "नियुक्ति", "इस्तीफ़ा", "इस्तीफा", "मंज़ूरी", "मंजूरी", "परियोजना",
+    "प्लांट", "लॉन्च", "ऑर्डर", "आर्डर", "कॉन्ट्रैक्ट", "अनुबंध",
+)
+
+#: Shapes that contain a signal word and are NOT web research. Removed from
+#: the text before the signals are consulted.
+_NOT_WEB_RESEARCH = re.compile(
+    # "order book" is a defined term the open-ended engine explains.
+    r"\border\s*-?\s*books?\b|ऑर्डर\s*बुक|आर्डर\s*बुक"
+    # "in order to" is grammar, not an order.
+    r"|\bin\s+order\s+to\b"
+    # "vistar se" / "विस्तार से" is "in detail", not an expansion.
+    r"|\b(?:vistar|vistaar)\s+se\b|विस्तार\s*(?:से|में|पूर्वक)"
+    # "expand on that" is a request to elaborate.
+    r"|\bexpand\s+(?:on|upon)\b"
+    # "deal in"/"deal with" is what the company does, not a transaction.
+    r"|\bdeals?\s+(?:in|with)\b",
+    re.IGNORECASE,
+)
+
+
+def is_web_research(text: str) -> bool:
+    """Whether the question asks about a current development.
+
+    Pure: a regex and a substring scan over the text it is given. It
+    contacts nothing, and it does not know what a company is — entity
+    resolution stays with the planner.
+    """
+    candidate = text or ""
+    if not candidate.strip():
+        return False
+    scrubbed = _NOT_WEB_RESEARCH.sub(" ", candidate)
+    if _WEB_RESEARCH.search(scrubbed):
+        return True
+    return any(alias in scrubbed for alias in _WEB_RESEARCH_ALIASES)

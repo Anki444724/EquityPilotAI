@@ -62,6 +62,12 @@ class QueryType(StrEnum):
     #: Understood only partially. The planner knows it was asked something
     #: evaluative but not which supported intent was meant.
     AMBIGUOUS = "ambiguous"
+    #: Asks about a current development — news, an order win, an expansion,
+    #: a deal, an appointment — that the platform's canonical financial data
+    #: does not hold and no deterministic engine computes. Answerable only
+    #: from validated web evidence, never approximated from financials
+    #: (Part 3 Phase 4A).
+    WEB_RESEARCH = "web_research"
 
 
 class ExecutionRoute(StrEnum):
@@ -83,6 +89,11 @@ class ExecutionRoute(StrEnum):
     SOURCE_ROUTER = "source_router"
     #: Needs internal reasoning that does not exist yet.
     INTERNAL_REASONING = "internal_reasoning"
+    #: The self-owned web research path (Part 3 Phase 4): internal query
+    #: generation over the platform's OWN stored web corpus, then validated
+    #: evidence. Named here so the later phases can dispatch on it; the
+    #: planner fetches nothing, generates no query and ranks no source.
+    WEB_RESEARCH = "web_research"
     #: Nothing safe to execute. Declining is the answer.
     DECLINE = "decline"
 
