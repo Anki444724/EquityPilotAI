@@ -71,7 +71,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.ai.types import Citation, EvidenceKind, WebProvenance
-from app.domain.documents.types import DocumentType
+from app.domain.documents.types import DocumentStatus, DocumentType
 from app.domain.web.types import (
     WebContentClass,
     WebDocumentRef,
@@ -83,6 +83,7 @@ from app.domain.web.types import (
     source_class_label,
 )
 from app.models.company import Company
+from app.models.document import Document
 from app.models.filing_collection import CompanyCrawlState
 from app.services.documents.ingestion import DocumentIngestionService, IngestionError
 from app.services.platform.cache import Namespace
@@ -182,6 +183,11 @@ class WebSearchService:
     #: and nothing else, but an unbounded string from an API caller is still
     #: worth bounding.
     MAX_QUERY_CHARS = 200
+    #: How many current stored versions of one URL are compared against a
+    #: freshly fetched page before it is treated as new. One is the norm
+    #: (a URL has one current version); a few tolerate rows written by
+    #: earlier releases that were not linked as versions.
+    MAX_HELD_VERSIONS_CHECKED = 3
 
     def __init__(
         self,
@@ -531,6 +537,10 @@ class WebSearchService:
             author=extracted.author,
         )
         content_hash = hashlib.sha256(clean).hexdigest()
+        # The clean document carries its provenance (retrieval time) in its
+        # own bytes, so ``content_hash`` differs between two fetches of an
+        # unchanged page. What decides "unchanged" is the extracted text.
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         preview = collapse_whitespace(text)[: self.policy.citation_value_chars]
 
         if not query.persist:
@@ -542,19 +552,38 @@ class WebSearchService:
 
         # Unchanged since the last fetch: nothing to ingest, no job, no
         # pipeline run, no cache invalidation. This is what keeps a repeated
-        # search from costing a re-ingest per page.
+        # search from costing a re-ingest per page. The fetch itself always
+        # happens — idempotency is the comparison, never a skipped look.
+        #
+        # The cache is a hint, confirmed against the row it names (a page
+        # deleted since the entry was written must not be cited from it);
+        # the rows are the durable record, so a cold or expired cache still
+        # resolves an unchanged page to the document the company holds.
+        hint: Document | None = None
         cached = self._cached_page(company.id, canonical_url)
-        if cached and cached.get("content_hash") == content_hash:
+        if cached and (
+            cached.get("content_hash") == content_hash
+            or (cached.get("text_sha256") and cached.get("text_sha256") == text_hash)
+        ):
+            hint = self._current_document(company.id, cached.get("document_id"))
+        held = self._held_unchanged(
+            company.id, candidate.url, canonical_url, text_hash, fetched.sha256,
+            hint=hint,
+        )
+        if held is not None:
+            self._remember_page(
+                company.id, canonical_url, document_id=held.id,
+                content_hash=content_hash, text_hash=text_hash,
+            )
             return self._reference(
                 candidate, fetched, extracted, canonical_url, title, clean,
                 preview,
-                document_id=cached.get("document_id"),
-                content_hash=content_hash,
+                document_id=held.id, content_hash=content_hash,
             )
 
         metadata = self._metadata(
             candidate, fetched, extracted, canonical_url, title, content_hash,
-            preview, query,
+            preview, query, text_hash=text_hash,
         )
         filename = _filename_for(candidate.url, fetched.content_class)
         try:
@@ -590,12 +619,102 @@ class WebSearchService:
 
         self._remember_page(
             company.id, canonical_url, document_id=document.id,
-            content_hash=content_hash,
+            content_hash=content_hash, text_hash=text_hash,
         )
         return self._reference(
             candidate, fetched, extracted, canonical_url, title, clean, preview,
             document_id=document.id, content_hash=content_hash,
         )
+
+    def _current_document(
+        self, company_id: str, document_id: Any,
+    ) -> Document | None:
+        """The row a cache entry names, if it is still this company's current
+        ``web_page`` version; otherwise ``None``. The caller still checks
+        that its URL and text match — an identifier alone proves nothing."""
+        if not isinstance(document_id, int) or isinstance(document_id, bool):
+            return None
+        try:
+            row = self.db.get(Document, document_id)
+        except Exception:  # noqa: BLE001 - a read failure must not break accept
+            log.warning("web document lookup failed", company_id=company_id)
+            return None
+        if (
+            row is None
+            or row.company_id != company_id
+            or (row.doc_type or "") != DocumentType.WEB_PAGE.value
+            or row.superseded_by is not None
+            or row.status == DocumentStatus.FAILED.value
+        ):
+            return None
+        return row
+
+    @staticmethod
+    def _row_is_unchanged(
+        row: Document, source_url: str, canonical_url: str, text_hash: str,
+        raw_hash: str | None,
+    ) -> bool:
+        """Whether ``row`` holds this URL with this text.
+
+        "Unchanged" is the extracted text's hash. Rows written before that
+        hash was recorded fall back to the raw response hash, which is
+        stricter (identical bytes imply identical text).
+        """
+        if row.source_url != source_url:
+            return False
+        web = (row.doc_metadata or {}).get("web") or {}
+        if web.get("canonical_url") not in (None, canonical_url):
+            return False
+        recorded_text = web.get("text_sha256")
+        if recorded_text:
+            return recorded_text == text_hash
+        return bool(raw_hash) and web.get("raw_sha256") == raw_hash
+
+    def _held_unchanged(
+        self,
+        company_id: str,
+        source_url: str,
+        canonical_url: str,
+        text_hash: str,
+        raw_hash: str | None,
+        *,
+        hint: Document | None = None,
+    ) -> Document | None:
+        """The current stored version of this URL if its text is unchanged.
+
+        ``hint`` is the row a cache entry named; it is accepted only if it
+        passes the same URL-and-text check as any other row. Otherwise this
+        looks only at this company's own ``web_page`` rows for the same URL
+        (the indexed ``(company_id, source_url)`` pair), current (not
+        superseded) and not failed — a failed row must never block a fresh
+        attempt. Read-only; an unexpected error here costs at most one
+        avoidable re-ingest.
+        """
+        if hint is not None and self._row_is_unchanged(
+            hint, source_url, canonical_url, text_hash, raw_hash,
+        ):
+            return hint
+        try:
+            rows = self.db.scalars(
+                select(Document)
+                .where(
+                    Document.company_id == company_id,
+                    Document.source_url == source_url,
+                    Document.doc_type == DocumentType.WEB_PAGE.value,
+                    Document.superseded_by.is_(None),
+                )
+                .order_by(Document.id.desc())
+                .limit(self.MAX_HELD_VERSIONS_CHECKED)
+            ).all()
+        except Exception:  # noqa: BLE001 - a read failure must not break accept
+            log.warning("web held-version lookup failed", company_id=company_id)
+            return None
+        for row in rows:
+            if row.status == DocumentStatus.FAILED.value:
+                continue
+            if self._row_is_unchanged(row, source_url, canonical_url, text_hash, raw_hash):
+                return row
+        return None
 
     def _metadata(
         self,
@@ -607,6 +726,8 @@ class WebSearchService:
         content_hash: str,
         preview: str,
         query: WebSearchQuery,
+        *,
+        text_hash: str | None = None,
     ) -> dict[str, Any]:
         """Provenance written to ``doc_metadata`` at accept time.
 
@@ -633,6 +754,7 @@ class WebSearchService:
                 "size_bytes": fetched.size_bytes,
                 "raw_sha256": fetched.sha256,
                 "content_hash": content_hash,
+                "text_sha256": text_hash,
                 "redirect_chain": list(fetched.redirect_chain),
                 "robots": fetched.robots.status.value,
                 "query": (query.query or "")[: self.MAX_QUERY_CHARS],
@@ -692,11 +814,13 @@ class WebSearchService:
     def _remember_page(
         self, company_id: str, canonical_url: str, *,
         document_id: int | None, content_hash: str,
+        text_hash: str | None = None,
     ) -> None:
         try:
             self.cache.set(
                 Namespace.WEB,
-                {"document_id": document_id, "content_hash": content_hash},
+                {"document_id": document_id, "content_hash": content_hash,
+                 "text_sha256": text_hash},
                 "page", company_id, canonical_url,
             )
         except Exception:  # noqa: BLE001 - a cache write is not part of the fetch

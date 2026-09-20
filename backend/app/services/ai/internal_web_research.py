@@ -74,7 +74,7 @@ from urllib.parse import urlsplit
 import structlog
 
 from app.domain.ai.types import Citation, EvidenceKind, WebProvenance
-from app.domain.web.types import source_class_label
+from app.domain.web.types import WebFetchPolicy, source_class_label
 from app.services.ai.planner import ExecutionRoute, web_research_signal
 from app.services.ai.planner.web_query import WebQueryGenerator, WebQueryStatus
 from app.services.web.index import LOCAL_INDEX_ORIGIN, SelfOwnedWebIndex
@@ -82,11 +82,27 @@ from app.services.web.targeted_discovery import (
     EXCHANGE_REFERENCE_ORIGIN,
     LIVE_FETCH_PERSISTED_ORIGIN,
     LIVE_FETCH_TRANSIENT_ORIGIN,
+    DiscoveryPolicy,
     DiscoveryStatus,
     TargetedWebDiscovery,
 )
 
 log = structlog.get_logger(__name__)
+
+
+#: The fetch budget for discovery that runs INSIDE a chat request.
+#:
+#: The 4C defaults were set for the background crawl job, where a slow page
+#: costs nothing a user can feel. Here a hung company site holds the user's
+#: request open, so the two fields that decide how long that can last are
+#: tightened: one attempt per page (a retry would double the wait; the next
+#: question re-attempts anyway) and a ten-second whole-request timeout — the
+#: same bound the robots.txt fetch already runs under. Every security
+#: parameter — byte cap, redirect limit, allowed ports, user agent, crawl
+#: delay — is inherited unchanged, and the page/seed/depth ceilings are the
+#: 4C defaults. Widening anything here is a policy change, not a tuning.
+INTERACTIVE_FETCH_POLICY = WebFetchPolicy(timeout_seconds=10.0, max_attempts=1)
+INTERACTIVE_DISCOVERY_POLICY = DiscoveryPolicy(fetch_policy=INTERACTIVE_FETCH_POLICY)
 
 
 # ===========================================================================
@@ -477,10 +493,12 @@ class InternalWebResearchEngine:
     ) -> "InternalWebResearchEngine":
         """The production shape: the 4B index and the 4C discovery over the
         same session the analyst's other services use. The discovery layer
-        keeps its own kill switch (``WEB_EVIDENCE_ENABLED``) and policy."""
+        keeps its own kill switch (``WEB_EVIDENCE_ENABLED``) and runs under
+        :data:`INTERACTIVE_DISCOVERY_POLICY` — the 4C bounds with the fetch
+        budget of a request that a user is waiting on."""
         return cls(
             index=SelfOwnedWebIndex(db),
-            discovery=TargetedWebDiscovery(db),
+            discovery=TargetedWebDiscovery(db, policy=INTERACTIVE_DISCOVERY_POLICY),
             generator=WebQueryGenerator(),
             policy=policy,
             clock=clock,
@@ -872,7 +890,8 @@ class InternalWebResearchEngine:
             refusals = tuple(getattr(discovery, "refusals", ()) or ())
             if refusals and not fetched:
                 return (WebResearchStatus.DISCOVERY_REFUSED,
-                        "every discovery seed was refused by the safety stack")
+                        "no discovery seed yielded a page: each was unavailable "
+                        "or declined by the safety, robots or quality checks")
         if off_topic:
             return (WebResearchStatus.INSUFFICIENT_EVIDENCE,
                     "the pages found do not speak to the topic")
@@ -921,8 +940,9 @@ class InternalWebResearchEngine:
             refusals = tuple(getattr(discovery, "refusals", ()) or ())
             if refusals and not fetched:
                 live = (
-                    "every seed on the company's own origins was declined by the "
-                    "platform's safety, robots or quality checks; nothing was fetched"
+                    "no page was obtained from the company's own origins — each "
+                    "planned page was unavailable (for example, not found) or was "
+                    "declined by the platform's safety, robots or quality checks"
                 )
             else:
                 live = (
@@ -955,6 +975,8 @@ class InternalWebResearchEngine:
 __all__ = [
     "ANSWERED_STATUSES",
     "GAP_STATUSES",
+    "INTERACTIVE_DISCOVERY_POLICY",
+    "INTERACTIVE_FETCH_POLICY",
     "InternalWebResearchEngine",
     "WebClaim",
     "WebResearchAnswer",

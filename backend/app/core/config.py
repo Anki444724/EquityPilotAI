@@ -327,14 +327,21 @@ class Settings(BaseSettings):
     BLOGGER_CHAT_TIMEOUT_SECONDS: float = 45.0
 
     # --- Web evidence crawl (Part 3) -----------------------------------------
-    # Master switch for `JobKind.WEB_EVIDENCE_CRAWL`: the job-triggered,
-    # bounded crawl of a company's own pinned origins (its website and its
-    # *verified* investor-relations URL), ingesting accepted pages through the
-    # existing WebSearchService as ordinary WEB_PAGE documents. Off by
-    # default: while this is false the job handler returns before touching
-    # the database, a service or a socket, so a deployment that has not opted
-    # in pays zero cost — and no request path can ever reach the crawler,
-    # because none imports it.
+    # Master switch for every live web fetch the platform performs:
+    #   * `JobKind.WEB_EVIDENCE_CRAWL` — the job-triggered, bounded crawl of a
+    #     company's own pinned origins (its website and its *verified*
+    #     investor-relations URL);
+    #   * the chat path's targeted discovery (Part 3 Phase 4) — when a
+    #     question routes to web research and the platform's own stored web
+    #     index holds no sufficient evidence, at most a handful of pages on
+    #     those same pinned origins are fetched on demand, through the same
+    #     safety, robots, politeness, byte and MIME controls.
+    # Both ingest accepted pages through the existing WebSearchService as
+    # ordinary WEB_PAGE documents. Off by default: while this is false the
+    # job handler returns before touching the database, a service or a
+    # socket, and the chat path answers only from what is already stored
+    # (stating plainly that live discovery is disabled) — no DNS lookup,
+    # robots fetch or page fetch happens anywhere.
     WEB_EVIDENCE_ENABLED: bool = False
 
     # --- cors --------------------------------------------------------
