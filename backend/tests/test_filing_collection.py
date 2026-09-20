@@ -353,6 +353,134 @@ class TestCollectorDedup:
         assert not downloader.fetched
 
 
+class TestCollectorPlaceholderReference:
+    """Dead-letter bug: NSE rows that carry no usable identifier.
+
+    NSE's historical feed can return rows with ``seq_id = None`` and
+    ``attchmntFile = "-"``. The fallback in ``record()``
+    (reference → url → title) then maps *every* such row to
+    ``source_reference = "-"``: the placeholder url is truthy, so it wins
+    over the distinct, usable titles. Two rows for the same source cannot
+    share ``"-"`` under ``uq_discovered_source_ref``, and with autoflush
+    off the per-row "seen before" lookup cannot see the other row from the
+    same batch — so the single ``db.flush()`` in ``crawl_company`` raises
+    UniqueViolation and the whole scheduled ``filing_crawl`` run dead-
+    letters, taking every other company in the batch down with it.
+
+    Regression contract:
+    1. the crawl must not raise (UniqueViolation, IntegrityError, or a
+       PendingRollbackError on the session afterwards);
+    2. the placeholder ``"-"`` must never be persisted as
+       ``source_reference``;
+    3. the dedup contract for valid references must survive unchanged: a
+       second pass must not re-discover a filing that does have a stable
+       reference, even when the batch also contains placeholder rows.
+    """
+
+    @staticmethod
+    def _placeholder_filing(title: str, filed_on: date) -> Filing:
+        """The exact shape NSEFilingProvider builds when the row has
+        ``seq_id = None`` (→ reference None) and ``attchmntFile = "-"``
+        (→ url "-")."""
+        return Filing(
+            category=SourceCategory.NSE_FILING,
+            filing_type=FilingType.CORPORATE_ANNOUNCEMENT,
+            title=title, reference=None, url="-", filed_on=filed_on,
+        )
+
+    def test_placeholder_references_do_not_dead_letter_the_crawl(
+        self, collector_env,
+    ):
+        """Two NSE rows with reference=None and url="-" must not collide on
+        the placeholder, and the crawl must survive to commit."""
+        from app.models.filing_collection import DiscoveredFiling
+
+        db, company = collector_env
+        nse = _StubProvider("NSE Corporate Filings", [
+            self._placeholder_filing(
+                "Outcome of Board Meeting held on 12 May 2026",
+                date(2026, 5, 12),
+            ),
+            self._placeholder_filing(
+                "Intimation of Dividend for Q1 FY2026", date(2026, 5, 13),
+            ),
+        ])
+        downloader = _StubDownloader()
+        collector = _make_collector(db, nse=nse, downloader=downloader)
+
+        crawl_error = None
+        try:
+            result = collector.crawl_company(company, download=False)
+        except Exception as exc:  # noqa: BLE001 — named in the assertion below
+            crawl_error = exc
+        finally:
+            # The crawl flushes and commits. If it blew up mid-transaction,
+            # roll back so the shared-session fixture teardown can clean up
+            # instead of raising PendingRollbackError and masking the real
+            # failure.
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+
+        assert crawl_error is None, (
+            f"crawl failed with {type(crawl_error).__name__}: {crawl_error}"
+        )
+        # The crawl saw both rows; at least one must have been tracked,
+        # rather than the batch being silently dropped to dodge the
+        # constraint.
+        assert result.new_documents >= 1
+
+        # The session must still be usable: a UniqueViolation leaves the
+        # transaction failed and the next statement raises
+        # PendingRollbackError, which is what dead-letters the job.
+        db.expire_all()
+        placeholder_rows = db.query(DiscoveredFiling).filter_by(
+            company_id=company.id, source_reference="-",
+        ).all()
+        assert placeholder_rows == [], (
+            "placeholder '-' was persisted as source_reference; the next "
+            "crawl will violate uq_discovered_source_ref again"
+        )
+
+    def test_valid_reference_dedup_survives_a_placeholder_batch(
+        self, collector_env,
+    ):
+        """The same batch that used to dead-letter must not loosen dedup
+        for filings that DO have a stable reference."""
+        from app.models.filing_collection import DiscoveredFiling
+
+        db, company = collector_env
+        nse = _StubProvider("NSE Corporate Filings", [
+            self._placeholder_filing(
+                "Outcome of Board Meeting held on 12 May 2026",
+                date(2026, 5, 12),
+            ),
+            Filing(
+                category=SourceCategory.NSE_FILING,
+                filing_type=FilingType.ANNUAL_REPORT,
+                title="Integrated Annual Report 2024-25",
+                reference="SEQ-99120", url="http://x/ar.pdf",
+                filed_on=date(2026, 5, 12),
+            ),
+        ])
+        downloader = _StubDownloader()
+        collector = _make_collector(db, nse=nse, downloader=downloader)
+
+        first = collector.crawl_company(company, download=False)
+        second = collector.crawl_company(company, download=False)
+
+        assert first.new_documents >= 1
+        assert second.new_documents == 0, (
+            "second pass re-discovered a filing whose valid reference "
+            "must be deduplicated"
+        )
+        ref_rows = db.query(DiscoveredFiling).filter_by(
+            company_id=company.id, source_reference="SEQ-99120",
+        ).all()
+        assert len(ref_rows) == 1
+
+
 class TestCollectorResilience:
     """One broken thing must not stop the rest."""
 
