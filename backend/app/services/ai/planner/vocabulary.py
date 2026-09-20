@@ -370,17 +370,30 @@ def is_vague_evaluative(text: str) -> bool:
 # order", "order win", "bagged an order").
 # ---------------------------------------------------------------------------
 
-#: Latin-script signals, matched on word boundaries.
-_WEB_RESEARCH = re.compile(
-    # recency
+#: Recency signals, Latin script: time adverbs — the words that say *now*
+#: without naming anything. A search query can drop them and still be about
+#: the same thing, which is why they are a class of their own.
+_WEB_RECENCY = re.compile(
     r"\b(?:latest|recent|recently|newest|today|todays|this\s+week|"
     r"aaj|aajkal|abhi|taaza|taaja|taza|haal\s+(?:hi|ki|me|mein)|"
-    r"haal-?filhaal|update|updates|updated|news|headlines?|khabar|khabre+n|"
+    r"haal-?filhaal)\b",
+    re.IGNORECASE,
+)
+
+#: News signals, Latin script: "what is happening" nouns and shapes. Unlike
+#: a time adverb these ARE the topic — "news" dropped from "JSW Steel news"
+#: leaves a company name, not a question.
+_WEB_NEWS = re.compile(
+    r"\b(?:update|updates|updated|news|headlines?|khabar|khabre+n|"
     r"khabrein|samachar|kya\s+chal\s+raha|kya\s+ho\s+raha|kya\s+hua|"
     r"kya\s+hui|what\s+happened|what\s+is\s+happening|whats\s+happening|"
-    r"what's\s+happening|going\s+on)\b"
-    # developments
-    r"|\b(?:expansions?|expanding|expanded|expand|capacity\s+addition|"
+    r"what's\s+happening|going\s+on)\b",
+    re.IGNORECASE,
+)
+
+#: Development signals, Latin script. Corporate event nouns and verbs.
+_WEB_DEVELOPMENT = re.compile(
+    r"\b(?:expansions?|expanding|expanded|expand|capacity\s+addition|"
     r"acquisitions?|acquired|acquires?|acquiring|takeovers?|mergers?|"
     r"merged|merging|demergers?|joint\s+ventures?|jv|partnerships?|"
     r"tie-?ups?|agreements?|mou|mous|contracts?|deals?|"
@@ -401,16 +414,30 @@ _WEB_RESEARCH = re.compile(
 
 #: Devanagari signals. Literal substrings, for the same reason the intent
 #: aliases are: a matra is a combining mark, so ``\\b`` is unreliable.
-_WEB_RESEARCH_ALIASES: tuple[str, ...] = (
-    # recency
+_WEB_RECENCY_ALIASES: tuple[str, ...] = (
     "ताज़ा", "ताजा", "नवीनतम", "हालिया", "हाल ही", "हाल की", "हाल में", "आज",
-    "अभी", "अपडेट", "खबर", "ख़बर", "समाचार", "न्यूज़", "न्यूज",
+    "अभी",
+)
+_WEB_NEWS_ALIASES: tuple[str, ...] = (
+    "अपडेट", "खबर", "ख़बर", "समाचार", "न्यूज़", "न्यूज",
     "क्या चल रहा", "क्या हो रहा", "क्या हुआ",
-    # developments
+)
+_WEB_DEVELOPMENT_ALIASES: tuple[str, ...] = (
     "विस्तार", "अधिग्रहण", "विलय", "सौदा", "समझौता", "घोषणा", "ऐलान",
     "नियुक्ति", "इस्तीफ़ा", "इस्तीफा", "मंज़ूरी", "मंजूरी", "परियोजना",
     "प्लांट", "लॉन्च", "ऑर्डर", "आर्डर", "कॉन्ट्रैक्ट", "अनुबंध",
 )
+_WEB_RESEARCH_ALIASES: tuple[str, ...] = (
+    _WEB_RECENCY_ALIASES + _WEB_NEWS_ALIASES + _WEB_DEVELOPMENT_ALIASES
+)
+
+#: The signal classes, by name. Exposed so the web query generator can tell
+#: a time adverb from a news noun from an event noun with the SAME
+#: vocabulary that routed the question — not a second list that would
+#: drift from it.
+WEB_SIGNAL_RECENCY = "recency"
+WEB_SIGNAL_NEWS = "news"
+WEB_SIGNAL_DEVELOPMENT = "development"
 
 #: Shapes that contain a signal word and are NOT web research. Removed from
 #: the text before the signals are consulted.
@@ -440,6 +467,30 @@ def is_web_research(text: str) -> bool:
     if not candidate.strip():
         return False
     scrubbed = _NOT_WEB_RESEARCH.sub(" ", candidate)
-    if _WEB_RESEARCH.search(scrubbed):
+    if (_WEB_RECENCY.search(scrubbed) or _WEB_NEWS.search(scrubbed)
+            or _WEB_DEVELOPMENT.search(scrubbed)):
         return True
     return any(alias in scrubbed for alias in _WEB_RESEARCH_ALIASES)
+
+
+def web_research_signal(term: str) -> str | None:
+    """Which signal class one term or short phrase belongs to, if any.
+
+    ``"recency"`` for a time adverb ("latest", "aaj", "ताज़ा"), ``"news"``
+    for a what-is-happening noun ("news", "khabar", "update"),
+    ``"development"`` for an event noun ("expansion", "विस्तार"), ``None``
+    for anything else. Whole-term matching, so "order" alone is nothing and
+    "new order" is a development — the same reading :func:`is_web_research`
+    gives the full question.
+    """
+    candidate = (term or "").strip()
+    if not candidate:
+        return None
+    if _WEB_RECENCY.fullmatch(candidate) or candidate in _WEB_RECENCY_ALIASES:
+        return WEB_SIGNAL_RECENCY
+    if _WEB_NEWS.fullmatch(candidate) or candidate in _WEB_NEWS_ALIASES:
+        return WEB_SIGNAL_NEWS
+    if (_WEB_DEVELOPMENT.fullmatch(candidate)
+            or candidate in _WEB_DEVELOPMENT_ALIASES):
+        return WEB_SIGNAL_DEVELOPMENT
+    return None

@@ -33,6 +33,12 @@ The public surface is deliberately small::
 
     from app.services.ai.planner import QuestionPlanner
     plan = QuestionPlanner(company_resolver=svc.named_in).plan(question)
+
+Part 3 Phase 4B adds one more planning-side artefact, still executing
+nothing: ``WebQueryGenerator`` turns a ``WEB_RESEARCH`` plan into a bounded,
+deterministic set of search strings for the self-owned web index
+(``app.services.web.index``). It resolves nothing, fetches nothing and never
+invents a company or ticker.
 """
 from __future__ import annotations
 
@@ -45,12 +51,18 @@ from .types import (
     Confidence, EntityResolution, EntityStatus, EvidenceRequirement,
     ExecutionRoute, IntentFamily, IntentMatch, QueryType, QuestionPlan,
 )
-from .vocabulary import INTENT_VOCABULARY, IntentSpec, is_web_research
+from .vocabulary import (
+    INTENT_VOCABULARY, IntentSpec, is_web_research, web_research_signal,
+)
+from .web_query import (
+    WebQuery, WebQueryGenerator, WebQueryLimits, WebQuerySet, WebQueryStatus,
+)
 
 __all__ = [
     "Confidence", "CompanyLike", "CompanyResolver", "EntityResolution",
     "EntityStatus", "EvidenceRequirement", "ExecutionRoute", "INTENT_VOCABULARY",
     "IntentFamily", "IntentMatch", "IntentMatcher", "IntentSpec", "QueryType",
-    "QuestionPlan", "QuestionPlanner", "REQUIRED_EVIDENCE", "evidence_for",
-    "evidence_for_all", "is_web_research",
+    "QuestionPlan", "QuestionPlanner", "REQUIRED_EVIDENCE", "WebQuery",
+    "WebQueryGenerator", "WebQueryLimits", "WebQuerySet", "WebQueryStatus",
+    "evidence_for", "evidence_for_all", "is_web_research", "web_research_signal",
 ]
