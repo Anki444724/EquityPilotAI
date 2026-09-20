@@ -441,8 +441,14 @@ class TestWiredConsumers:
     #: builds one, so no question is planned twice and the two internal
     #: layers cannot disagree about what was asked.
     OPEN_ENDED_LAYER = APP / "services" / "ai" / "internal_open_ended.py"
+    #: Part 3 Phase 4D. Executes the WEB_RESEARCH route from the plan the
+    #: analyst already computed: it reads the route and hands the plan to
+    #: the 4B query generator. It never plans, and it never resolves a
+    #: company — the analyst's identity gate has run before it is called.
+    WEB_RESEARCH_LAYER = APP / "services" / "ai" / "internal_web_research.py"
 
-    PERMITTED = {COMPOSITION_LAYER, SERVICE, ANALYST, OPEN_ENDED_LAYER}
+    PERMITTED = {COMPOSITION_LAYER, SERVICE, ANALYST, OPEN_ENDED_LAYER,
+                 WEB_RESEARCH_LAYER}
 
     def test_only_the_permitted_modules_import_the_planner(self):
         offenders = []
@@ -710,20 +716,33 @@ class TestWebResearchIsPlanningOnly:
         assert answer.capability is OpenEndedCapability.UNSUPPORTED_OPEN_ENDED
         assert answer.content == ""
 
-    def test_the_analyst_runtime_routing_is_untouched(self):
-        """Phase 4A is planner-only. Dispatching the route is a later phase."""
+    def test_the_analyst_dispatches_the_route_at_exactly_one_seam(self):
+        """Phase 4A was planner-only; Phase 4D dispatches the route — once,
+        after the composer and the open-ended engine, before retrieval, and
+        only to the internal web research engine."""
         source = (APP / "services" / "ai" / "analyst.py").read_text()
-        assert "WEB_RESEARCH" not in source
-        assert "web_research" not in source
+        assert source.count("self._web_research(") == 1
+        assert source.count("def _web_research(") == 1
+        seam = source.index("web = self._web_research(")
+        assert source.index("internal = self._open_ended(") < seam
+        assert seam < source.index("retrieved = self._retrieve(")
+        body = source[source.index("def _web_research("):]
+        body = body[:body.index("\n    async def ")]
+        assert "plan.execution_route is not ExecutionRoute.WEB_RESEARCH" in body
+        assert "_company_identity_is_safe(plan, context)" in body
+        assert "router" not in body and "_retrieve(" not in body
 
-    def test_no_layer_outside_the_planner_dispatches_on_the_route_yet(self):
+    def test_only_the_analyst_and_the_web_research_engine_dispatch_on_the_route(self):
         offenders = []
         for path in python_files(APP):
             if PLANNER in path.parents:
                 continue
             if "ExecutionRoute.WEB_RESEARCH" in path.read_text():
                 offenders.append(str(path.relative_to(APP)))
-        assert offenders == []
+        assert sorted(offenders) == [
+            "services/ai/analyst.py",
+            "services/ai/internal_web_research.py",
+        ]
 
     def test_route_and_type_are_new_members_not_renames(self):
         from app.services.ai.planner import ExecutionRoute, QueryType

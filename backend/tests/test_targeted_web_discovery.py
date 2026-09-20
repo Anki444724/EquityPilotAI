@@ -1126,14 +1126,21 @@ class TestArchitecture:
         assert "services.ai.planner" not in source
         assert "WebCrawlerDiscovery" not in source
 
-    def test_it_is_not_wired_into_routing_filings_or_any_request_path(self):
+    def test_it_is_wired_only_through_the_internal_web_research_engine(self):
+        """Phase 4C shipped this layer unwired. Phase 4D consumes it from one
+        place — the internal web research engine the analyst reaches for the
+        WEB_RESEARCH route. No API route, filing path or job handler touches
+        it, and nothing else constructs it."""
         referencing = []
         for path in sorted(APP.rglob("*.py")):
             if path == MODULE_PATH:
                 continue
             if "targeted_discovery" in path.read_text():
                 referencing.append(path.relative_to(APP).as_posix())
-        assert referencing == []
+        assert referencing == ["services/ai/internal_web_research.py"]
+        for relative in ("api/v1/ai.py", "services/platform/jobs/handlers.py",
+                         "services/filings/collector.py", "services/web/discovery.py"):
+            assert "targeted_discovery" not in (APP / relative).read_text(), relative
 
     def test_the_filing_crawl_and_web_evidence_crawl_are_untouched(self):
         handlers = (APP / "services" / "platform" / "jobs" / "handlers.py").read_text()

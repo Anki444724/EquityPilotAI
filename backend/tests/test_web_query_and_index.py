@@ -1427,7 +1427,10 @@ class TestPhase4AUnchanged:
         params = list(inspect.signature(QuestionPlanner.__init__).parameters)
         assert params == ["self", "company_resolver", "memory", "matcher", "adapter"]
 
-    def test_generator_is_not_wired_into_any_production_module(self):
+    def test_generator_and_index_are_wired_only_through_the_web_research_engine(self):
+        """Phase 4B shipped both unwired. Phase 4D wires them — through one
+        module, the internal web research engine, which the analyst reaches
+        only for the WEB_RESEARCH route. Nothing else constructs either."""
         offenders = []
         for path in sorted(APP.rglob("*.py")):
             if "__pycache__" in path.parts:
@@ -1437,7 +1440,7 @@ class TestPhase4AUnchanged:
             source = path.read_text()
             if "WebQueryGenerator" in source or "SelfOwnedWebIndex" in source:
                 offenders.append(str(path.relative_to(APP)))
-        assert offenders == []
+        assert offenders == ["services/ai/internal_web_research.py"]
 
     def test_web_query_module_obeys_the_planner_arithmetic_rule(self):
         tree = ast.parse(WEB_QUERY_PATH.read_text())
