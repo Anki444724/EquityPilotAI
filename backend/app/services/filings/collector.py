@@ -256,7 +256,13 @@ class FilingCollector:
         cheap: an announcement seen yesterday is matched on
         (source, reference) and never downloaded again.
         """
-        reference = (filing.reference or filing.url or filing.title or "")[:500]
+        reference: str | None = None
+        for candidate in (filing.reference, filing.url, filing.title):
+            if candidate:
+                cleaned = str(candidate).strip()
+                if cleaned and cleaned != "-":
+                    reference = cleaned[:500]
+                    break
         if not reference:
             return None
 
