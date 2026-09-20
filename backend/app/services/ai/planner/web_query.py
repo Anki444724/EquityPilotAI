@@ -119,6 +119,12 @@ class WebQuerySet:
     #: Content words drawn from the question, in question order.
     topic_terms: tuple[str, ...] = ()
     reason: str = ""
+    #: ``True`` when at least one content word is a recency signal ("latest",
+    #: "recent", "आज", ...) — the question asks for the current state of
+    #: affairs. Consumers decide what to do with that (the on-demand web
+    #: discovery layer, for example, treats older local evidence as stale
+    #: only for such questions); the generator merely reports it.
+    recency_sensitive: bool = False
 
     @property
     def texts(self) -> tuple[str, ...]:
@@ -137,6 +143,7 @@ class WebQuerySet:
             "company_id": self.company_id,
             "topic_terms": list(self.topic_terms),
             "reason": self.reason,
+            "recency_sensitive": self.recency_sensitive,
         }
 
 
@@ -282,12 +289,16 @@ class WebQueryGenerator:
             drafts.append(([subject], "subject only"))
 
         queries = self._bound(drafts, leads)
+        recency = any(
+            web_research_signal(term) == WEB_SIGNAL_RECENCY for term in topic
+        )
         if not queries:
             return WebQuerySet(
                 status=WebQueryStatus.EMPTY,
                 subject=subject, ticker=ticker, company_id=company_id,
                 topic_terms=tuple(topic),
                 reason="no subject and no content words survived",
+                recency_sensitive=recency,
             )
 
         return WebQuerySet(
@@ -295,6 +306,7 @@ class WebQueryGenerator:
             queries=queries,
             subject=subject, ticker=ticker, company_id=company_id,
             topic_terms=tuple(topic),
+            recency_sensitive=recency,
             reason=(
                 f"{len(queries)} quer{'y' if len(queries) == 1 else 'ies'} "
                 f"from {len(topic)} content term(s)"

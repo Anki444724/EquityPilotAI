@@ -1115,9 +1115,13 @@ class TestMissingMetadata:
             "document_id", "chunk_id", "company_id", "content_hash", "source_url",
             "canonical_url", "title", "source_class", "published_at", "retrieved_at",
             "snippet", "relevance", "authority", "freshness", "freshness_basis",
-            "score", "matched_queries", "signals", "page", "section",
+            "score", "matched_queries", "signals", "page", "section", "origin",
         }
         assert set(candidate.as_dict()) == expected
+        # Everything this index returns is a stored page; other producers
+        # label theirs differently (Phase 4C's targeted discovery).
+        assert candidate.origin == "local_index"
+        assert candidate.document_id is not None
         with pytest.raises(Exception):
             candidate.score = 0.0  # type: ignore[misc]
         json.dumps(result.as_dict())

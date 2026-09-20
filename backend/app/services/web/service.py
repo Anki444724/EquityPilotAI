@@ -451,6 +451,30 @@ class WebSearchService:
         return _DEFAULT_PATHS
 
     # ===================================================================
+    # Read-only seam for the on-demand targeted discovery layer
+    # ===================================================================
+    # These expose decisions the service already makes — which hosts a
+    # company's evidence may come from, whether its IR URL is verified, and
+    # which conventional paths a query selects — so a caller can plan a
+    # bounded seed list from the same rules instead of re-deriving them.
+    # None of them opens a socket or writes; fetching still happens only
+    # through :meth:`search`.
+    def allowlist_for(
+        self, company: Company,
+    ) -> tuple[CompanyCrawlState | None, dict[str, WebSourceClass]]:
+        """The company's crawl state and the hosts pinned for it."""
+        state = self._crawl_state(company.id)
+        return state, self._pinned_hosts(company, state)
+
+    def ir_is_verified(self, state: CompanyCrawlState | None) -> bool:
+        """Whether the crawl state's IR URL meets the verified threshold."""
+        return self._ir_is_verified(state)
+
+    def conventional_paths(self, query_text: str) -> tuple[str, ...]:
+        """The fixed-table paths ``query_text`` selects (never derived from it)."""
+        return self._paths_for(query_text)
+
+    # ===================================================================
     # One page: extract, assess, persist
     # ===================================================================
     def _accept_page(
@@ -690,6 +714,16 @@ def _origin(url: str | None) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def host_of(url: str | None) -> str:
+    """The lower-cased hostname of ``url`` (``""`` when it has none)."""
+    return _host_of(url)
+
+
+def origin_of(url: str | None) -> str:
+    """``scheme://netloc`` of ``url``, or ``""`` when it lacks either part."""
+    return _origin(url)
+
+
 def _company_origins(
     company: Company, state: CompanyCrawlState | None,
 ) -> list[str]:
@@ -756,4 +790,10 @@ def _citation_for(ref: WebDocumentRef) -> Citation:
     )
 
 
-__all__ = ["WEB_UPLOADER", "WebEvidenceError", "WebSearchService"]
+__all__ = [
+    "WEB_UPLOADER",
+    "WebEvidenceError",
+    "WebSearchService",
+    "host_of",
+    "origin_of",
+]

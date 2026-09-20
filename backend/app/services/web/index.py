@@ -69,6 +69,7 @@ __all__ = [
     "AUTHORITY_WEIGHT",
     "FRESHNESS_WEIGHT",
     "INDEXED_STATUSES",
+    "LOCAL_INDEX_ORIGIN",
     "MULTI_QUERY_BONUS",
     "RELEVANCE_WEIGHT",
     "SEMANTIC_ONLY_FLOOR",
@@ -77,6 +78,11 @@ __all__ = [
     "WebEvidenceCandidate",
     "WebIndexLimits",
     "WebIndexSearchResult",
+    "blend_score",
+    "dedupe_candidates",
+    "freshness_basis",
+    "iter_query_texts",
+    "rank_key",
 ]
 
 #: The only document type this index ever searches.
@@ -103,6 +109,12 @@ MULTI_QUERY_BONUS: float = 0.05
 #: nearest neighbour in a corpus that may not contain the answer — which is
 #: exactly the case a web search must report as "nothing found".
 SEMANTIC_ONLY_FLOOR: float = 0.35
+#: ``WebEvidenceCandidate.origin`` for everything this index returns: a
+#: passage of a stored, processed ``web_page`` document. Other producers
+#: (the on-demand targeted discovery layer) label their candidates with
+#: their own origin so a consumer can always tell stored evidence from a
+#: page fetched moments ago.
+LOCAL_INDEX_ORIGIN: str = "local_index"
 
 _AUTHORITY_CEILING: float = max(WEB_AUTHORITY.values())
 _WHITESPACE = re.compile(r"\s+")
@@ -142,9 +154,14 @@ class WebEvidenceCandidate:
 
     Every field is taken from the persisted document/chunk rows or computed
     from them; nothing is inferred. ``None`` means the store does not have it.
+
+    The index always fills ``document_id``; it is optional only so that the
+    same contract can carry *transient* evidence produced by the on-demand
+    discovery layer (a page fetched but deliberately not persisted), which
+    is labelled by ``origin``.
     """
 
-    document_id: int
+    document_id: int | None
     chunk_id: int | None
     company_id: str | None
     source_url: str | None
@@ -173,6 +190,11 @@ class WebEvidenceCandidate:
     section: str | None = None
     #: Hash of the stored bytes — identity for dedupe, as ingestion uses it.
     content_hash: str | None = None
+    #: Where the candidate came from: ``local_index`` (a stored page — the
+    #: default and the only value this module produces) or a value set by
+    #: another producer, e.g. ``live_fetch_persisted`` /
+    #: ``live_fetch_transient`` from the targeted discovery layer.
+    origin: str = LOCAL_INDEX_ORIGIN
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +218,7 @@ class WebEvidenceCandidate:
             "signals": list(self.signals),
             "page": self.page,
             "section": self.section,
+            "origin": self.origin,
         }
 
 
@@ -607,16 +630,12 @@ class SelfOwnedWebIndex:
             retrieved_at = document.retrieved_at or _parse_datetime(web_meta.get("retrieved_at"))
 
             authority = web_authority(_source_class(source_class), published_at=published_at)
-            basis_date, basis = _freshness_basis(published_at, retrieved_at)
+            basis_date, basis = freshness_basis(published_at, retrieved_at)
             freshness = recency_factor(basis_date, today=today)
 
             queries = tuple(extra_queries[document_id])
             relevance = min(1.0, hit.relevance + MULTI_QUERY_BONUS * (len(queries) - 1))
-            score = (
-                RELEVANCE_WEIGHT * relevance
-                + AUTHORITY_WEIGHT * (authority / _AUTHORITY_CEILING if _AUTHORITY_CEILING else 0.0)
-                + FRESHNESS_WEIGHT * freshness
-            )
+            score = blend_score(relevance, authority, freshness)
             out.append(WebEvidenceCandidate(
                 document_id=document_id,
                 chunk_id=hit.chunk_id,
@@ -657,40 +676,8 @@ class SelfOwnedWebIndex:
     # ----------------------------------------------------------- dedupe
     @staticmethod
     def _dedupe(candidates: list[WebEvidenceCandidate]) -> list[WebEvidenceCandidate]:
-        """One candidate per page identity.
-
-        Identity is the document row, the canonical URL and the stored
-        bytes (``content_hash`` — the same page stored under two companies).
-        Two snapshots of one URL collapse to the most recently retrieved
-        copy, because that is the page as it currently reads; identical
-        bytes collapse to the higher-ranked copy. Every tie ends on the
-        lower document id, so the outcome never depends on input order.
-        """
-        latest_by_url: dict[str, WebEvidenceCandidate] = {}
-        for candidate in candidates:
-            url = candidate.canonical_url
-            if not url:
-                continue
-            current = latest_by_url.get(url)
-            if current is None or _snapshot_key(candidate) > _snapshot_key(current):
-                latest_by_url[url] = candidate
-        survivors = [
-            c for c in candidates
-            if not c.canonical_url or latest_by_url[c.canonical_url] is c
-        ]
-        kept: list[WebEvidenceCandidate] = []
-        seen_docs: set[int] = set()
-        seen_hashes: set[str] = set()
-        for candidate in sorted(survivors, key=_rank_key):
-            if candidate.document_id in seen_docs:
-                continue
-            if candidate.content_hash and candidate.content_hash in seen_hashes:
-                continue
-            seen_docs.add(candidate.document_id)
-            if candidate.content_hash:
-                seen_hashes.add(candidate.content_hash)
-            kept.append(candidate)
-        return kept
+        """One candidate per page identity — see :func:`dedupe_candidates`."""
+        return dedupe_candidates(candidates)
 
     # ----------------------------------------------------------- helpers
     def _normalise_queries(self, queries: Any) -> list[str]:
@@ -732,21 +719,97 @@ class SelfOwnedWebIndex:
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
-def _rank_key(candidate: WebEvidenceCandidate) -> tuple:
+def blend_score(relevance: float, authority: float, freshness: float) -> float:
+    """The one ranking blend every web evidence producer uses.
+
+    ``relevance`` and ``freshness`` are already in [0, 1]; ``authority`` is
+    the raw ``web_authority`` value and is normalised against the platform's
+    authority ceiling here, so a candidate built elsewhere from the same
+    three inputs lands on exactly the same score as an index candidate.
+    """
+    normalised = authority / _AUTHORITY_CEILING if _AUTHORITY_CEILING else 0.0
+    return (
+        RELEVANCE_WEIGHT * relevance
+        + AUTHORITY_WEIGHT * normalised
+        + FRESHNESS_WEIGHT * freshness
+    )
+
+
+def rank_key(candidate: WebEvidenceCandidate) -> tuple:
+    """Deterministic ordering: score, relevance, authority, recency, identity.
+
+    A transient candidate has no document id; it sorts after a stored one
+    on an otherwise exact tie and then by canonical URL, so the order never
+    depends on input order and never raises on a ``None`` id.
+    """
     retrieved = candidate.retrieved_at.timestamp() if candidate.retrieved_at else 0.0
+    has_document = candidate.document_id is not None
     return (
         -candidate.score,
         -candidate.relevance,
         -candidate.authority,
         -retrieved,
-        candidate.document_id,
+        0 if has_document else 1,
+        candidate.document_id if has_document else 0,
         candidate.chunk_id if candidate.chunk_id is not None else -1,
+        candidate.canonical_url or "",
     )
+
+
+def dedupe_candidates(
+    candidates: Iterable[WebEvidenceCandidate],
+) -> list[WebEvidenceCandidate]:
+    """One candidate per page identity, ranked.
+
+    Identity is the document row, the canonical URL and the stored bytes
+    (``content_hash`` — the same page stored under two companies, or a
+    page fetched again and found unchanged). Two snapshots of one URL
+    collapse to the most recently retrieved copy, because that is the page
+    as it currently reads; identical bytes collapse to the higher-ranked
+    copy. Every tie ends on the lower document id, so the outcome never
+    depends on input order. Candidates without a document id (transient
+    evidence) are deduplicated by URL and bytes only — ``None`` is not an
+    identity.
+    """
+    items = list(candidates)
+    latest_by_url: dict[str, WebEvidenceCandidate] = {}
+    for candidate in items:
+        url = candidate.canonical_url
+        if not url:
+            continue
+        current = latest_by_url.get(url)
+        if current is None or _snapshot_key(candidate) > _snapshot_key(current):
+            latest_by_url[url] = candidate
+    survivors = [
+        c for c in items
+        if not c.canonical_url or latest_by_url[c.canonical_url] is c
+    ]
+    kept: list[WebEvidenceCandidate] = []
+    seen_docs: set[int] = set()
+    seen_hashes: set[str] = set()
+    for candidate in sorted(survivors, key=rank_key):
+        if candidate.document_id is not None and candidate.document_id in seen_docs:
+            continue
+        if candidate.content_hash and candidate.content_hash in seen_hashes:
+            continue
+        if candidate.document_id is not None:
+            seen_docs.add(candidate.document_id)
+        if candidate.content_hash:
+            seen_hashes.add(candidate.content_hash)
+        kept.append(candidate)
+    return kept
+
+
+_rank_key = rank_key
 
 
 def _snapshot_key(candidate: WebEvidenceCandidate) -> tuple:
     retrieved = candidate.retrieved_at.timestamp() if candidate.retrieved_at else 0.0
-    return (retrieved, candidate.score, -candidate.document_id)
+    document_id = candidate.document_id if candidate.document_id is not None else 0
+    # A stored copy outranks a transient one on an exact tie; among stored
+    # copies the lower id (the earlier row) wins, as before.
+    return (retrieved, candidate.score, 1 if candidate.document_id is not None else 0,
+            -document_id)
 
 
 def _signal_names(signals: Any) -> set[str]:
@@ -775,6 +838,12 @@ def _hybrid_hit_counts(names: set[str], raw: Any) -> bool:
                 similarity = 0.0
         return similarity >= SEMANTIC_ONLY_FLOOR
     return True
+
+
+def iter_query_texts(queries: Any) -> Iterable[str]:
+    """Query texts from a string, an iterable of strings / ``.text`` objects,
+    or any object exposing ``.texts`` (the planner's query set, duck-typed)."""
+    return _iter_query_texts(queries)
 
 
 def _iter_query_texts(queries: Any) -> Iterable[str]:
@@ -875,14 +944,19 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
 
 
-def _freshness_basis(
+def freshness_basis(
     published_at: datetime | None, retrieved_at: datetime | None,
 ) -> tuple[date | None, str]:
+    """Which date freshness is computed from: publication first, else
+    retrieval, else nothing (``unknown``) — never a guess."""
     if published_at is not None:
         return published_at.date(), "published_at"
     if retrieved_at is not None:
         return retrieved_at.date(), "retrieved_at"
     return None, "unknown"
+
+
+_freshness_basis = freshness_basis
 
 
 def _snippet(text_value: str, limit: int) -> str:
