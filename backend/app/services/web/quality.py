@@ -243,12 +243,36 @@ def assess(
     # different fixes, and the floor would otherwise claim every short wall.
     marker = _REJECT_MARKERS.search(collapsed)
     if marker and len(collapsed) < settings.min_content_chars * 20:
-        # The length clause is what separates a wall from an article *about*
-        # consent: a long page that merely mentions cookies is content.
-        return QualityAssessment(
-            accepted=False, reason=WebRejectionReason.UNSUPPORTED_CONTENT,
-            detail=f"page is a wall, not content (matched {marker.group(0)!r})",
+        # Cookie/consent banners commonly appear at the end of otherwise
+        # substantive pages. Only treat cookie markers as a wall when the
+        # page is itself dominated by consent text; other bot/error markers
+        # retain the existing short-page wall protection.
+        cookie_marker = marker.group(0).lower() in {
+            "accept all cookies",
+            "accept cookies",
+            "we use cookies",
+            "enable cookies to continue",
+        }
+        if not cookie_marker:
+            return QualityAssessment(
+                accepted=False, reason=WebRejectionReason.UNSUPPORTED_CONTENT,
+                detail=f"page is a wall, not content (matched {marker.group(0)!r})",
+            )
+        cookie_removed = re.sub(
+            r"(?:accept (?:all )?cookies(?: to (?:continue|continue reading this page))?|"
+            r"we use cookies(?:\.? manage your preferences| to improve your experience)?"
+            r"(?:\.? accept all cookies(?: to continue reading this page)?)?|"
+            r"enable cookies to continue)",
+            " ",
+            collapsed,
+            flags=re.IGNORECASE,
         )
+        cookie_removed = re.sub(r"\s*[.]\s*", " ", cookie_removed).strip()
+        if len(cookie_removed) < settings.min_content_chars:
+            return QualityAssessment(
+                accepted=False, reason=WebRejectionReason.UNSUPPORTED_CONTENT,
+                detail=f"page is a wall, not content (matched {marker.group(0)!r})",
+            )
 
     if len(collapsed) < settings.min_content_chars:
         return QualityAssessment(

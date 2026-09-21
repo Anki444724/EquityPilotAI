@@ -249,6 +249,17 @@ class TestAssess:
         )
         assert assess(body).accepted is True
 
+    def test_a_substantive_page_with_cookie_banner_is_not_a_wall(self):
+        body = (
+            "JSW Steel reported consolidated crude steel capacity of 37.9 MTPA. "
+            "The company provides investor results, annual reports and business "
+            "updates across its steel operations. "
+            * 20
+            + " We use cookies on this website. Please indicate whether or not "
+              "you accept our use of cookies."
+        )
+        assert assess(body).accepted is True
+
     def test_the_floor_is_the_policy_s_floor(self):
         policy = WebFetchPolicy(min_content_chars=10)
         assert assess("too short", policy=policy).accepted is False
