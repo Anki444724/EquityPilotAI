@@ -30,7 +30,9 @@ from app.services.ai.context_builder import ContextBuilder, GroundedContext
 from app.services.ai.financial_answer_engine import (
     DeterministicAnswer, FinancialAnswerEngine,
 )
-from app.services.ai.financial_intent import INVESTMENT_INTENTS, FinancialIntentResolver
+from app.services.ai.financial_intent import (
+    INVESTMENT_INTENTS, FinancialIntent, FinancialIntentResolver,
+)
 from app.services.ai.investment_answer_engine import InvestmentAnswerEngine
 from app.services.ai.guardrails import GuardrailReport, check, enforce
 from app.services.ai.internal_composer import ComposedAnswer, InternalComposer
@@ -43,6 +45,7 @@ from app.services.ai.internal_web_research import (
 from app.services.ai.memory import ConversationMemory
 from app.services.ai.planner import (
     EntityStatus, ExecutionRoute, QuestionPlan, QuestionPlanner,
+    commodity_is_the_price_subject,
 )
 from app.services.ai.prompt_builder import BuiltPrompt, PromptBuilder
 from app.services.ai.prompt_library import (
@@ -146,12 +149,19 @@ def _company_identity_is_safe(
     * a context carrying no company at all — nothing to validate against, so
       there is nothing safe to answer from.
     """
+    entity = plan.entity
+    scope = getattr(plan, "research_scope", None)
+    scope_value = str(getattr(scope, "value", scope) or "")
+    if (
+        scope_value == "general"
+        and entity.status in {EntityStatus.UNRESOLVED, EntityStatus.CONTEXT_ONLY}
+    ):
+        return True, "general-topic research does not use the bound company"
+
     # A context that does not identify a company cannot be validated, so it
     # cannot be composed from. This is the "grounded context exists" gate.
     if not (context.company_id or context.ticker):
         return False, "the grounded context does not identify a company"
-
-    entity = plan.entity
 
     if entity.status is EntityStatus.AMBIGUOUS:
         return False, (
@@ -364,6 +374,16 @@ class ResearchAnalyst:
             and not directive.scope.is_restricted
         ):
             intent = FinancialIntentResolver().resolve(retrieval_query)
+            # A commodity move may discard only a market-price intent, and
+            # only when that price question is about the commodity. P/E,
+            # P/B, EPS, financial quality and every other deterministic
+            # intent stay on their engines. ``price of JSW Steel`` beside
+            # ``Nifty gira`` is still the company's price.
+            if intent is FinancialIntent.MARKET_PRICE and (
+                commodity_is_the_price_subject(question)
+                or commodity_is_the_price_subject(retrieval_query)
+            ):
+                intent = None
             if intent is not None:
                 started = time.perf_counter()
                 if intent in INVESTMENT_INTENTS:

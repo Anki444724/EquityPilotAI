@@ -37,6 +37,7 @@ from app.services.ai.financial_intent import (
 from app.services.ai.memory import ConversationMemory
 from app.services.ai.planner import (
     Confidence, EntityStatus, ExecutionRoute, QueryType, QuestionPlanner,
+    ResearchScope, commodity_is_the_price_subject,
 )
 from app.services.ai.planner.evidence import REQUIRED_EVIDENCE, evidence_for_all
 from app.services.ai.planner.types import IntentFamily, QuestionPlan
@@ -814,3 +815,69 @@ class TestWebResearchRouting:
         first = jsw.plan("JSW Steel expansion status kya hai?").as_dict()
         second = jsw.plan("JSW Steel expansion status kya hai?").as_dict()
         assert first == second
+
+    def test_a_commodity_move_does_not_steal_a_resolved_company_price(self, jsw):
+        """``Nifty gira`` beside a named company's price is still that price."""
+        question = "Nifty gira. What is the current market price of JSW Steel?"
+        plan = jsw.plan(question)
+        assert plan.entity.status is EntityStatus.RESOLVED
+        assert plan.entity.ticker == "JSWSTEEL"
+        assert intents_of(plan) == ["market_price"]
+        assert plan.query_type is QueryType.DETERMINISTIC
+        assert plan.execution_route is ExecutionRoute.DETERMINISTIC_FINANCIAL
+        assert plan.research_scope is ResearchScope.NONE
+        assert commodity_is_the_price_subject(question) is False
+
+    @pytest.mark.parametrize("question,intent,route", [
+        (
+            "The rupee fell. What is the P/E of JSW Steel?",
+            "pe", ExecutionRoute.DETERMINISTIC_FINANCIAL,
+        ),
+        (
+            "Crude fell. What is the P/B of JSW Steel?",
+            "pb", ExecutionRoute.DETERMINISTIC_FINANCIAL,
+        ),
+        (
+            "Silver crashed. What is the EPS of JSW Steel?",
+            "eps", ExecutionRoute.DETERMINISTIC_FINANCIAL,
+        ),
+        (
+            "The rupee fell. What is the financial quality of JSW Steel?",
+            "financial_quality", ExecutionRoute.DETERMINISTIC_INVESTMENT,
+        ),
+    ])
+    def test_a_commodity_move_does_not_displace_other_intents(
+        self, jsw, question, intent, route,
+    ):
+        plan = jsw.plan(question)
+        assert plan.entity.status is EntityStatus.RESOLVED
+        assert intents_of(plan) == [intent]
+        assert plan.execution_route is route
+        assert plan.research_scope is ResearchScope.NONE
+        assert plan.query_type is not QueryType.WEB_RESEARCH
+
+    @pytest.mark.parametrize("question", [
+        "What is JSW Steel?",
+        "JSW Steel kya hai?",
+        "How does JSW Steel work?",
+    ])
+    def test_explanatory_wording_keeps_a_resolved_company_internal(self, jsw, question):
+        plan = jsw.plan(question)
+        assert plan.entity.status is EntityStatus.RESOLVED, question
+        assert plan.entity.ticker == "JSWSTEEL", question
+        assert plan.query_type is QueryType.OPEN_ENDED, question
+        assert plan.execution_route is ExecutionRoute.INTERNAL_REASONING, question
+        assert plan.research_scope is ResearchScope.NONE, question
+
+    def test_an_unresolved_explanatory_topic_is_still_general_research(self, jsw):
+        plan = jsw.plan("What is Python?")
+        assert plan.entity.status is EntityStatus.UNRESOLVED
+        assert plan.query_type is QueryType.WEB_RESEARCH
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH
+        assert plan.research_scope is ResearchScope.GENERAL
+
+    def test_a_commodity_price_move_without_a_company_stays_general(self, jsw):
+        plan = jsw.plan("Aaj gold price kyu move hua?")
+        assert plan.execution_route is ExecutionRoute.WEB_RESEARCH
+        assert plan.research_scope is ResearchScope.GENERAL
+        assert commodity_is_the_price_subject("Aaj gold price kyu move hua?") is True

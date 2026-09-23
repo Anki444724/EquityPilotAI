@@ -116,6 +116,108 @@ class TestPolicyBranches:
         policy, _ = _policy({})
         assert policy.allowed("/relative/path") is False
 
+    def test_an_injected_fetch_without_a_resolver_does_not_resolve(self, monkeypatch):
+        """The test seam stays offline. DNS is not a side effect of injection."""
+        def boom(host, port):
+            raise AssertionError(f"resolved {host}")
+
+        monkeypatch.setattr("app.services.web.safety.default_resolver", boom)
+        policy, calls = _policy({"a.example": (200, DISALLOW_ALL.encode())})
+        assert policy.allowed("https://a.example/investors") is False
+        assert calls == ["https://a.example/robots.txt"]
+
+
+class TestRobotsAddressSafety:
+    """The robots socket is a socket. A non-public address is not a policy."""
+
+    def test_a_private_resolved_address_is_not_fetched(self):
+        policy, calls = _policy(
+            {"evil.example": (200, ALLOW_ALL.encode())},
+            resolver=lambda host, port: ["10.0.0.5"],
+        )
+        outcome = policy.outcome_for("https://evil.example/investors")
+        assert calls == []
+        assert outcome.allowed is False
+        assert outcome.status is RobotsStatus.POLICY_UNAVAILABLE
+        assert outcome.rejection is not None
+
+    def test_a_literal_private_or_metadata_address_is_not_fetched(self):
+        policy, calls = _policy(
+            {"127.0.0.1": (200, ALLOW_ALL.encode()),
+             "169.254.169.254": (200, ALLOW_ALL.encode())},
+            resolver=lambda host, port: ["93.184.216.34"],
+        )
+        for url in (
+            "http://127.0.0.1/latest/meta-data",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]/secret",
+            "http://10.1.2.3/admin",
+        ):
+            outcome = policy.outcome_for(url)
+            assert outcome.allowed is False, url
+            assert outcome.status is RobotsStatus.POLICY_UNAVAILABLE, url
+        assert calls == []
+
+    def test_an_unresolvable_host_is_unavailable_not_absent(self):
+        """Absence would allow the page. A failed lookup must not."""
+        def refuse(host, port):
+            raise OSError(f"no such host {host}")
+
+        policy, calls = _policy(
+            {"missing.example": (404, b"")},
+            resolver=refuse,
+        )
+        outcome = policy.outcome_for("https://missing.example/investors")
+        assert calls == []
+        assert outcome.allowed is False
+        assert outcome.status is RobotsStatus.POLICY_UNAVAILABLE
+        assert outcome.status is not RobotsStatus.ABSENT
+
+    def test_a_mixed_public_and_private_answer_is_not_fetched(self):
+        policy, calls = _policy(
+            {"rebind.example": (200, ALLOW_ALL.encode())},
+            resolver=lambda host, port: ["93.184.216.34", "10.0.0.5"],
+        )
+        assert policy.allowed("https://rebind.example/investors") is False
+        assert calls == []
+
+    def test_a_public_address_still_applies_the_site_rules(self):
+        """The address check must not become a bypass of robots.txt."""
+        policy, calls = _policy(
+            {"ok.example": (200, DISALLOW_ALL.encode())},
+            resolver=lambda host, port: ["93.184.216.34"],
+        )
+        outcome = policy.outcome_for("https://ok.example/investors")
+        assert calls == ["https://ok.example/robots.txt"]
+        assert outcome.allowed is False
+        assert outcome.status is RobotsStatus.DISALLOWED_BY_RULE
+
+    def test_the_default_fetch_checks_the_address_before_the_socket(self, monkeypatch):
+        calls: list[str] = []
+
+        def fetch(url, *, timeout, max_bytes, user_agent):
+            calls.append(url)
+            return 200, ALLOW_ALL.encode()
+
+        monkeypatch.setattr("app.services.web.robots._default_fetch", fetch)
+        monkeypatch.setattr(
+            "app.services.web.safety.default_resolver",
+            lambda host, port: ["127.0.0.1"],
+        )
+        policy = RobotsPolicy(clock=lambda: 0.0)
+        outcome = policy.outcome_for("https://evil.example/page")
+        assert calls == []
+        assert outcome.allowed is False
+        assert outcome.status is RobotsStatus.POLICY_UNAVAILABLE
+
+        monkeypatch.setattr(
+            "app.services.web.safety.default_resolver",
+            lambda host, port: ["93.184.216.34"],
+        )
+        policy.clear()
+        assert policy.allowed("https://ok.example/investors") is True
+        assert calls == ["https://ok.example/robots.txt"]
+
 
 # ===========================================================================
 class TestRulePrecedence:
