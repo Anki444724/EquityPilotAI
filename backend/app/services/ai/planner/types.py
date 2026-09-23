@@ -236,6 +236,19 @@ class EntityResolution:
         }
 
 
+class ResearchScope(StrEnum):
+    """Whether web research is about the bound company or an open topic.
+
+    ``NONE`` is every route that is not web research. ``COMPANY`` keeps the
+    existing company-scoped index and targeted discovery. ``GENERAL`` must
+    not inherit ``company_id``.
+    """
+
+    NONE = "none"
+    COMPANY = "company"
+    GENERAL = "general"
+
+
 @dataclass(frozen=True, slots=True)
 class QuestionPlan:
     """What a question is asking for, and what answering it would require.
@@ -273,6 +286,10 @@ class QuestionPlan:
     source_directive: SourceDirective | None = None
     #: Human-readable observations. Never answer content.
     notes: tuple[str, ...] = field(default_factory=tuple)
+    #: Company-scoped web research, or a general topic that must not inherit
+    #: the bound company. Defaulted so existing plans stay company-agnostic
+    #: until a web-research route sets it.
+    research_scope: ResearchScope = ResearchScope.NONE
 
     # -------------------------------------------------------------- reading
     @property
@@ -330,4 +347,5 @@ class QuestionPlan:
                 }
             ),
             "notes": list(self.notes),
+            "research_scope": self.research_scope.value,
         }

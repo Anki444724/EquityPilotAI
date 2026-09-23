@@ -344,6 +344,15 @@ class Settings(BaseSettings):
     # robots fetch or page fetch happens anywhere.
     WEB_EVIDENCE_ENABLED: bool = False
 
+    # General-topic live search. Independent of WEB_EVIDENCE_ENABLED, which
+    # still gates company-owned crawls only. Off by default: while false the
+    # chat path does not resolve or contact Google. The key is a secret and
+    # must not be logged, cited, or returned. Snippets from this API are
+    # never evidence.
+    GOOGLE_SEARCH_ENABLED: bool = False
+    GOOGLE_SEARCH_API_KEY: str | None = None
+    GOOGLE_SEARCH_ENGINE_ID: str | None = None
+
     # --- cors --------------------------------------------------------
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]

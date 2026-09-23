@@ -65,7 +65,7 @@ composed here.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Callable, Iterable, Sequence
@@ -77,6 +77,9 @@ from app.domain.ai.types import Citation, EvidenceKind, WebProvenance
 from app.domain.web.types import WebFetchPolicy, source_class_label
 from app.services.ai.planner import ExecutionRoute, web_research_signal
 from app.services.ai.planner.web_query import WebQueryGenerator, WebQueryStatus
+from app.services.web.google_search import (
+    GoogleSearchDisabled, GoogleWebDiscovery, topic_terms as _google_topic_terms,
+)
 from app.services.web.index import LOCAL_INDEX_ORIGIN, SelfOwnedWebIndex
 from app.services.web.targeted_discovery import (
     EXCHANGE_REFERENCE_ORIGIN,
@@ -456,6 +459,35 @@ def _pick_quote(snippet: str, terms: Sequence[str], limit: int) -> str:
     return chosen
 
 
+def _scope_is_general(plan: Any) -> bool:
+    scope = getattr(plan, "research_scope", None)
+    return str(getattr(scope, "value", scope) or "") == "general"
+
+
+def _general_label(text: str) -> str:
+    parts = [part for part in (text or "").split() if part and not part.isdigit()]
+    cleaned = _clean(" ".join(parts))
+    return cleaned or "this topic"
+
+
+def _general_subject(question: str) -> str:
+    return _general_subject_from_terms(_google_topic_terms(question), question)
+
+
+def _general_subject_from_terms(terms: tuple, question: str) -> str:
+    for term in terms:
+        if term and not str(term).isdigit():
+            return _general_label(str(term))
+    return _general_label(question)
+
+
+@dataclass(frozen=True, slots=True)
+class _GeneralQueryView:
+    texts: tuple[str, ...]
+    topic_terms: tuple[str, ...] = ()
+    recency_sensitive: bool = False
+
+
 # ===========================================================================
 # The engine
 # ===========================================================================
@@ -479,11 +511,13 @@ class InternalWebResearchEngine:
         generator: Any = None,
         policy: WebResearchPolicy | None = None,
         clock: Callable[[], datetime] | None = None,
+        google: Any = None,
     ) -> None:
         self.index = index
         self.discovery = discovery
         self.generator = generator or WebQueryGenerator()
         self.policy = policy or WebResearchPolicy()
+        self.google = google
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @classmethod
@@ -500,6 +534,7 @@ class InternalWebResearchEngine:
             index=SelfOwnedWebIndex(db),
             discovery=TargetedWebDiscovery(db, policy=INTERACTIVE_DISCOVERY_POLICY),
             generator=WebQueryGenerator(),
+            google=GoogleWebDiscovery.from_settings(),
             policy=policy,
             clock=clock,
         )
@@ -519,6 +554,9 @@ class InternalWebResearchEngine:
                 status=WebResearchStatus.NOT_APPLICABLE,
                 reason=f"route {getattr(route, 'value', route)!s} is not web research",
             )
+
+        if _scope_is_general(plan):
+            return self._research_general(plan)
 
         queries = self.generator.generate(plan)
         texts = tuple(getattr(queries, "texts", ()) or ())
@@ -567,6 +605,78 @@ class InternalWebResearchEngine:
             discovery=answer.discovery_status, cited=[c.key for c in answer.used_citations],
         )
         return answer
+
+    def _research_general(self, plan: Any) -> WebResearchAnswer:
+        """Open-topic research. Does not call the company query generator."""
+        question = (getattr(plan, "original_question", "") or "").strip()
+        google = self.google
+        if google is None or not bool(getattr(google, "enabled", False)):
+            return self._general_gap(
+                question, WebResearchStatus.DISCOVERY_DISABLED,
+                "live web search is not enabled",
+            )
+        try:
+            found = google.research(question)
+        except GoogleSearchDisabled:
+            return self._general_gap(
+                question, WebResearchStatus.DISCOVERY_DISABLED,
+                "live web search is not enabled",
+            )
+        except Exception as exc:
+            log.info("general web search refused", error_type=type(exc).__name__)
+            return self._general_gap(
+                question, WebResearchStatus.DISCOVERY_REFUSED,
+                "live web search was refused",
+            )
+
+        terms = tuple(getattr(found, "topic_terms", ()) or ())
+        subject = _general_subject_from_terms(terms, question)
+        queries = _GeneralQueryView(
+            texts=tuple(getattr(found, "queries", ()) or ((getattr(found, "query", "") or question),)),
+            topic_terms=terms,
+            recency_sensitive=bool(getattr(found, "recency_sensitive", False)),
+        )
+        answer = self.synthesise(
+            plan, queries, tuple(getattr(found, "candidates", ()) or ()),
+            discovery=None, local=None,
+            company_name=subject, company_id=None,
+        )
+        if answer.status in GAP_STATUSES:
+            return replace(
+                answer,
+                content=self._general_gap_content(subject, answer.status),
+                company_id=None,
+            )
+        return replace(answer, company_id=None)
+
+    def _general_gap(
+        self, question: str, status: WebResearchStatus, reason: str,
+    ) -> WebResearchAnswer:
+        subject = _general_subject(question)
+        return WebResearchAnswer(
+            status=status,
+            content=self._general_gap_content(subject, status),
+            missing=(f"web evidence about {subject}",),
+            company_id=None,
+            reason=reason,
+        )
+
+    def _general_gap_content(self, subject: str, status: WebResearchStatus) -> str:
+        topic = _general_label(subject)
+        if status is WebResearchStatus.DISCOVERY_DISABLED:
+            live = "live web search is not enabled, so no page was fetched"
+        elif status is WebResearchStatus.DISCOVERY_REFUSED:
+            live = "live web search was refused, so no page was fetched"
+        else:
+            live = "no fetched page carried a usable passage on this topic"
+        return "\n".join([
+            f"Current web evidence is insufficient to answer this about {topic}.",
+            "",
+            f"Live web search: {live}.",
+            "",
+            "No answer is inferred beyond the evidence: nothing was verified "
+            f"about {topic}, so no position is stated.",
+        ])
 
     # ---------------------------------------------------------- synthesis
     def synthesise(

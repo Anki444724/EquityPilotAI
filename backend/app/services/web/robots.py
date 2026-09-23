@@ -48,6 +48,12 @@ Server response                Decision        Why
                                                authoritative at the origin we
                                                validated, or it is not a policy.
 Transport error / timeout      DISALLOW        Could not be established.
+Non-public resolved address    DISALLOW        The policy file is fetched over a
+                                               socket. A private, loopback,
+                                               link-local or metadata address is
+                                               not a site policy and is not
+                                               fetched. Rules are still applied
+                                               when the address is public.
 ============================  ==============  ==================================
 
 Rule precedence
@@ -97,6 +103,7 @@ per-host exception list and no bypass header anywhere in this package.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 import time
 import urllib.error
@@ -109,6 +116,7 @@ from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
 from app.domain.web.types import WebRejectionReason
+from app.services.web.safety import is_public_address
 
 #: What a ``robots.txt`` fetch returns: ``(status_code, body_bytes)``.
 RobotsTransport = Callable[..., "tuple[int, bytes]"]
@@ -465,7 +473,9 @@ class RobotsPolicy:
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         clock: Callable[[], float] | None = None,
         now: Callable[[], datetime] | None = None,
+        resolver: Callable[[str, int], list[str]] | None = None,
     ) -> None:
+        self._injected_fetch = fetch is not None
         self._fetch = fetch or (
             lambda url, *, timeout, max_bytes, user_agent: _default_fetch(
                 url, timeout=timeout, max_bytes=max_bytes, user_agent=user_agent
@@ -478,6 +488,12 @@ class RobotsPolicy:
         self._clock = clock or time.monotonic
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._cache: dict[str, _Cached] = {}
+        # The default fetch opens a socket. Validate the resolved address
+        # first, the same public-address rule the page fetcher applies.
+        # An injected fetch is the test seam and is not a socket unless the
+        # caller also supplies the resolver that stands in for DNS.
+        self._resolver = resolver
+        self._check_addresses = (not self._injected_fetch) or resolver is not None
 
     # ------------------------------------------------------------- public
     def outcome_for(self, url: str) -> RobotsOutcome:
@@ -524,7 +540,40 @@ class RobotsPolicy:
         self._cache[host] = fetched
         return fetched
 
+    def _host_is_public(self, host: str) -> bool:
+        """Whether ``host`` resolves only to public addresses.
+
+        Checked immediately before the robots socket. A failure to resolve
+        is a refusal, not an absent policy: absence would allow the page.
+        """
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            # Looked up at call time, not import time. Page-fetch tests patch
+            # ``app.services.web.safety.default_resolver``; a copied import
+            # would ignore that seam and open — or refuse — a different
+            # address than the page check just approved.
+            resolver = self._resolver
+            if resolver is None:
+                from app.services.web import safety as safety_module
+                resolver = safety_module.default_resolver
+            try:
+                addresses = list(resolver(host, 443))
+            except Exception:  # noqa: BLE001 - unresolvable is unavailable
+                return False
+        else:
+            addresses = [host]
+        if not addresses:
+            return False
+        return all(is_public_address(str(address)) for address in addresses)
+
     def _fetch_policy(self, host: str, now: float) -> _Cached:
+        if self._check_addresses and not self._host_is_public(host):
+            return self._unavailable(
+                now,
+                f"robots.txt at {host} was not fetched: the host did not "
+                "resolve to a public address",
+            )
         url = f"https://{host}/robots.txt"
         try:
             status, body = self._fetch(

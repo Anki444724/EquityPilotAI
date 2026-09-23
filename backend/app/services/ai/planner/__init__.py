@@ -45,11 +45,13 @@ from __future__ import annotations
 from .evidence import REQUIRED_EVIDENCE, evidence_for, evidence_for_all
 from .intent_matcher import IntentMatcher
 from .question_planner import (
-    CompanyLike, CompanyResolver, QuestionPlanner,
+    CompanyLike, CompanyResolver, QuestionPlanner, commodity_is_the_price_subject,
+    is_commodity_move,
 )
 from .types import (
     Confidence, EntityResolution, EntityStatus, EvidenceRequirement,
     ExecutionRoute, IntentFamily, IntentMatch, QueryType, QuestionPlan,
+    ResearchScope,
 )
 from .vocabulary import (
     INTENT_VOCABULARY, IntentSpec, is_web_research, web_research_signal,
@@ -64,5 +66,7 @@ __all__ = [
     "IntentFamily", "IntentMatch", "IntentMatcher", "IntentSpec", "QueryType",
     "QuestionPlan", "QuestionPlanner", "REQUIRED_EVIDENCE", "WebQuery",
     "WebQueryGenerator", "WebQueryLimits", "WebQuerySet", "WebQueryStatus",
-    "evidence_for", "evidence_for_all", "is_web_research", "web_research_signal",
+    "commodity_is_the_price_subject", "evidence_for", "evidence_for_all",
+    "is_commodity_move", "is_web_research",
+    "web_research_signal", "ResearchScope",
 ]

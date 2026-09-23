@@ -47,7 +47,7 @@ from .evidence import evidence_for_all
 from .intent_matcher import IntentMatcher
 from .types import (
     Confidence, EntityResolution, EntityStatus, ExecutionRoute, IntentFamily,
-    QuestionPlan, QueryType,
+    QuestionPlan, QueryType, ResearchScope,
 )
 from .vocabulary import is_comparison, is_vague_evaluative, is_web_research
 
@@ -81,6 +81,178 @@ _FINANCIAL_NOUN = re.compile(
 #: A level figure with no intent behind it — revenue or net profit as a
 #: plain number. These are the two the platform deliberately does NOT model
 #: as intents yet.
+_COMMODITY = re.compile(
+    r"\b(?:gold|silver|crude|nifty|sensex|rupee)\b",
+    re.IGNORECASE,
+)
+_MOVE = re.compile(
+    r"\b(?:move|moved|moving|moves|kyu|kyun|kyon|why|"
+    r"gir(?:a|i|e)?|gire|fall|fell|fallen|falling|"
+    r"rose|risen|rising|rally|rallied|crash|crashed)\b",
+    re.IGNORECASE,
+)
+_EXPLAIN = re.compile(
+    r"\b(?:what\s+is|what\s+are|whats|what's|how\s+does|how\s+do|"
+    r"explain|kya\s+hai|kya\s+hain|kaise)\b"
+    r"|क्या\s+है|कैसे",
+    re.IGNORECASE,
+)
+_NOT_GENERAL = re.compile(
+    r"\border\s*-?\s*books?\b"
+    r"|\bsectors?\b|\bpromoters?\b|\bmanagement\b"
+    r"|\bthe\s+company\b|\bcompanies\b"
+    r"|\bdeals?\s+in\b"
+    r"|\b(?:vistar|vistaar)\s+se\b"
+    r"|\bexpand\s+(?:on|upon)\b"
+    r"|सेक्टर|प्रमोटर",
+    re.IGNORECASE,
+)
+_SCOPE_SCRUB = re.compile(
+    r"\border\s*-?\s*books?\b|\b(?:vistar|vistaar)\s+se\b",
+    re.IGNORECASE,
+)
+_COMPANY_EVENT = re.compile(
+    r"\b(?:expansions?|capacity|orders?|news|headlines?|filings?|"
+    r"announcements?|announced|updates?|acquisitions?|mergers?|"
+    r"appointments?|status|khabar|samachar|press|"
+    r"commissioned|commissioning)\b",
+    re.IGNORECASE,
+)
+_TOPIC_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]{1,}|[\u0900-\u097F]{2,}")
+_CONTEXT_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "to", "of", "in", "on",
+    "for", "and", "or", "what", "whats", "how", "does", "do", "did", "me",
+    "mein", "mai", "ka", "ki", "ke", "ko", "se", "par", "pe", "aur", "ya",
+    "hai", "hain", "kya", "kaise", "karta", "karti", "karte", "kaam", "work",
+    "works", "about", "tell", "please", "it", "this", "that", "with", "from",
+    "sector", "sectors", "promoter", "promoters", "management", "company",
+    "companies", "order", "book", "books", "सेक्टर", "प्रमोटर", "क्या", "है",
+    "हैं", "कैसे", "में",
+})
+
+
+def is_commodity_move(text: str) -> bool:
+    """A commodity or index moving, not a company price question.
+
+    ``kyu`` is a move word only beside one of these subjects. ``current`` is
+    not a move word, so a market-price question stays on the financial path.
+    """
+    candidate = text or ""
+    return bool(_COMMODITY.search(candidate) and _MOVE.search(candidate))
+
+
+#: Words that sit in front of ``price`` without naming what is priced.
+_PRICE_MODIFIERS = frozenset({
+    "current", "market", "share", "stock", "the", "a", "an", "latest",
+    "today", "todays", "its", "this", "that", "live", "spot",
+})
+_PRICE_OF = re.compile(
+    r"\b(?:market\s+price|share\s+price|stock\s+price|price)\s+of\s+"
+    r"(?:the\s+)?([A-Za-z][A-Za-z0-9&.-]*)",
+    re.IGNORECASE,
+)
+_NAMED_PRICE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9&.-]*)\s+(?:ka\s+|ki\s+|ke\s+)?"
+    r"(?:share\s+|stock\s+|market\s+)?price\b",
+    re.IGNORECASE,
+)
+
+
+def commodity_is_the_price_subject(text: str) -> bool:
+    """Whether a commodity move is what the price question is about.
+
+    ``gold price kyu move hua`` prices the commodity. ``Nifty gira. What is
+    the current market price of JSW Steel?`` mentions a commodity move and
+    then asks for a company's price — the price subject is the company, and
+    this returns ``False``. A commodity move with no separate price object
+    is about the commodity itself.
+    """
+    if not is_commodity_move(text or ""):
+        return False
+    named = [match.group(1) for match in _PRICE_OF.finditer(text or "")]
+    named += [match.group(1) for match in _NAMED_PRICE.finditer(text or "")]
+    subjects = [
+        subject for subject in named
+        if subject.casefold() not in _PRICE_MODIFIERS
+    ]
+    if not subjects:
+        return True
+    return all(_COMMODITY.fullmatch(subject) for subject in subjects)
+
+
+def _is_market_price(item: Any) -> bool:
+    return getattr(getattr(item, "intent", None), "value", None) == "market_price"
+
+
+def _commodity_move_overrides(
+    original: str, normalised: str, intents: tuple, entity: EntityResolution,
+) -> bool:
+    """Route a commodity-move question to web research, and nothing else.
+
+    Only a market-price intent can be displaced, and only when the price
+    subject is the commodity. A resolved company's market-price request
+    stays on the deterministic financial route. P/E, P/B, EPS and the
+    investment intents are never displaced by a commodity mention.
+    """
+    if not (is_commodity_move(original) or is_commodity_move(normalised)):
+        return False
+    if intents and not all(_is_market_price(item) for item in intents):
+        return False
+    if entity.status is EntityStatus.RESOLVED and intents:
+        return False
+    if intents and not (
+        commodity_is_the_price_subject(original)
+        or commodity_is_the_price_subject(normalised)
+    ):
+        return False
+    return True
+
+
+def _external_topics(text: str) -> tuple[str, ...]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for token in _TOPIC_TOKEN.findall(text or ""):
+        key = token.casefold()
+        if key in _CONTEXT_WORDS or key in seen:
+            continue
+        seen.add(key)
+        found.append(token)
+    return tuple(found)
+
+
+def _is_general_explanatory(
+    original: str, normalised: str, entity: EntityResolution,
+) -> bool:
+    """Open-topic ``what is`` / ``how does`` wording, not a named company.
+
+    A company the resolver already named keeps the internal open-ended
+    profile path. Explanatory wording alone must not turn ``What is JSW
+    Steel?`` into web research. An unresolved topic (``What is Python?``)
+    still does.
+    """
+    if entity.status is EntityStatus.RESOLVED:
+        return False
+    text = f"{original} {normalised}"
+    if _NOT_GENERAL.search(text):
+        return False
+    if not (_EXPLAIN.search(original) or (normalised and _EXPLAIN.search(normalised))):
+        return False
+    return bool(_external_topics(text))
+
+
+def _research_scope(original: str, normalised: str, entity: EntityResolution, route) -> ResearchScope:
+    if route is not ExecutionRoute.WEB_RESEARCH:
+        return ResearchScope.NONE
+    if entity.status in {EntityStatus.RESOLVED, EntityStatus.AMBIGUOUS}:
+        return ResearchScope.COMPANY
+    text = _SCOPE_SCRUB.sub(" ", f"{original} {normalised}")
+    if _COMPANY_EVENT.search(text):
+        return ResearchScope.COMPANY
+    if _external_topics(text):
+        return ResearchScope.GENERAL
+    return ResearchScope.COMPANY
+
+
 _LEVEL_FIGURE = re.compile(
     r"\b(?:revenue|net\s+profit|net\s+income|profit|sales|turnover|top\s*line)\b",
     re.IGNORECASE,
@@ -186,6 +358,9 @@ class QuestionPlanner:
             source_directive=directive,
             notes=entity_notes + self._notes(
                 original, normalised, intents, entity, classification,
+            ),
+            research_scope=_research_scope(
+                original, normalised, entity, classification.route,
             ),
         )
 
@@ -328,6 +503,10 @@ class QuestionPlanner:
             return _Classification(QueryType.MULTI_INTENT,
                                    ExecutionRoute.COMPOSITION_REQUIRED)
 
+        if _commodity_move_overrides(original, normalised, intents, entity):
+            return _Classification(QueryType.WEB_RESEARCH,
+                                   ExecutionRoute.WEB_RESEARCH)
+
         if len(intents) == 1:
             only = intents[0]
             return _Classification(
@@ -351,7 +530,9 @@ class QuestionPlanner:
         # the web. Only a current development with no figure and no verdict
         # behind it reaches this line. Tested against the raw question — see
         # ``is_web_research`` for why the normalisation is not consulted.
-        if is_web_research(original):
+        if is_web_research(original) or _is_general_explanatory(
+            original, normalised, entity,
+        ):
             return _Classification(QueryType.WEB_RESEARCH,
                                    ExecutionRoute.WEB_RESEARCH)
 
@@ -565,4 +746,7 @@ class QuestionPlanner:
         )
 
 
-__all__ = ["CompanyResolver", "CompanyLike", "QuestionPlanner"]
+__all__ = [
+    "CompanyResolver", "CompanyLike", "QuestionPlanner",
+    "commodity_is_the_price_subject", "is_commodity_move",
+]
